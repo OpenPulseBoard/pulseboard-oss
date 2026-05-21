@@ -227,7 +227,11 @@ type PgTenantStore(connectionString : string) =
       let id  = newId9 ()
       let secret = toBase64Url (genBytes 32)
       let salt   = genBytes 16
-      let hash   = pbkdf2 secret salt defaultIterations
+      let halg   =
+        argon2idTag argon2DefaultTime argon2DefaultMemKb argon2DefaultPara
+      let iters  = argon2DefaultTime
+      let hash   =
+        argon2idHash secret salt argon2DefaultTime argon2DefaultMemKb argon2DefaultPara
       let createdAt = DateTime.UtcNow
       try
         exec
@@ -242,8 +246,8 @@ type PgTenantStore(connectionString : string) =
             c.Parameters.AddWithValue("label",  label)                   |> ignore
             c.Parameters.AddWithValue("role",   roleToText role)         |> ignore
             c.Parameters.AddWithValue("scopes", int scopes)              |> ignore
-            c.Parameters.AddWithValue("halg",   "PBKDF2-HMACSHA256")     |> ignore
-            c.Parameters.AddWithValue("iters",  defaultIterations)       |> ignore
+            c.Parameters.AddWithValue("halg",   halg)                    |> ignore
+            c.Parameters.AddWithValue("iters",  iters)                   |> ignore
             c.Parameters.Add(NpgsqlParameter("salt", NpgsqlDbType.Bytea, Value = salt)) |> ignore
             c.Parameters.Add(NpgsqlParameter("hash", NpgsqlDbType.Bytea, Value = hash)) |> ignore
             c.Parameters.AddWithValue("ts",     createdAt)               |> ignore)
@@ -256,8 +260,8 @@ type PgTenantStore(connectionString : string) =
           label         = label
           role          = role
           scopes        = scopes
-          hashAlgorithm = "PBKDF2-HMACSHA256"
-          iterations    = defaultIterations
+          hashAlgorithm = halg
+          iterations    = iters
           salt          = salt
           hash          = hash
           createdAt     = DateTimeOffset(createdAt, TimeSpan.Zero)

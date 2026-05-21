@@ -138,7 +138,8 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart 
 /// When `quotas` is `Some`, the raw request body length (UTF-8 bytes) is
 /// charged against the tenant LogBytes token bucket; over-quota requests
 /// are rejected with 429 before any payload parsing.
-let logs (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
+let logs (storage : IStorageClient) (quotas : IngestQuotas option)
+         (secrets : PulseBoard.Secrets.ISecretsStore option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -176,6 +177,11 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
           let service = tryGetString el "service" |> Option.defaultValue "unknown"
           let level   = tryGetString el "level"   |> Option.defaultValue "info"
           let message = tryGetString el "message" |> Option.defaultValue ""
+          let message =
+            match secrets, tenantId with
+            | Some s, Some (TenantId tid) ->
+              PulseBoard.Secrets.encryptInlineMarkers s tid message
+            | _ -> message
           entries.Add { ts = ts; service = service; level = level; message = message }
         let tid = match tenantId with Some (TenantId s) -> s | None -> ""
         do! storage.WriteLogs(tid, entries)
@@ -185,8 +191,9 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
       return! INTERNAL_ERROR (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
-let webPart (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
+let webPart (storage : IStorageClient) (quotas : IngestQuotas option)
+            (secrets : PulseBoard.Secrets.ISecretsStore option) : WebPart =
   choose [
     POST >=> path "/ingest/metrics" >=> metrics storage quotas
-    POST >=> path "/ingest/logs"    >=> logs    storage quotas
+    POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets
   ]

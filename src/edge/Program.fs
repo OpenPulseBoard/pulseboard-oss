@@ -702,12 +702,26 @@ let main argv =
 
   // -- Route composition ------------------------------------------------------
 
+  // -- Secrets / envelope encryption (PLAN.md Phase 6 #4) ------------------
+  // KEK is loaded from PULSE_MASTER_KEY (base64, 32 bytes) when set,
+  // otherwise auto-generated at <dataDir>/secrets/master.key. Per-tenant
+  // DEKs live next to it. Inline [[pii:<value>]] markers in log messages
+  // are encrypted on ingest using the tenant's DEK; decryption is
+  // Admin-only via POST /api/secrets/decrypt.
+  let secretsDir = Path.Combine(dataDir, "secrets")
+  let kek = PulseBoard.Secrets.loadOrCreateKek secretsDir
+  let secretsStore : PulseBoard.Secrets.ISecretsStore =
+    PulseBoard.Secrets.FileSecretsStore(secretsDir, kek) :> _
+  let piiPolicyStore : PulseBoard.Secrets.IPiiPolicyStore =
+    PulseBoard.Secrets.FilePiiPolicyStore(secretsDir) :> _
+  printfn "  Secrets: KEK + per-tenant DEKs at %s (PII markers auto-encrypted)" secretsDir
+
   let ingestQuotas : PulseBoard.Ingest.IngestQuotas option =
     if multiTenant then
       Some { limiter = limiter; auditLog = auditLog }
     else None
   let ingestInner =
-    PulseBoard.Ingest.webPart storage ingestQuotas
+    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore)
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore
 
@@ -751,6 +765,20 @@ let main argv =
     PulseBoard.Dashboards.webPart multiTenant dashboardRepo
   printfn "  Dashboards: file-backed at %s"
     (Path.Combine(dataDir, "dashboards"))
+
+  // -- Self-observability (PLAN.md Phase 6 #6) -----------------------------
+  // Reserve the `__meta__` tenant, seed its dashboard, and start an SLO
+  // derivation loop that emits `pulse_slo_*_5m` series every 30 s.
+  if multiTenant then
+    let metaTenant = PulseBoard.Self.bootstrap tenantStore dashboardRepo
+    printfn "  Self: meta tenant '%s' (id=%s) + dashboard + SLO loop"
+      metaTenant.slug
+      (let (PulseBoard.Tenancy.TenantId t) = metaTenant.id in t)
+    let sloCts = new System.Threading.CancellationTokenSource()
+    PulseBoard.Self.startSloLoop metricStore 30 sloCts.Token |> ignore
+  else
+    printfn "  Self: meta tenant skipped (single-tenant mode)"
+
 
   // -- Spans / service map / RUM (PLAN.md Phase 4 step 4) ----------------
   // In-process ring of recent spans per tenant. Real persistence still
@@ -876,6 +904,8 @@ let main argv =
 
   // Scrape admin endpoints share the admin scope gate; prepend them in
   // the choose so they win before Admin.webPart's catch-all NOT_FOUND.
+  let secretsApiInner =
+    PulseBoard.Admin.secretsWebPart secretsStore piiPolicyStore auditLog
   let adminAll = choose [ scrapeAdminInner; listenerAdminInner; adminInner ]
 
   let admin : WebPart =
@@ -887,6 +917,18 @@ let main argv =
                "admin" PulseBoard.Tenancy.Scope.Admin adminAll))
     else
       // No admin surface in single-tenant mode — fall through to NOT_FOUND.
+      fun _ -> async { return None }
+
+  // `/api/secrets/*` lives outside `/api/admin/*` but reuses the Admin scope
+  // gate so only Admin-scoped keys can encrypt/decrypt or edit PII policy.
+  let secretsAdmin : WebPart =
+    if multiTenant then
+      pathStarts "/api/secrets/" >=>
+        resolveSession (
+          PulseBoard.Auth.resolveApiKey tenantStore
+            (PulseBoard.Rbac.requireScope auditLog
+               "admin" PulseBoard.Tenancy.Scope.Admin secretsApiInner))
+    else
       fun _ -> async { return None }
 
   let query : WebPart =
@@ -926,6 +968,7 @@ let main argv =
       lokiPush          // /loki/api/v1/push — same
       rumInner          // /rum/v1/* — unauthenticated beacon stub (Phase 4 #4)
       admin     // must precede `query` because /api/admin/* also matches /api/
+      secretsAdmin   // /api/secrets/* — also Admin-scoped, sibling of admin
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       path "/ws"   >=> handShake (Hub.handler hub)

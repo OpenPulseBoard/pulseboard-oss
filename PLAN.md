@@ -451,13 +451,82 @@ retry/dedup.
    storage; cert-manager rotation.
 3. **Secrets.** Vault or AWS Secrets Manager for tenant API keys
    (Argon2id-hashed at rest), receiver credentials, signing keys.
+
+   ✅ **DONE (in-process Argon2id, persisted via existing tenant store).**
+   Tenant API keys are now Argon2id-hashed at rest using
+   `Konscious.Security.Cryptography.Argon2` (memory=64 MiB, time=3,
+   parallelism=2, 32-byte tag, 16-byte salt). `Tenancy.argon2idTag` emits
+   a self-describing identifier `argon2id:t=3,m=65536,p=2` written into
+   the existing `hashAlgorithm` column; verifier dispatches on this
+   string and falls back to PBKDF2-HMACSHA256 for legacy rows — no
+   schema migration is required and existing keys keep working. New keys
+   issued by `InMemoryTenantStore.IssueApiKey` and `PgTenantStore`
+   take the Argon2id path automatically. A fixed-cost PBKDF2 branch
+   remains for unknown-algorithm IDs to preserve a constant timing
+   envelope. Vault / Secrets Manager integration for receiver creds and
+   signing keys is still TODO and is out of scope for the OSS edge.
+
 4. **Encryption at rest.** Object store SSE-KMS; Postgres TDE; per-tenant
    data keys for sensitive log fields (envelope encryption).
+
+   ✅ **DONE (envelope encryption for log PII markers).** A new
+   `Secrets.fs` module ships an envelope-encryption stack: a single
+   32-byte KEK is loaded from `PULSE_MASTER_KEY` (base64, 32 bytes) or
+   auto-generated at `<data>/secrets/master.key` (mode 0600 on Unix).
+   Per-tenant 32-byte DEKs are AES-GCM-wrapped by the KEK and persisted
+   as `<data>/secrets/<tenantId>.dek.json` with the on-disk envelope
+   `{ "v":1, "nonce":"<b64url>", "ct":"<b64url>" }` (12-byte nonce,
+   16-byte tag concatenated to the ciphertext). `FileSecretsStore`
+   caches unwrapped DEKs in a `ConcurrentDictionary` and lazily creates
+   them on first use. The wire token format for application ciphertexts
+   is `enc:v1:<nonceB64Url>:<ctTagB64Url>` (URL-safe base64, no
+   padding). The ingest path scans every log message for inline
+   `[[pii:<value>]]` markers and replaces each occurrence with the
+   tenant-scoped `enc:v1:...` token before storage — so dropping a
+   marker around an email or SSN is enough to ship it encrypted, with
+   no schema changes. A `FilePiiPolicyStore` persists a per-tenant
+   string array of declared PII field names at
+   `<data>/secrets/<tenantId>.pii.json` for future structured-field
+   routing. The Admin-scoped REST surface is:
+   - `GET /api/secrets/policy` → `{"fields":[...]}`
+   - `PUT /api/secrets/policy` body `{"fields":[...]}` → `{"ok":true,"count":N}`
+   - `POST /api/secrets/encrypt` body `{"plaintext":"..."}` → `{"ciphertext":"enc:v1:..."}`
+   - `POST /api/secrets/decrypt` body `{"ciphertext":"enc:v1:..."}` → `{"plaintext":"..."}`
+     (every decrypt emits an `Allow`/`Deny` audit-log entry).
+
+   All four endpoints require an Admin-scoped API key and run behind
+   the same `resolveApiKey` + `requireScope` chain as `/api/admin/*`.
+   Object-store SSE-KMS and Postgres TDE remain infra-side concerns
+   handled at deploy time and are not implemented in the edge.
+
 5. **Compliance program.** SOC 2 Type II first (12-month runway), then
    HIPAA BAAs, GDPR DPA, ISO 27001. Annual pen-test.
 6. **Self-observability.** Emit own metrics/logs/traces into a dedicated
    meta-tenant; dashboards + SLOs (`ingest_success_ratio > 99.9%`,
    `query_p99_latency < 1s`).
+
+   ✅ **DONE (meta tenant + SLO recordings + curated dashboard).** A
+   new `Self.fs` module owns the meta tenant. On startup in
+   multi-tenant mode, `PulseBoard.Self.bootstrap` idempotently creates
+   tenant slug `__meta__` via the configured `ITenantStore` and, if its
+   dashboard repo is empty, upserts a curated `Dashboard` with id
+   `pulse-self` titled *"PulseBoard — Self-Observability"*. Panels
+   cover the existing internal counters and histograms — ingest
+   throughput / errors, query volume and `pulse_query_p99_ms`, notify
+   attempts / failures, rule eval seconds, quota denials — alongside
+   the two new SLO recordings introduced here. `Self.startSloLoop`
+   spawns a `Task.Run` loop (cadence = `max 5 intervalSec`, default
+   30 s) that reads the last 5 minutes of `pulse_ingest_total` /
+   `pulse_ingest_errors_total` and `pulse_notify_attempts_total` /
+   `pulse_notify_failures_total` via `MetricStore.GetSince`, computes
+   `success / (success + failure)`, and records:
+   - `pulse_slo_ingest_success_ratio_5m`
+   - `pulse_slo_notify_success_ratio_5m`
+
+   Loop errors are swallowed so a transient store hiccup never poisons
+   the self-observability pipe; the loop honors its
+   `CancellationToken`. In single-tenant mode the meta tenant is
+   skipped (no `__meta__` is created and no SLO loop runs).
 
 ---
 

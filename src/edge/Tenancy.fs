@@ -3,6 +3,7 @@ module PulseBoard.Tenancy
 open System
 open System.Collections.Concurrent
 open System.Security.Cryptography
+open System.Text
 
 // Phase 1 (foundations). In-memory tenant model + scoped API keys. Postgres
 // implementation of `ITenantStore` lands later behind the same interface —
@@ -113,6 +114,57 @@ let private pbkdf2 (secret : string) (salt : byte[]) (iterations : int) =
     hashAlgorithm = HashAlgorithmName.SHA256,
     outputLength = 32)
 
+// -- Argon2id (PLAN.md Phase 6 #3) ------------------------------------------
+// New API keys hash with Argon2id; existing PBKDF2 keys keep verifying via
+// the legacy path so a rotation isn't required to upgrade. Parameters are
+// tunnelled through `hashAlgorithm` so the persisted schema (`pb_api_keys`)
+// doesn't need a migration.
+//
+//   hashAlgorithm = "argon2id:t=3,m=65536,p=2"
+//                     ^ time(passes) ^ memKiB ^ parallelism
+//
+// Defaults follow current OWASP guidance for interactive logins: 2 lanes,
+// 64 MiB, 3 passes (~80 ms on a 2024 server).
+
+let internal argon2DefaultTime  = 3
+let internal argon2DefaultMemKb = 65_536
+let internal argon2DefaultPara  = 2
+
+let internal argon2idTag (time : int) (memKb : int) (para : int) =
+  sprintf "argon2id:t=%d,m=%d,p=%d" time memKb para
+
+let internal argon2idHash (secret : string) (salt : byte[])
+                         (time : int) (memKb : int) (para : int) : byte[] =
+  use a =
+    new Konscious.Security.Cryptography.Argon2id(Encoding.UTF8.GetBytes secret,
+                                                 Salt = salt,
+                                                 Iterations = time,
+                                                 MemorySize = memKb,
+                                                 DegreeOfParallelism = para)
+  a.GetBytes 32
+
+let private parseArgon2Params (tag : string) : (int * int * int) option =
+  // "argon2id:t=3,m=65536,p=2" → (3, 65536, 2)
+  if not (tag.StartsWith("argon2id", StringComparison.OrdinalIgnoreCase)) then None
+  else
+    let mutable t = argon2DefaultTime
+    let mutable m = argon2DefaultMemKb
+    let mutable p = argon2DefaultPara
+    let payload =
+      let i = tag.IndexOf ':'
+      if i < 0 then "" else tag.Substring(i + 1)
+    for chunk in payload.Split(',') do
+      let kv = chunk.Trim().Split('=')
+      if kv.Length = 2 then
+        let v = ref 0
+        if System.Int32.TryParse(kv.[1], v) then
+          match kv.[0].Trim().ToLowerInvariant() with
+          | "t" -> t <- !v
+          | "m" -> m <- !v
+          | "p" -> p <- !v
+          | _   -> ()
+    Some (t, m, p)
+
 /// Parse a presented `pk_<id>.<secret>` token. Returns `None` for any
 /// malformed input (wrong prefix, missing/empty halves, etc.).
 let tryParsePresented (raw : string) : (ApiKeyId * string) option =
@@ -204,15 +256,15 @@ type InMemoryTenantStore () =
       let (ApiKeyId idStr) = id
       let secret = toBase64Url (genBytes 32)
       let salt   = genBytes 16
-      let hash   = pbkdf2 secret salt defaultIterations
+      let hash   = argon2idHash secret salt argon2DefaultTime argon2DefaultMemKb argon2DefaultPara
       let record =
         { id            = id
           tenantId      = tenantId
           label         = label
           role          = role
           scopes        = scopes
-          hashAlgorithm = "PBKDF2-HMACSHA256"
-          iterations    = defaultIterations
+          hashAlgorithm = argon2idTag argon2DefaultTime argon2DefaultMemKb argon2DefaultPara
+          iterations    = argon2DefaultTime
           salt          = salt
           hash          = hash
           createdAt     = DateTimeOffset.UtcNow
@@ -290,19 +342,27 @@ type InMemoryTenantStore () =
       |> Seq.toArray
 
 /// Verify a presented `pk_<id>.<secret>` against `store`. Performs a
-/// fixed-cost PBKDF2 on an unknown key id to avoid trivially revealing
-/// id-existence via response timing.
+/// fixed-cost hash on an unknown key id to avoid trivially revealing
+/// id-existence via response timing. Dispatches on `hashAlgorithm` so
+/// Argon2id-hashed keys (the default since Phase 6) and legacy
+/// PBKDF2-HMACSHA256 keys both verify under the same surface.
 let verify (store : ITenantStore) (presented : string) : TenantCtx option =
+  let hashFor (record : ApiKeyRecord) (secret : string) (salt : byte[]) : byte[] =
+    match parseArgon2Params record.hashAlgorithm with
+    | Some (t, m, p) -> argon2idHash secret salt t m p
+    | None           -> pbkdf2 secret salt record.iterations
   match tryParsePresented presented with
   | None -> None
   | Some (id, secret) ->
     match store.TryGetApiKey id with
     | None ->
+      // Fixed-cost work on the cheaper algorithm; sufficient to mask
+      // id-existence while keeping the unknown-key path responsive.
       let salt = Array.zeroCreate 16
       pbkdf2 secret salt defaultIterations |> ignore
       None
     | Some record ->
-      let candidate = pbkdf2 secret record.salt record.iterations
+      let candidate = hashFor record secret record.salt
       if CryptographicOperations.FixedTimeEquals(
            ReadOnlySpan candidate, ReadOnlySpan record.hash) then
         match store.TryGetTenant record.tenantId with

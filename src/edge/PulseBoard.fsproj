@@ -12,6 +12,7 @@
     <Compile Include="Alerts.fs" />
     <Compile Include="Segments.fs" />
     <Compile Include="Tenancy.fs" />
+    <Compile Include="Secrets.fs" />
     <Compile Include="Audit.fs" />
     <Compile Include="Quotas.fs" />
     <Compile Include="PgTenantStore.fs" />
@@ -43,6 +44,7 @@
     <Compile Include="Routing.fs" />
     <Compile Include="OnCall.fs" />
     <Compile Include="Dashboards.fs" />
+    <Compile Include="Self.fs" />
     <Compile Include="TraceApi.fs" />
     <Compile Include="Rum.fs" />
     <Compile Include="Admin.fs" />
@@ -66,6 +68,7 @@
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.23.3" />
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.18.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="Snappier" Version="1.3.1" />

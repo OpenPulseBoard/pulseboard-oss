@@ -646,3 +646,108 @@ let webPart (store : ITenantStore) (quotaStore : QuotaStore)
     NOT_FOUND """{"error":"unknown admin endpoint"}"""
       >=> Writers.setMimeType "application/json"
   ]
+
+// ---------------------------------------------------------------------------
+// PLAN.md Phase 6 #4 — envelope-encryption / PII surface. Kept in this file
+// rather than `Secrets.fs` because `Secrets.fs` compiles before `Rbac.fs`
+// and these handlers consume `Rbac.tryGetTenant` indirectly (the caller
+// composes `requireScope Admin` over the whole web part).
+// ---------------------------------------------------------------------------
+
+let private tenantFromCtx (ctx : HttpContext) : TenantId option =
+  PulseBoard.Rbac.tryGetTenant ctx
+  |> Option.map (fun t -> t.tenant.id)
+
+let private piiGet (policy : PulseBoard.Secrets.IPiiPolicyStore) : WebPart =
+  fun ctx -> async {
+    match tenantFromCtx ctx with
+    | None -> return! errJson 400 "no tenant" ctx
+    | Some (TenantId tid) ->
+      let fields = policy.Get tid
+      let sb = StringBuilder().Append("{\"fields\":[")
+      for i in 0 .. fields.Length - 1 do
+        if i > 0 then sb.Append(',') |> ignore
+        sb.Append(JsonSerializer.Serialize(fields.[i] : string)) |> ignore
+      sb.Append("]}") |> ignore
+      return! jsonResp 200 (sb.ToString()) ctx
+  }
+
+let private piiPut (policy : PulseBoard.Secrets.IPiiPolicyStore)
+                   (log : IAuditLog) : WebPart =
+  fun ctx -> async {
+    match tenantFromCtx ctx with
+    | None -> return! errJson 400 "no tenant" ctx
+    | Some (TenantId tid) ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None -> return! errJson 400 "invalid json" ctx
+      | Some doc ->
+        try
+          let root = doc.RootElement
+          let fields =
+            match root.TryGetProperty "fields" with
+            | true, v when v.ValueKind = JsonValueKind.Array ->
+              [| for f in v.EnumerateArray() do
+                   if f.ValueKind = JsonValueKind.String then
+                     yield f.GetString() |]
+            | _ -> [||]
+          policy.Put(tid, fields)
+          auditEvent log ctx "secrets.policy.put" Allow
+            (Some (sprintf "tenant=%s count=%d" tid fields.Length))
+          return! jsonResp 200 (sprintf """{"ok":true,"count":%d}""" fields.Length) ctx
+        with ex ->
+          return! errJson 400 ex.Message ctx
+  }
+
+let private secretsEncrypt (secrets : PulseBoard.Secrets.ISecretsStore) : WebPart =
+  fun ctx -> async {
+    match tenantFromCtx ctx with
+    | None -> return! errJson 400 "no tenant" ctx
+    | Some (TenantId tid) ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None -> return! errJson 400 "invalid json" ctx
+      | Some doc ->
+        match tryGetString doc.RootElement "plaintext" with
+        | None -> return! errJson 400 "missing plaintext" ctx
+        | Some pt ->
+          let token = secrets.Encrypt(tid, pt)
+          return! jsonResp 200
+                    (sprintf """{"ciphertext":%s}""" (JsonSerializer.Serialize token))
+                    ctx
+  }
+
+let private secretsDecrypt (secrets : PulseBoard.Secrets.ISecretsStore)
+                           (log : IAuditLog) : WebPart =
+  fun ctx -> async {
+    match tenantFromCtx ctx with
+    | None -> return! errJson 400 "no tenant" ctx
+    | Some (TenantId tid) ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None -> return! errJson 400 "invalid json" ctx
+      | Some doc ->
+        match tryGetString doc.RootElement "ciphertext" with
+        | None -> return! errJson 400 "missing ciphertext" ctx
+        | Some token ->
+          match secrets.Decrypt(tid, token) with
+          | None ->
+            auditEvent log ctx "secrets.decrypt" Deny (Some "decrypt failed")
+            return! errJson 400 "decrypt failed" ctx
+          | Some pt ->
+            auditEvent log ctx "secrets.decrypt" Allow None
+            return! jsonResp 200
+                      (sprintf """{"plaintext":%s}""" (JsonSerializer.Serialize pt))
+                      ctx
+  }
+
+/// PLAN.md Phase 6 #4 REST surface. Mount under `Rbac.requireScope Admin`.
+let secretsWebPart (secrets : PulseBoard.Secrets.ISecretsStore)
+                   (policy  : PulseBoard.Secrets.IPiiPolicyStore)
+                   (log     : IAuditLog) : WebPart =
+  choose [
+    GET  >=> path "/api/secrets/policy"  >=> piiGet policy
+    PUT  >=> path "/api/secrets/policy"  >=> piiPut policy log
+    POST >=> path "/api/secrets/encrypt" >=> secretsEncrypt secrets
+    POST >=> path "/api/secrets/decrypt" >=> secretsDecrypt secrets log
+  ]
