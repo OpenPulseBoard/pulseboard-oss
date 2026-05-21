@@ -465,6 +465,11 @@ let main argv =
       path "/v1/traces"  >=> protectIngest otlpTracesInner
     ]
 
+  // Grafana Loki push (Promtail / Alloy / Vector / fluent-bit).
+  let lokiPushInner = PulseBoard.LokiPush.handler logStore hub ingestQuotas
+  let lokiPush : WebPart =
+    POST >=> path "/loki/api/v1/push" >=> protectIngest lokiPushInner
+
   let admin : WebPart =
     if multiTenant then
       pathStarts "/api/admin/" >=>
@@ -493,6 +498,7 @@ let main argv =
       ingest
       promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
       otlp              // /v1/* doesn't overlap /api/, but keep grouped with the other ingest receivers
+      lokiPush          // /loki/api/v1/push — same
       admin     // must precede `query` because /api/admin/* also matches /api/
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
@@ -538,6 +544,7 @@ let main argv =
   printfn "  POST /v1/metrics       (OTLP/HTTP metrics, protobuf)"
   printfn "  POST /v1/logs          (OTLP/HTTP logs, protobuf)"
   printfn "  POST /v1/traces        (OTLP/HTTP traces, protobuf; counted only until Phase 3)"
+  printfn "  POST /loki/api/v1/push (Grafana Loki; JSON or snappy-protobuf)"
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"
