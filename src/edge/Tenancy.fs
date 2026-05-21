@@ -38,10 +38,32 @@ let scopesForRole = function
   | Admin   -> Scope.Ingest ||| Scope.Query ||| Scope.Admin
   | Billing -> Scope.None
 
+/// Commercial tier of a tenant. Plan controls default quotas, feature
+/// entitlements (SSO, BYOK, impersonation), and Stripe billing. New
+/// tenants land on `Free`; promotions are Admin-only (`PATCH /api/admin/
+/// tenants/<id>/plan`). PLAN.md Phase 7 #2.
+type Plan =
+  | Free
+  | Pro
+  | Enterprise
+
+let planToText = function
+  | Free       -> "free"
+  | Pro        -> "pro"
+  | Enterprise -> "enterprise"
+
+let tryParsePlan (s : string) : Plan option =
+  match (if isNull s then "" else s.Trim().ToLowerInvariant()) with
+  | "free"       -> Some Free
+  | "pro"        -> Some Pro
+  | "enterprise" -> Some Enterprise
+  | _            -> None
+
 [<NoComparison; NoEquality>]
 type Tenant =
   { id        : TenantId
     slug      : string
+    plan      : Plan
     createdAt : DateTimeOffset }
 
 [<NoComparison; NoEquality>]
@@ -188,6 +210,10 @@ type ITenantStore =
   abstract TryGetTenant       : TenantId -> Tenant option
   abstract TryGetTenantBySlug : string -> Tenant option
   abstract Tenants            : unit -> Tenant[]
+  /// Update the commercial plan on an existing tenant. Returns the
+  /// post-update record or `None` if the tenant does not exist.
+  /// PLAN.md Phase 7 #2.
+  abstract UpdateTenantPlan   : TenantId * Plan -> Tenant option
   abstract IssueApiKey        :
     tenantId : TenantId * label : string * role : Role * scopes : Scope ->
       IssuedKey
@@ -228,10 +254,19 @@ type InMemoryTenantStore () =
         let t =
           { id = newTenantId ()
             slug = slug
+            plan = Free
             createdAt = DateTimeOffset.UtcNow }
         tenants.[t.id] <- t
         bySlug.[slug]  <- t.id
         t
+
+    member _.UpdateTenantPlan (tenantId, plan) =
+      match tenants.TryGetValue tenantId with
+      | true, t ->
+        let updated = { t with plan = plan }
+        tenants.[tenantId] <- updated
+        Some updated
+      | _ -> None
 
     member _.TryGetTenant id =
       match tenants.TryGetValue id with

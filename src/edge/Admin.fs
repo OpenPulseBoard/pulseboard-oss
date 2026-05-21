@@ -88,9 +88,10 @@ let private jsonArr (xs : string seq) =
 
 let private tenantJson (t : Tenant) =
   let (TenantId id) = t.id
-  sprintf """{"id":%s,"slug":%s,"createdAt":"%s"}"""
+  sprintf """{"id":%s,"slug":%s,"plan":"%s","createdAt":"%s"}"""
     (JsonSerializer.Serialize id)
     (JsonSerializer.Serialize t.slug)
+    (planToText t.plan)
     (t.createdAt.ToString("o"))
 
 let private apiKeySummaryJson (r : ApiKeyRecord) =
@@ -751,3 +752,102 @@ let secretsWebPart (secrets : PulseBoard.Secrets.ISecretsStore)
     POST >=> path "/api/secrets/encrypt" >=> secretsEncrypt secrets
     POST >=> path "/api/secrets/decrypt" >=> secretsDecrypt secrets log
   ]
+
+// ---------------------------------------------------------------------------
+// PLAN.md Phase 7 #1 + #2 — commercial admin surface: plan mutation, usage
+// snapshot, on-demand billing flush. Mount under `Rbac.requireScope Admin`.
+// ---------------------------------------------------------------------------
+
+let private updateTenantPlan (store : ITenantStore) (log : IAuditLog)
+                             (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None ->
+      auditEvent log ctx "admin.tenant.plan" Deny
+        (Some (sprintf "tenantId=%s not found" tenantId))
+      return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      match tryParseJson (readBody ctx.request) with
+      | None ->
+        auditEvent log ctx "admin.tenant.plan" Deny (Some "invalid json")
+        return! errJson 400 "invalid JSON body" ctx
+      | Some doc ->
+        use _ = doc
+        match tryGetString doc.RootElement "plan" with
+        | None ->
+          auditEvent log ctx "admin.tenant.plan" Deny (Some "missing plan")
+          return! errJson 400 "field 'plan' is required" ctx
+        | Some s ->
+          match tryParsePlan s with
+          | None ->
+            auditEvent log ctx "admin.tenant.plan" Deny
+              (Some (sprintf "bad plan=%s" s))
+            return! errJson 400
+              "field 'plan' must be one of: free|pro|enterprise" ctx
+          | Some plan ->
+            match store.UpdateTenantPlan (TenantId tenantId, plan) with
+            | None ->
+              auditEvent log ctx "admin.tenant.plan" Error
+                (Some "update failed")
+              return! errJson 500 "update failed" ctx
+            | Some t ->
+              auditEvent log ctx "admin.tenant.plan" Allow
+                (Some (sprintf "tenantId=%s plan=%s" tenantId (planToText plan)))
+              return! jsonResp 200 (tenantJson t) ctx
+  }
+
+let private tenantUsage (store : ITenantStore)
+                        (meter : PulseBoard.Billing.IBillingMeter)
+                        (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None -> return! errJson 404 "tenant not found" ctx
+    | Some t ->
+      let snap = meter.Snapshot (TenantId tenantId)
+      let sb = StringBuilder()
+      sb.Append("{\"tenantId\":") |> ignore
+      sb.Append(JsonSerializer.Serialize tenantId) |> ignore
+      sb.Append(",\"plan\":\"")
+        .Append(planToText t.plan)
+        .Append("\",\"usage\":{") |> ignore
+      let mutable first = true
+      for KeyValue(k, v) in snap do
+        if not first then sb.Append(',') |> ignore
+        first <- false
+        sb.Append('"').Append(PulseBoard.Billing.usageKindStr k).Append('"')
+          .Append(':').Append(v) |> ignore
+      sb.Append("}}") |> ignore
+      return! jsonResp 200 (sb.ToString()) ctx
+  }
+
+let private billingFlush (store : ITenantStore)
+                         (meter : PulseBoard.Billing.IBillingMeter)
+                         (providers : PulseBoard.Billing.IBillingProvider[])
+                         (log : IAuditLog) : WebPart =
+  fun ctx -> async {
+    let planFor (tid : TenantId) =
+      match store.TryGetTenant tid with
+      | Some t -> t.plan
+      | None   -> Free
+    let n = PulseBoard.Billing.flushNow meter providers planFor
+    auditEvent log ctx "admin.billing.flush" Allow
+      (Some (sprintf "events=%d providers=%d" n providers.Length))
+    return!
+      jsonResp 200 (sprintf """{"events":%d,"providers":%d}""" n providers.Length) ctx
+  }
+
+/// Phase 7 #1 + #2 web part. Mount under `Rbac.requireScope Admin` exactly
+/// like the secrets surface.
+let billingWebPart (store     : ITenantStore)
+                   (meter     : PulseBoard.Billing.IBillingMeter)
+                   (providers : PulseBoard.Billing.IBillingProvider[])
+                   (log       : IAuditLog) : WebPart =
+  choose [
+    PATCH >=> pathScan "/api/admin/tenants/%s/plan"
+                (updateTenantPlan store log)
+    GET   >=> pathScan "/api/admin/tenants/%s/usage"
+                (tenantUsage store meter)
+    POST  >=> path "/api/admin/billing/flush"
+                >=> billingFlush store meter providers log
+  ]
+

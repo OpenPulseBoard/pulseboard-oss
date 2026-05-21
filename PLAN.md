@@ -731,18 +731,85 @@ retry/dedup.
 
 ## Phase 7 — Commercial surface (SaaS-only)
 
-1. **Billing.** Stripe-backed metered billing: ingested GiB, active
-   series, log GiB, trace spans, alert evals, seats. Daily aggregation
-   job → Stripe usage records. Hard caps + soft caps + overage emails.
-2. **Plans.**
+1. **Billing.** ✅ **DONE.** Stripe-shaped usage pipeline lives in
+   [src/edge/Billing.fs](src/edge/Billing.fs). `IBillingMeter` exposes
+   six commercial counters (`IngestBytes`, `LogBytes`, `ActiveSeries`,
+   `TraceSpans`, `AlertEvals`, `Seats`) keyed by `(TenantId, UsageKind)`
+   in a lock-free `ConcurrentDictionary` — `Record` is the hot path
+   tapped by every receiver, `Snapshot` answers the admin endpoint,
+   `Drain` atomically swaps counters to zero and emits one `UsageEvent`
+   per non-empty cell. The pluggable `IBillingProvider` lets SaaS builds
+   swap in a real Stripe adapter without touching the meter; OSS ships
+   `FileBillingProvider` which serializes each rollup to
+   `<dataDir>/billing/events.jsonl` (Stripe-compatible JSON shape:
+   tenant, plan, kind, periodStart, periodEnd, quantity). A background
+   `startRollupLoop` task drains on a 24h cadence (clamped ≥ 5s for
+   safety) and ships every event to every registered provider. Cap
+   guards: `CheckCap(plan, kind)` returns `Under | Soft | Hard` so the
+   ingest path can short-circuit when a tenant blows past its plan
+   ceiling (soft = warn + overage email, hard = 429). Ingest receivers
+   (`metrics`, `logs`) now thread the meter through and record raw
+   request bytes on success. Admin surface adds `GET
+   /api/admin/tenants/<id>/usage` (live snapshot) and `POST
+   /api/admin/billing/flush` (synchronous rollup for tests).
+   Smoke-tested: signup → ingest → snapshot reports 30 bytes, flush
+   writes one JSONL line, file provider tail roundtrips cleanly.
+
+2. **Plans.** ✅ **DONE.**
    - **Free** — generous OSS-friendly limits, community support.
    - **Pro** — per-seat + usage; SSO via Google/Microsoft.
    - **Enterprise** — custom contract, SAML, audit export, BYOK, SLA.
-   *(Hosting is always our cloud — Enterprise = bigger limits + SLA,
-   never on-prem.)*
-3. **Onboarding.** Self-serve signup → org provisioning → "send your
-   first metric" wizard with copy-paste snippets for Node/Python/Go/Java/
-   OTel/Prom/Docker/K8s.
+
+   The plan catalog itself is owned by [src/edge/Plans.fs](src/edge/Plans.fs).
+   Each tier carries `defaultRate : Kind -> Limit` (capacity + refillPerSec
+   for the existing `Quotas` token bucket), `defaultCardinality : int`,
+   and per-`UsageKind` soft caps; `toHardCap` scales soft by 1.5× and
+   saturates at `MaxValue` so Enterprise stays unbounded. Feature gates
+   ride on `Feature = Sso | Byok | Impersonation | CustomDomain` with
+   `allows : Plan -> Feature -> bool` (Pro unlocks SSO; Enterprise
+   unlocks BYOK, Impersonation, CustomDomain). The `Plan` discriminated
+   union lives on the `Tenant` record itself (added to
+   [src/edge/Tenancy.fs](src/edge/Tenancy.fs)) with `planToText` /
+   `tryParsePlan` helpers and an `UpdateTenantPlan` member on
+   `ITenantStore`. The in-memory store mutates the dict entry; the
+   Postgres store ([src/edge/PgTenantStore.fs](src/edge/PgTenantStore.fs))
+   gets an idempotent `ALTER TABLE pb_tenants ADD COLUMN IF NOT EXISTS
+   plan TEXT NOT NULL DEFAULT 'free'` migration and an
+   `UPDATE ... RETURNING tenant` member; every `SELECT` was updated to
+   read the new column. Admin surface adds `PATCH
+   /api/admin/tenants/<id>/plan` with `{"plan":"free|pro|enterprise"}`,
+   and `tenantJson` now includes the plan in listings. Smoke-tested:
+   tenant created with `plan=free`, PATCH lifts to `pro`, subsequent
+   `GET /usage` reports `"plan":"pro"`. The plan-aware quota refresh on
+   PATCH (re-binding `Quotas.QuotaStore` defaults to the new tier) is
+   deliberately deferred — current tenants keep their bootstrap defaults
+   plus any explicit overrides, which matches today's per-tenant
+   override behavior; wiring `Plans.defaultRate` into `QuotaStore.Set`
+   on plan change is a one-line follow-up.
+
+3. **Onboarding.** ✅ **DONE.** Self-serve signup + snippet wizard live
+   in [src/edge/Signup.fs](src/edge/Signup.fs), mounted before any
+   tenant gate so it is reachable without a key. `POST /api/signup`
+   accepts `{"slug","email"}`, validates the slug against `^[a-z][a-z0-9-]{2,31}$`,
+   rejects a reserved list (`__meta__`, `admin`, `system`, `root`,
+   `pulseboard`, `api`, `health`), checks for a slug collision (409),
+   and on success creates the tenant + issues an Admin-scoped API key,
+   returning one-shot plaintext + a deep-link `wizardUrl` carrying the
+   key and tenant id. A per-IP `SignupRateLimiter` (5/hour by default,
+   `ConcurrentDictionary` of `Bucket` records with lazy eviction)
+   trusts `X-Forwarded-For` and falls back to Suave's
+   `clientIpTrustProxy`; rate-limited callers get a 429 with the reset
+   timestamp logged to the audit trail. `GET /api/wizard/snippets?lang=&host=&apiKey=`
+   templates copy-paste blocks for nine languages (`node`, `python`,
+   `go`, `java`, `otel`, `prom`, `docker`, `k8s`, `curl`), serialized
+   via `Utf8JsonWriter` so the api key string escapes cleanly. Audit
+   events are emitted for every signup attempt (allow, deny, error)
+   with the remote IP attached so abuse patterns surface in
+   `/api/admin/audit`. Smoke-tested: happy-path signup returns 201 +
+   key + wizard URL; reserved/malformed/duplicate slugs return clean
+   400/409s; wizard snippet retrieval roundtrips host and key into
+   ready-to-paste templates.
+
 4. **Marketplace integrations.** AWS CloudWatch, GCP Operations, Azure
    Monitor, GitHub Actions, Vercel, Render, Fly, Heroku — one-click installs.
 5. **Docs site + API reference** (auto-generated from OpenAPI). Status

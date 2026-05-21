@@ -88,7 +88,8 @@ let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
 /// then handed to `IStorageClient.WriteMetricSamples` in one batch — the
 /// in-process client writes straight to MetricStore/Hub; in
 /// `--role=edge` it POSTs protobuf to the storage tier.
-let metrics (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
+let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
+            (meter : PulseBoard.Billing.IBillingMeter option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -123,6 +124,14 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart 
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.WriteMetricSamples(tid, samples)
       let accepted = samples.Count
+      // Phase 7 #1 — meter ingest bytes against the tenant's quota even
+      // when no rate-limit was applied. We count raw request bytes (not
+      // sample count) so the SaaS bill matches the size of the workload.
+      match meter, tenantId with
+      | Some m, Some tenant when accepted > 0 ->
+        let bytes = int64 (Encoding.UTF8.GetByteCount body)
+        m.Record (tenant, PulseBoard.Billing.IngestBytes, bytes)
+      | _ -> ()
       let body =
         if rejected > 0 then
           sprintf """{"accepted":%d,"rejectedCardinality":%d,"cap":%d}"""
@@ -139,7 +148,8 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart 
 /// charged against the tenant LogBytes token bucket; over-quota requests
 /// are rejected with 429 before any payload parsing.
 let logs (storage : IStorageClient) (quotas : IngestQuotas option)
-         (secrets : PulseBoard.Secrets.ISecretsStore option) : WebPart =
+         (secrets : PulseBoard.Secrets.ISecretsStore option)
+         (meter : PulseBoard.Billing.IBillingMeter option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -185,6 +195,11 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
           entries.Add { ts = ts; service = service; level = level; message = message }
         let tid = match tenantId with Some (TenantId s) -> s | None -> ""
         do! storage.WriteLogs(tid, entries)
+        // Phase 7 #1 — meter log bytes for billing.
+        match meter, tenantId with
+        | Some m, Some tenant when entries.Count > 0 ->
+          m.Record (tenant, PulseBoard.Billing.LogBytes, int64 bytes)
+        | _ -> ()
         return! (OK (sprintf """{"accepted":%d}""" entries.Count)
                  >=> Writers.setMimeType "application/json") ctx
     with ex ->
@@ -192,8 +207,9 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
   }
 
 let webPart (storage : IStorageClient) (quotas : IngestQuotas option)
-            (secrets : PulseBoard.Secrets.ISecretsStore option) : WebPart =
+            (secrets : PulseBoard.Secrets.ISecretsStore option)
+            (meter   : PulseBoard.Billing.IBillingMeter option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics storage quotas
-    POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets
+    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter
+    POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets meter
   ]

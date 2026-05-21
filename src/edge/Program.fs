@@ -720,8 +720,13 @@ let main argv =
     if multiTenant then
       Some { limiter = limiter; auditLog = auditLog }
     else None
+  // Phase 7 #1 — billing meter lives here so ingest receivers can record
+  // usage; providers + rollup loop + admin endpoints are wired further
+  // below once the full admin pipeline is composed.
+  let billingMeter : PulseBoard.Billing.IBillingMeter =
+    PulseBoard.Billing.InMemoryBillingMeter() :> _
   let ingestInner =
-    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore)
+    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter)
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore
 
@@ -906,7 +911,30 @@ let main argv =
   // the choose so they win before Admin.webPart's catch-all NOT_FOUND.
   let secretsApiInner =
     PulseBoard.Admin.secretsWebPart secretsStore piiPolicyStore auditLog
-  let adminAll = choose [ scrapeAdminInner; listenerAdminInner; adminInner ]
+
+  // Phase 7 #1 + #2 — billing providers + plan/usage admin endpoints.
+  // The `InMemoryBillingMeter` itself is defined above so the ingest
+  // receivers can record usage. Here we attach the file provider, kick
+  // off the daily rollup loop, and compose the admin endpoints.
+  let billingFileProvider =
+    PulseBoard.Billing.FileBillingProvider(Path.Combine(dataDir, "billing"))
+  let billingProviders : PulseBoard.Billing.IBillingProvider[] =
+    [| billingFileProvider :> PulseBoard.Billing.IBillingProvider |]
+  let billingPlanFor (tid : PulseBoard.Tenancy.TenantId) =
+    match tenantStore.TryGetTenant tid with
+    | Some t -> t.plan
+    | None   -> PulseBoard.Tenancy.Plan.Free
+  // Daily rollup loop. 86400s by default; clamped to >=5s inside Billing.
+  let billingRollupCts = new System.Threading.CancellationTokenSource()
+  let _billingRollupTask =
+    PulseBoard.Billing.startRollupLoop
+      billingMeter billingProviders billingPlanFor 86400
+      billingRollupCts.Token
+  let billingAdminInner =
+    PulseBoard.Admin.billingWebPart
+      tenantStore billingMeter billingProviders auditLog
+
+  let adminAll = choose [ scrapeAdminInner; listenerAdminInner; billingAdminInner; adminInner ]
 
   let admin : WebPart =
     if multiTenant then
@@ -962,6 +990,10 @@ let main argv =
   let app : WebPart =
     choose [
       internalRoutes    // unauthenticated by API key — HMAC-guarded inside
+      (if multiTenant then
+         PulseBoard.Signup.webPart
+           tenantStore (PulseBoard.Signup.defaultLimiter ()) auditLog
+       else fun _ -> async { return None })
       ingest
       promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
       otlp              // /v1/* doesn't overlap /api/, but keep grouped with the other ingest receivers
@@ -1046,6 +1078,11 @@ let main argv =
     printfn "  POST /api/admin/tenants/<id>/listeners       (Admin scope, JSON {protocol,port,bindAddr?})"
     printfn "  GET  /api/admin/listeners/<id>               (Admin scope)"
     printfn "  DELETE /api/admin/listeners/<id>             (Admin scope)"
+    printfn "  PATCH /api/admin/tenants/<id>/plan           (Admin scope, JSON {plan})"
+    printfn "  GET  /api/admin/tenants/<id>/usage           (Admin scope)"
+    printfn "  POST /api/admin/billing/flush                (Admin scope)"
+    printfn "  POST /api/signup                       (unauthenticated, JSON {slug,email})"
+    printfn "  GET  /api/wizard/snippets?lang=&apiKey=&host=  (unauthenticated)"
     printfn "  GET  /admin                            (Admin UI)"
   match oidcConfig with
   | Some cfg ->

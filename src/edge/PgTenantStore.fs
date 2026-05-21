@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS pb_tenants (
   created_at  TIMESTAMPTZ NOT NULL
 );
 
+-- Phase 7 #2: commercial plan. Idempotent column-add for existing
+-- databases predating Phase 7; defaults to 'free' for backfill.
+ALTER TABLE pb_tenants
+  ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
+
 CREATE TABLE IF NOT EXISTS pb_api_keys (
   id              TEXT        PRIMARY KEY,
   tenant_id       TEXT        NOT NULL REFERENCES pb_tenants(id) ON DELETE CASCADE,
@@ -75,7 +80,11 @@ let private textToRole (s : string) =
 let private readTenant (r : DbDataReader) : Tenant =
   { id        = TenantId (r.GetString 0)
     slug      = r.GetString 1
-    createdAt = DateTimeOffset(r.GetDateTime(2), TimeSpan.Zero) }
+    createdAt = DateTimeOffset(r.GetDateTime(2), TimeSpan.Zero)
+    plan      =
+      match tryParsePlan (r.GetString 3) with
+      | Some p -> p
+      | None   -> Free }
 
 let private readApiKey (r : DbDataReader) : ApiKeyRecord =
   { id            = ApiKeyId (r.GetString 0)
@@ -192,7 +201,7 @@ type PgTenantStore(connectionString : string) =
       cmd.ExecuteNonQuery() |> ignore
       use sel =
         new NpgsqlCommand(
-          "SELECT id, slug, created_at FROM pb_tenants WHERE slug = @slug",
+          "SELECT id, slug, created_at, plan FROM pb_tenants WHERE slug = @slug",
           conn)
       sel.Parameters.AddWithValue("slug", slug) |> ignore
       use r = sel.ExecuteReader(CommandBehavior.SingleRow)
@@ -201,7 +210,7 @@ type PgTenantStore(connectionString : string) =
 
     member _.TryGetTenant (TenantId id) =
       queryOne
-        "SELECT id, slug, created_at FROM pb_tenants WHERE id = @id"
+        "SELECT id, slug, created_at, plan FROM pb_tenants WHERE id = @id"
         (fun c -> c.Parameters.AddWithValue("id", id) |> ignore)
         readTenant
 
@@ -210,15 +219,27 @@ type PgTenantStore(connectionString : string) =
       if slug.Length = 0 then None
       else
         queryOne
-          "SELECT id, slug, created_at FROM pb_tenants WHERE slug = @slug"
+          "SELECT id, slug, created_at, plan FROM pb_tenants WHERE slug = @slug"
           (fun c -> c.Parameters.AddWithValue("slug", slug) |> ignore)
           readTenant
 
     member _.Tenants () =
       queryAll
-        "SELECT id, slug, created_at FROM pb_tenants ORDER BY created_at"
+        "SELECT id, slug, created_at, plan FROM pb_tenants ORDER BY created_at"
         ignore
         readTenant
+
+    member this.UpdateTenantPlan (TenantId id, plan) =
+      use conn = openConn ()
+      use cmd =
+        new NpgsqlCommand(
+          "UPDATE pb_tenants SET plan = @plan WHERE id = @id",
+          conn)
+      cmd.Parameters.AddWithValue("plan", planToText plan) |> ignore
+      cmd.Parameters.AddWithValue("id",   id)              |> ignore
+      let n = cmd.ExecuteNonQuery()
+      if n = 0 then None
+      else (this :> ITenantStore).TryGetTenant (TenantId id)
 
     member _.IssueApiKey (TenantId tenantId, label, role, scopes) =
       // Generate id + secret + salt + hash in-process, then a single INSERT.
