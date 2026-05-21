@@ -179,9 +179,25 @@ pipeline, the UI, billing.
 
 ## Phase 4 — Query, dashboards, exploration
 
-1. **Query API.** Speak **PromQL** (metrics) and **LogQL** (logs) by
-   proxying to Mimir/Loki. Keep a simple native query DSL for the
-   PulseBoard API surface.
+1. **Query API.** ✅ DONE — [QueryApi.fs](src/edge/QueryApi.fs) exposes
+   `/api/prom/api/v1/{query,query_range,labels,label/<n>/values,series}`
+   and `/api/loki/api/v1/{query_range,labels,label/<n>/values}`.
+   When `--mimir-url=` / `--loki-url=` are set the requests are
+   forwarded verbatim (method, raw query, body, content-type) to the
+   upstream's `/prometheus/api/v1/*` / `/loki/api/v1/*` surface with
+   the tenant's id injected as the configured org header (default
+   `X-Scope-OrgID`) and an optional bearer token. Without an upstream
+   we serve an embedded subset on the local `MetricStore` / `LogStore`
+   / `RollupStore`: PromQL vector selectors only
+   (`metric{label="..."}`, regex matchers, `!=` / `!~`) — anything
+   compound returns `bad_data` with a hint to set `--mimir-url=`.
+   `query_range` uses the rollup buckets when `step` matches a known
+   resolution (1m / 5m / 1h) so dashboards get pre-aggregated points
+   for free. LogQL accepts `{service="..."}` with an optional `|=` /
+   `!=` line filter; everything else (parser pipeline, metric
+   queries, json/logfmt extractors) requires a real Loki via
+   `--loki-url=`. The native query DSL in [Query.fs](src/edge/Query.fs)
+   stays the simple API surface for the dashboard SPA.
 2. **Dashboards.** Embed Grafana OSS first (SSO bridge, we provide
    datasources). In-house dashboard v2 only after PMF.
 3. **Explore view** for ad-hoc query + log tail — extend the existing

@@ -640,6 +640,34 @@ let main argv =
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore
 
+  // -- Prometheus / Loki query APIs (PLAN.md Phase 4 step 1) ---------
+  // When the metric / log pillar is wired to a cloud backend we
+  // forward the standard HTTP query surface to the upstream verbatim;
+  // otherwise we serve an embedded subset (vector selectors only for
+  // PromQL, stream selectors + a single |= / != filter for LogQL).
+  let promUpstream : PulseBoard.QueryApi.Upstream option =
+    mimirUrl
+    |> Option.map (fun u ->
+      { baseUrl   = u
+        orgHeader = optOrg mimirOrg
+        bearer    = mimirToken })
+  let lokiUpstream : PulseBoard.QueryApi.Upstream option =
+    lokiUrl
+    |> Option.map (fun u ->
+      { baseUrl   = u
+        orgHeader = optOrg lokiOrg
+        bearer    = lokiToken })
+  let queryApiInner =
+    PulseBoard.QueryApi.webPart
+      promUpstream lokiUpstream metricStore rollupStore logStore
+  let describeQueryBackend (label : string)
+                            (u : PulseBoard.QueryApi.Upstream option) =
+    match u with
+    | Some up -> printfn "  %s: proxy -> %s" label up.baseUrl
+    | None    -> printfn "  %s: embedded (vector / stream selectors only)" label
+  describeQueryBackend "PromQL API" promUpstream
+  describeQueryBackend "LogQL  API" lokiUpstream
+
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 
   // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
@@ -762,6 +790,7 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
+    let combinedInner = choose [ queryApiInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -769,9 +798,9 @@ let main argv =
             (PulseBoard.Rbac.requireScope auditLog
                "query" PulseBoard.Tenancy.Scope.Query
                (PulseBoard.Rbac.requireQuota auditLog limiter
-                  PulseBoard.Quotas.Query 1.0 queryInner)))
+                  PulseBoard.Quotas.Query 1.0 combinedInner)))
     else
-      queryInner
+      combinedInner
 
   // Internal protocol endpoints: when `--edge-secret` is set and we are
   // running a storage-capable role, expose the HMAC-protected
@@ -844,6 +873,8 @@ let main argv =
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"
+  printfn "  GET  /api/prom/api/v1/{query,query_range,labels,label/<n>/values,series}"
+  printfn "  GET  /api/loki/api/v1/{query_range,labels,label/<n>/values}"
   if multiTenant then
     printfn "  GET  /api/admin/audit?tail=N        (Admin scope)"
     printfn "  GET  /api/admin/tenants              (Admin scope)"
