@@ -13,6 +13,7 @@ open Suave.ServerErrors
 open PulseBoard.Tenancy
 open PulseBoard.Audit
 open PulseBoard.Quotas
+open PulseBoard.Retention
 
 // REST surface for tenant + API key management. All routes require the
 // `Admin` scope; gating is composed at the call site in Program.fs via
@@ -496,9 +497,122 @@ let private updateQuotas (store : ITenantStore) (quotaStore : QuotaStore)
               return! errJson 500 ex.Message ctx
   }
 
+// -- retention (Phase 3 step 3) ---------------------------------------------
+
+let private retentionJson (eff : EffectivePolicy) : string =
+  let field (v : int64 option) =
+    match v with Some n -> string n | None -> "null"
+  sprintf
+    """{"metricsMs":%s,"logsMs":%s,"tracesMs":%s,"overridden":{"metricsMs":%b,"logsMs":%b,"tracesMs":%b}}"""
+    (field eff.metricsMs)
+    (field eff.logsMs)
+    (field eff.tracesMs)
+    eff.metricsOverridden
+    eff.logsOverridden
+    eff.tracesOverridden
+
+let private showRetention (store : ITenantStore) (retention : RetentionStore)
+                          (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None -> return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      let eff = retention.Effective (TenantId tenantId)
+      return! jsonResp 200 (retentionJson eff) ctx
+  }
+
+/// Parse one TTL field: a number sets it, `null` clears it, missing
+/// leaves it untouched. Returns `Ok (value, present)` where `present`
+/// is `false` if the property was absent from the body.
+let private parseTtlField (root : JsonElement) (name : string)
+  : Result<(int64 option * bool), string> =
+  match root.TryGetProperty name with
+  | false, _ -> Result.Ok (None, false)
+  | true, v ->
+    match v.ValueKind with
+    | JsonValueKind.Null -> Result.Ok (None, true)
+    | JsonValueKind.Number ->
+      match v.TryGetInt64() with
+      | true, n when n >= 0L -> Result.Ok (Some n, true)
+      | _ -> Result.Error (sprintf "'%s' must be a non-negative integer or null" name)
+    | _ -> Result.Error (sprintf "'%s' must be integer or null" name)
+
+let private updateRetention (store : ITenantStore) (retention : RetentionStore)
+                            (log : IAuditLog) (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None ->
+      auditEvent log ctx "admin.retention.set" Deny
+        (Some (sprintf "tenantId=%s not found" tenantId))
+      return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None ->
+        auditEvent log ctx "admin.retention.set" Deny (Some "invalid json")
+        return! errJson 400 "invalid JSON body" ctx
+      | Some doc ->
+        use _ = doc
+        let root = doc.RootElement
+        if root.ValueKind <> JsonValueKind.Object then
+          auditEvent log ctx "admin.retention.set" Deny (Some "body not object")
+          return! errJson 400 "body must be a JSON object" ctx
+        else
+          // Validate up-front so a malformed field doesn't leave the
+          // store half-updated.
+          let metrics = parseTtlField root "metricsMs"
+          let logs    = parseTtlField root "logsMs"
+          let traces  = parseTtlField root "tracesMs"
+          let err =
+            [ metrics; logs; traces ]
+            |> List.tryPick (function Result.Error m -> Some m | _ -> None)
+          match err with
+          | Some m ->
+            auditEvent log ctx "admin.retention.set" Deny (Some m)
+            return! errJson 400 m ctx
+          | None ->
+            try
+              // Build target policy by overlaying the current override
+              // with the requested mutations. Fields explicitly set to
+              // `null` clear; fields absent are left untouched.
+              let cur = retention.Effective (TenantId tenantId)
+              let curOverride =
+                { metricsMs = if cur.metricsOverridden then cur.metricsMs else None
+                  logsMs    = if cur.logsOverridden    then cur.logsMs    else None
+                  tracesMs  = if cur.tracesOverridden  then cur.tracesMs  else None }
+              let apply (curVal : int64 option) (parsed : Result<int64 option * bool, string>) =
+                match parsed with
+                | Result.Ok (v, true)  -> v
+                | _                    -> curVal
+              let next : RetentionPolicy =
+                { metricsMs = apply curOverride.metricsMs metrics
+                  logsMs    = apply curOverride.logsMs    logs
+                  tracesMs  = apply curOverride.tracesMs  traces }
+              retention.SetOverride(TenantId tenantId, next)
+              let detail =
+                let part name (r : Result<int64 option * bool, string>) =
+                  match r with
+                  | Result.Ok (Some n, true) -> Some (sprintf "%s=%d" name n)
+                  | Result.Ok (None, true)   -> Some (sprintf "%s=clear" name)
+                  | _                        -> None
+                [ part "metricsMs" metrics
+                  part "logsMs"    logs
+                  part "tracesMs"  traces ]
+                |> List.choose id
+                |> String.concat " "
+              auditEvent log ctx "admin.retention.set" Allow
+                (Some (sprintf "tenantId=%s %s" tenantId detail))
+              let eff = retention.Effective (TenantId tenantId)
+              return! jsonResp 200 (retentionJson eff) ctx
+            with ex ->
+              auditEvent log ctx "admin.retention.set" Error (Some ex.Message)
+              return! errJson 500 ex.Message ctx
+  }
+
 /// Complete admin WebPart. Gating (`Admin` scope) is applied by the caller.
 let webPart (store : ITenantStore) (quotaStore : QuotaStore)
             (metricBackend : PulseBoard.Storage.IMetricBackend)
+            (retention : RetentionStore)
             (log : IAuditLog) : WebPart =
   let showCardinality (tenantId : string) : WebPart =
     fun ctx -> async {
@@ -525,6 +639,10 @@ let webPart (store : ITenantStore) (quotaStore : QuotaStore)
     GET  >=> pathScan "/api/admin/tenants/%s/quotas"   (showQuotas store quotaStore)
     PUT  >=> pathScan "/api/admin/tenants/%s/quotas"   (updateQuotas store quotaStore log)
     GET  >=> pathScan "/api/admin/tenants/%s/cardinality" showCardinality
+    GET  >=> pathScan "/api/admin/tenants/%s/retention"
+              (showRetention store retention)
+    PUT  >=> pathScan "/api/admin/tenants/%s/retention"
+              (updateRetention store retention log)
     NOT_FOUND """{"error":"unknown admin endpoint"}"""
       >=> Writers.setMimeType "application/json"
   ]

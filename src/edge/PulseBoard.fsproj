@@ -25,6 +25,8 @@
     <Compile Include="Notify.fs" />
     <Compile Include="Storage.fs" />
     <Compile Include="CloudBackends.fs" />
+    <Compile Include="Retention.fs" />
+    <Compile Include="PgRetentionOverrides.fs" />
     <Compile Include="Gateway.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />

@@ -136,9 +136,23 @@ pipeline, the UI, billing.
    `droppedSamples` counter, surfaced at
    `GET /api/admin/tenants/<id>/cardinality` as
    `{seriesCount, droppedSamples, cap, capOverridden}`.
-3. **Retention policies.** Per-tenant TTL per pillar; background
-   compactor for the embedded backend; lifecycle rules for object-store
-   tier.
+3. **Retention policies.** ✅ DONE. `Retention.fs` adds
+   `RetentionPolicy` (per-pillar TTL in ms: metrics / logs / traces),
+   a `RetentionStore` with system defaults + per-tenant overrides
+   (Postgres-backed via `PgRetentionOverrides.fs`, in-memory
+   otherwise), and an `EmbeddedCompactor` that walks the in-process
+   `MetricStore` / `LogStore` on a timer and prunes anything older
+   than the most-generous configured horizon (so no tenant's data is
+   evicted earlier than its policy allows; embedded stores are
+   process-global). Pillars swapped to a cloud backend skip the
+   compactor — Mimir / Loki / Tempo enforce TTL upstream. Wired via
+   `--retention-metrics-ms=` / `--retention-logs-ms=` /
+   `--retention-traces-ms=` / `--retention-compact-interval-ms=`
+   (default 60s) and `PULSE_RETENTION_*` envs. Admin endpoints
+   `GET` / `PUT /api/admin/tenants/<id>/retention` mutate per-tenant
+   overrides (numbers set, `null` clears, missing fields untouched).
+   Object-store lifecycle rules are out of scope until we ship cold
+   tiering.
 4. **Downsampling rollups** (1m / 5m / 1h). Background job; query layer
    auto-picks resolution. (Largely free with Mimir.)
 

@@ -381,6 +381,78 @@ let main argv =
     | :? PulseBoard.CloudBackends.IRawTraceBackend as rt -> Some rt
     | _ -> None
 
+  // -- Retention (PLAN.md Phase 3 step 3) -------------------------------
+  // System defaults are configurable per pillar; `0` or unset means
+  // "keep forever / no enforcement" (the same convention as the
+  // existing quota flags). Per-tenant overrides live in Postgres when
+  // available, otherwise in-memory. The embedded compactor walks the
+  // in-process MetricStore / LogStore on a timer and prunes anything
+  // older than the most-generous configured horizon. When a pillar
+  // has been swapped to a cloud backend its TTL is honoured by the
+  // upstream service (Mimir / Loki / Tempo) and the compactor skips it.
+  let parseTtlMs (envName : string) (flag : string) : int64 option =
+    let raw =
+      match argv |> Array.tryFind (fun a -> a.StartsWith flag) with
+      | Some s -> Some (s.Substring flag.Length)
+      | None ->
+        let v = Environment.GetEnvironmentVariable envName
+        if String.IsNullOrWhiteSpace v then None else Some v
+    match raw with
+    | None -> None
+    | Some s ->
+      match Int64.TryParse s with
+      | true, n when n > 0L  -> Some n
+      | true, _              -> None     // 0 / negative = keep forever
+      | _ ->
+        eprintfn "  [ERROR] %s expects a non-negative integer (ms), got %s" flag s
+        exit 2
+  let retentionDefaults : PulseBoard.Retention.RetentionPolicy =
+    { metricsMs = parseTtlMs "PULSE_RETENTION_METRICS_MS" "--retention-metrics-ms="
+      logsMs    = parseTtlMs "PULSE_RETENTION_LOGS_MS"    "--retention-logs-ms="
+      tracesMs  = parseTtlMs "PULSE_RETENTION_TRACES_MS"  "--retention-traces-ms=" }
+  let retentionInterval =
+    parseTtlMs "PULSE_RETENTION_COMPACT_INTERVAL_MS"
+               "--retention-compact-interval-ms="
+    |> Option.map int
+    |> Option.defaultValue 60_000
+  let retentionRepo : PulseBoard.Retention.IRetentionRepo =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgRetentionOverrides.ensureSchema cs
+        PulseBoard.PgRetentionOverrides.PgRetentionRepo(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres retention overrides: %s" ex.Message
+        exit 2
+    | None -> PulseBoard.Retention.InMemoryRetentionRepo() :> _
+  let retentionStore =
+    PulseBoard.Retention.RetentionStore(retentionDefaults, retentionRepo)
+  let describeTtl = function
+    | Some (n : int64) -> sprintf "%dms" n
+    | None             -> "forever"
+  printfn "  Retention defaults: metrics=%s logs=%s traces=%s (compact every %dms)"
+    (describeTtl retentionDefaults.metricsMs)
+    (describeTtl retentionDefaults.logsMs)
+    (describeTtl retentionDefaults.tracesMs)
+    retentionInterval
+  // Only run the compactor for pillars that are still embedded.
+  let compactorMetricStore =
+    if mimirUrl.IsNone then Some metricStore else None
+  let compactorLogStore =
+    if lokiUrl.IsNone then Some logStore else None
+  let retentionCompactor =
+    if compactorMetricStore.IsSome || compactorLogStore.IsSome then
+      let c =
+        new PulseBoard.Retention.EmbeddedCompactor(
+          retentionStore,
+          compactorMetricStore,
+          compactorLogStore,
+          retentionInterval)
+      c.Start()
+      Some c
+    else None
+  let _ = retentionCompactor   // keep alive for process lifetime
+
   // Storage client: every receiver path (HTTP ingest, scrape, UDP/TCP
   // listeners) writes through this. In `all` and `storage` it's a thin
   // wrapper around the in-process MetricStore/LogStore/hub; in `edge` it
@@ -533,7 +605,7 @@ let main argv =
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore
 
-  let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend auditLog
+  let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 
   // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
   // Tenant-defined scrape targets; background worker fans out HTTP GETs

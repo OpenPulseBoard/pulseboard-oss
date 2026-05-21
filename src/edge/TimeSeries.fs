@@ -44,6 +44,39 @@ type RingBuffer(capacity : int) =
   member x.Since(sinceMs : int64) : Point array =
     x.Snapshot() |> Array.filter (fun p -> p.ts >= sinceMs)
 
+  /// Drop all points with `ts < cutoffMs`. Returns the number of points
+  /// dropped. Survivors are re-laid out compactly starting at index 0
+  /// so chronological order in the visible window is preserved.
+  member _.PruneOlderThan(cutoffMs : int64) : int =
+    lock sync (fun () ->
+      if count = 0 then 0
+      else
+        let n = count
+        let start = if count < capacity then 0 else head
+        // Two-pass: count survivors first (assumes points are not
+        // strictly sorted by ts because Add accepts arbitrary
+        // timestamps; we still scan all live slots).
+        let mutable survivors = 0
+        for i in 0 .. n - 1 do
+          if buffer.[(start + i) % capacity].ts >= cutoffMs then
+            survivors <- survivors + 1
+        if survivors = n then 0
+        else
+          let kept = Array.zeroCreate<Point> survivors
+          let mutable j = 0
+          for i in 0 .. n - 1 do
+            let p = buffer.[(start + i) % capacity]
+            if p.ts >= cutoffMs then
+              kept.[j] <- p
+              j <- j + 1
+          // Wipe and re-lay out compactly.
+          Array.Clear(buffer, 0, capacity)
+          for i in 0 .. survivors - 1 do
+            buffer.[i] <- kept.[i]
+          count <- survivors
+          head  <- survivors % capacity
+          n - survivors)
+
 /// Per-metric ring-buffered store. Optional hooks let an external persistor
 /// (e.g. a disk segment writer) observe writes and contribute historical data
 /// older than what the ring still holds.
@@ -98,6 +131,15 @@ type MetricStore(capacityPerMetric : int) =
     | _ ->
       ring |> Array.filter (fun p -> p.ts >= sinceMs)
 
+  /// Prune every per-metric ring buffer to drop points with
+  /// `ts < cutoffMs`. Returns the total number of points dropped across
+  /// all metrics. Used by the retention compactor (Phase 3 step 3).
+  member _.PruneOlderThan(cutoffMs : int64) : int =
+    let mutable total = 0
+    for kv in metrics do
+      total <- total + kv.Value.PruneOlderThan cutoffMs
+    total
+
 /// Ring-buffered log store (single shared buffer across services).
 type LogStore(capacity : int) =
   let buffer : LogEntry array = Array.zeroCreate capacity
@@ -124,5 +166,34 @@ type LogStore(capacity : int) =
     let snap = x.Snapshot()
     if snap.Length <= maxCount then snap
     else snap.[snap.Length - maxCount ..]
+
+  /// Drop all entries with `ts < cutoffMs`. Returns the number of
+  /// entries dropped. Survivors are re-laid out compactly starting at
+  /// index 0.
+  member _.PruneOlderThan(cutoffMs : int64) : int =
+    lock sync (fun () ->
+      if count = 0 then 0
+      else
+        let n = count
+        let start = if count < capacity then 0 else head
+        let mutable survivors = 0
+        for i in 0 .. n - 1 do
+          if buffer.[(start + i) % capacity].ts >= cutoffMs then
+            survivors <- survivors + 1
+        if survivors = n then 0
+        else
+          let kept = Array.zeroCreate<LogEntry> survivors
+          let mutable j = 0
+          for i in 0 .. n - 1 do
+            let e = buffer.[(start + i) % capacity]
+            if e.ts >= cutoffMs then
+              kept.[j] <- e
+              j <- j + 1
+          Array.Clear(buffer, 0, capacity)
+          for i in 0 .. survivors - 1 do
+            buffer.[i] <- kept.[i]
+          count <- survivors
+          head  <- survivors % capacity
+          n - survivors)
 
 let nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
