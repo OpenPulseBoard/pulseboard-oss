@@ -5,8 +5,10 @@ open System.Text.Json
 open PulseBoard.Tenancy
 
 // Append-only audit trail. The in-memory ring keeps the last `capacity`
-// events for `GET /api/admin/audit`. Persisted Postgres + nightly S3 export
-// land in a later pass (PLAN.md Phase 1 step 4).
+// events for `GET /api/admin/audit`; durable persistence is provided by
+// `PgAuditLog` and the nightly S3 export by `S3AuditExporter`. Sinks are
+// composed via `CompositeAuditLog` (defined below) so admin tail still
+// answers from the ring while every event is also persisted to Postgres.
 
 type Outcome =
   | Allow
@@ -29,6 +31,22 @@ type AuditEvent =
 type IAuditLog =
   abstract Append : AuditEvent -> unit
   abstract Tail   : count : int -> AuditEvent[]
+
+/// Fan-out audit log. `Append` is best-effort dispatched to every inner
+/// log (individual failures are swallowed so a flaky sink can't drop the
+/// audit trail elsewhere). `Tail` is served from the first inner log,
+/// which by convention is the in-memory ring — Postgres-backed sinks
+/// return [||] from `Tail` since they're designed for long-term storage,
+/// not paged reads.
+type CompositeAuditLog (inner : IAuditLog[]) =
+  do if isNull inner then nullArg "inner"
+  interface IAuditLog with
+    member _.Append ev =
+      for l in inner do
+        try l.Append ev with _ -> ()
+    member _.Tail n =
+      if inner.Length = 0 then [||]
+      else inner.[0].Tail n
 
 type InMemoryAuditLog (capacity : int) =
   do if capacity <= 0 then invalidArg "capacity" "must be > 0"

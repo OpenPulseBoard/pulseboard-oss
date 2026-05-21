@@ -16,6 +16,8 @@
     <Compile Include="Quotas.fs" />
     <Compile Include="PgTenantStore.fs" />
     <Compile Include="PgQuotaOverrides.fs" />
+    <Compile Include="PgAuditLog.fs" />
+    <Compile Include="S3AuditExporter.fs" />
     <Compile Include="Rbac.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Oidc.fs" />
@@ -33,6 +35,7 @@
     </None>
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.23.3" />
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.18.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="Suave" Version="3.4.0" />

@@ -86,7 +86,23 @@ let main argv =
         printfn "  TenantStore: in-memory (ephemeral — pass --postgres=... to persist)"
       PulseBoard.Tenancy.InMemoryTenantStore() :> _
   let auditLog : PulseBoard.Audit.IAuditLog =
-    PulseBoard.Audit.InMemoryAuditLog(1024) :> _
+    // In-memory ring is always present so `GET /api/admin/audit` can serve
+    // recent tail; when Postgres is configured we fan out to a durable
+    // sink as well (PLAN.md Phase 1 step 4). The ring is listed first so
+    // `Tail` reads from it.
+    let ring = PulseBoard.Audit.InMemoryAuditLog(1024) :> PulseBoard.Audit.IAuditLog
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgAuditLog.ensureSchema cs
+        printfn "  AuditLog:    Postgres + in-memory ring (durable; tail served from ring)"
+        let pg = PulseBoard.PgAuditLog.PgAuditLog(cs) :> PulseBoard.Audit.IAuditLog
+        PulseBoard.Audit.CompositeAuditLog([| ring; pg |]) :> _
+      with ex ->
+        eprintfn "  [WARN] failed to initialise Postgres audit log (%s); ring only"
+          ex.Message
+        ring
+    | None -> ring
 
   // -- Per-tenant quotas (token bucket; PLAN.md Phase 1 step 5) -------------
   // Defaults are generous enough that the demo and smoke tests never trip
@@ -314,6 +330,36 @@ let main argv =
     new Timer((fun _ -> try alertEngine.Tick() with _ -> ()),
               null, TimeSpan.FromSeconds 2., TimeSpan.FromSeconds 2.)
 
+  // -- Nightly audit-log S3 export (PLAN.md Phase 1 step 4) ----------------
+  // Opt-in: requires both Postgres (durable audit source) and --audit-s3-bucket.
+  // Credentials use the AWS default chain (env / shared config / IAM role);
+  // never accept inline secrets via CLI. Endpoint override exists for
+  // S3-compatible stores (MinIO, Ceph) used in tests.
+  let auditS3Bucket   = envOr "PULSE_AUDIT_S3_BUCKET"   (argValue "--audit-s3-bucket=")
+  let auditS3Prefix   = envOr "PULSE_AUDIT_S3_PREFIX"   (argValue "--audit-s3-prefix=")
+                        |> Option.defaultValue ""
+  let auditS3Region   = envOr "PULSE_AUDIT_S3_REGION"   (argValue "--audit-s3-region=")
+  let auditS3Endpoint = envOr "PULSE_AUDIT_S3_ENDPOINT" (argValue "--audit-s3-endpoint=")
+  let auditExportTimer : Timer option =
+    match pgConn, auditS3Bucket with
+    | Some cs, Some bucket ->
+      let cfg : PulseBoard.S3AuditExporter.Config =
+        { connectionString = cs
+          bucket           = bucket
+          prefix           = auditS3Prefix
+          region           = auditS3Region
+          endpoint         = auditS3Endpoint
+          intervalMinutes  = 60 }
+      printfn "  AuditExport: s3://%s/%s (region=%s endpoint=%s; first run in 30s, then hourly)"
+        bucket auditS3Prefix
+        (defaultArg auditS3Region "<default>")
+        (defaultArg auditS3Endpoint "<aws>")
+      Some (PulseBoard.S3AuditExporter.start cfg)
+    | None, Some _ ->
+      eprintfn "  [WARN] --audit-s3-bucket set but --postgres is not; nightly audit export disabled"
+      None
+    | _ -> None
+
   // Flush segment writers every second so readers (and crash recovery)
   // observe data without a clean shutdown.
   let flushTimer =
@@ -487,4 +533,5 @@ let main argv =
   startWebServer config app
   GC.KeepAlive evalTimer
   GC.KeepAlive flushTimer
+  match auditExportTimer with Some t -> GC.KeepAlive t | None -> ()
   0
