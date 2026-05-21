@@ -452,6 +452,19 @@ let main argv =
       path "/api/prom/push"    // Cortex / Mimir convention
     ] >=> protectIngest promRemoteWriteInner
 
+  // OTLP/HTTP receivers. Distinct paths per signal (metrics/logs/traces)
+  // because each carries a different ExportXServiceRequest protobuf and
+  // we want per-signal protect wrappers for clean audit lines.
+  let otlpMetricsInner = PulseBoard.Otlp.metrics metricStore hub ingestQuotas
+  let otlpLogsInner    = PulseBoard.Otlp.logs    logStore    hub ingestQuotas
+  let otlpTracesInner  = PulseBoard.Otlp.traces
+  let otlp : WebPart =
+    POST >=> choose [
+      path "/v1/metrics" >=> protectIngest otlpMetricsInner
+      path "/v1/logs"    >=> protectIngest otlpLogsInner
+      path "/v1/traces"  >=> protectIngest otlpTracesInner
+    ]
+
   let admin : WebPart =
     if multiTenant then
       pathStarts "/api/admin/" >=>
@@ -479,6 +492,7 @@ let main argv =
     choose [
       ingest
       promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
+      otlp              // /v1/* doesn't overlap /api/, but keep grouped with the other ingest receivers
       admin     // must precede `query` because /api/admin/* also matches /api/
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
@@ -521,6 +535,9 @@ let main argv =
   printfn "  POST /ingest/logs      (JSON, array, or NDJSON)"
   printfn "  POST /api/v1/write     (Prometheus remote_write 1.0, snappy-protobuf)"
   printfn "  POST /api/prom/push    (alias of /api/v1/write)"
+  printfn "  POST /v1/metrics       (OTLP/HTTP metrics, protobuf)"
+  printfn "  POST /v1/logs          (OTLP/HTTP logs, protobuf)"
+  printfn "  POST /v1/traces        (OTLP/HTTP traces, protobuf; counted only until Phase 3)"
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"

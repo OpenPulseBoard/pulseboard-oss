@@ -25,6 +25,7 @@
     <Compile Include="Notify.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />
+    <Compile Include="Otlp.fs" />
     <Compile Include="Query.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />
