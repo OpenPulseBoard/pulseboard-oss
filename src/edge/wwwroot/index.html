@@ -3,203 +3,967 @@
 <head>
   <meta charset="utf-8" />
   <title>PulseBoard</title>
+  <link rel="stylesheet" href="/uPlot.min.css" />
   <style>
     :root {
       --bg: #0f1115;
       --panel: #171a21;
       --panel-2: #1f242d;
+      --panel-3: #262d3a;
       --fg: #e6e6e6;
       --muted: #8a93a1;
       --accent: #5ec8ff;
+      --accent-2: #b388ff;
       --ok: #5cd97a;
       --warn: #f0c452;
       --err: #f25f5c;
       --grid: #232833;
+      --border: #2a3140;
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      margin: 0; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin: 0; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
       background: var(--bg); color: var(--fg);
     }
-    header {
-      padding: 10px 16px; background: var(--panel); border-bottom: 1px solid #000;
-      display: flex; align-items: center; gap: 16px;
+    button, input, select, textarea {
+      font: inherit; color: inherit; background: var(--panel-2);
+      border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
     }
-    header h1 { font-size: 14px; margin: 0; letter-spacing: 1px; color: var(--accent); }
-    header .status { color: var(--muted); }
-    main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
-    section { background: var(--panel); border: 1px solid #000; border-radius: 6px; }
-    section h2 { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--muted);
-                 border-bottom: 1px solid var(--grid); text-transform: uppercase; letter-spacing: 1px; }
-    #metrics { grid-column: 1 / span 2; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-            gap: 10px; padding: 10px; }
-    .card { background: var(--panel-2); border-radius: 4px; padding: 8px 10px; }
-    .card .name { color: var(--accent); font-weight: bold; font-size: 12px; }
-    .card .value { font-size: 22px; margin-top: 2px; }
-    .card canvas { display: block; width: 100%; height: 40px; margin-top: 4px; }
-    #logs ul { list-style: none; margin: 0; padding: 6px 10px; max-height: 50vh; overflow: auto; }
-    #logs li { padding: 3px 4px; border-bottom: 1px dashed var(--grid); white-space: pre-wrap; }
-    #logs .level-error { color: var(--err); }
-    #logs .level-warn  { color: var(--warn); }
-    #logs .level-info  { color: var(--fg); }
-    #logs .ts { color: var(--muted); margin-right: 8px; }
-    #logs .svc { color: var(--accent); margin-right: 8px; }
-    #alerts ul { list-style: none; margin: 0; padding: 6px 10px; max-height: 20vh; overflow: auto; }
-    #alerts li { padding: 4px 6px; border-left: 3px solid var(--err); margin: 4px 0;
-                 background: rgba(242, 95, 92, 0.08); }
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-           background: var(--muted); margin-right: 6px; vertical-align: middle; }
-    .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    button { cursor: pointer; background: var(--panel-3); }
+    button:hover { background: #2f3645; }
+    button.primary { background: var(--accent); color: #04121d; border-color: var(--accent); font-weight: bold; }
+    button.danger  { background: #391d1d; border-color: var(--err); color: var(--err); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+
+    header.topbar {
+      display: flex; align-items: center; gap: 18px;
+      padding: 8px 14px;
+      background: var(--panel); border-bottom: 1px solid #000;
+    }
+    header h1 { font-size: 14px; margin: 0; letter-spacing: 2px; color: var(--accent); }
+    header nav { display: flex; gap: 4px; }
+    header nav a {
+      padding: 5px 12px; border-radius: 4px; color: var(--muted);
+      border: 1px solid transparent;
+    }
+    header nav a.active { color: var(--fg); background: var(--panel-2); border-color: var(--border); }
+    header .grow { flex: 1; }
+    header .status { color: var(--muted); font-size: 12px; }
+    header .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+                  background: var(--muted); margin-right: 6px; vertical-align: middle; }
+    header .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+    /* --- Dashboards view --- */
+    .dash-toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .dash-toolbar select, .dash-toolbar input { min-width: 80px; }
+    .dash-toolbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      grid-auto-rows: 70px;
+      gap: 10px;
+      padding: 10px;
+    }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+      position: relative;
+    }
+    .panel header {
+      padding: 6px 10px; border-bottom: 1px solid var(--grid);
+      display: flex; align-items: center; gap: 8px;
+      background: var(--panel-2); font-size: 12px;
+    }
+    .panel header .title { color: var(--accent); font-weight: bold; flex: 1;
+                           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .panel header .actions { display: none; gap: 4px; }
+    .edit-mode .panel header .actions { display: flex; }
+    .panel header button { padding: 1px 6px; font-size: 11px; }
+    .panel .body { flex: 1; overflow: hidden; min-height: 0; position: relative; }
+    .panel .body.stat { display: flex; flex-direction: column;
+                        align-items: center; justify-content: center; padding: 6px; }
+    .panel .body.stat .v { font-size: 36px; font-weight: bold; color: var(--accent); }
+    .panel .body.stat .u { font-size: 11px; color: var(--muted); }
+    .panel .body.logs { overflow: auto; padding: 6px 8px; font-size: 12px; }
+    .panel .body.logs li { list-style: none; padding: 2px 0; border-bottom: 1px dashed var(--grid);
+                            white-space: pre-wrap; }
+    .panel .body.logs .ts  { color: var(--muted); margin-right: 6px; }
+    .panel .body.logs .svc { color: var(--accent-2); margin-right: 6px; }
+    .panel .body.logs .level-error { color: var(--err); }
+    .panel .body.logs .level-warn  { color: var(--warn); }
+    .panel .body.table { overflow: auto; }
+    .panel .body.table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .panel .body.table th, .panel .body.table td { padding: 3px 8px; text-align: left; }
+    .panel .body.table th { color: var(--muted); border-bottom: 1px solid var(--grid); }
+    .panel .body.table tr:nth-child(even) { background: var(--panel-2); }
+    .panel .err {
+      padding: 8px 10px; color: var(--err); white-space: pre-wrap;
+      background: rgba(242,95,92,0.06); font-size: 11px;
+    }
+    .panel .empty { padding: 8px 10px; color: var(--muted); font-style: italic; font-size: 12px; }
+    .panel .uplot { width: 100%; height: 100%; }
+
+    /* Resize handle (only visible in edit mode) */
+    .panel .resize {
+      position: absolute; right: 0; bottom: 0; width: 14px; height: 14px;
+      cursor: nwse-resize; display: none;
+      background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
+      opacity: 0.7;
+    }
+    .edit-mode .panel { cursor: move; outline: 1px dashed transparent; }
+    .edit-mode .panel:hover { outline-color: var(--accent); }
+    .edit-mode .panel .resize { display: block; }
+    .edit-mode .panel.dragging { opacity: 0.7; outline-color: var(--accent-2); }
+
+    /* --- Side editor --- */
+    .editor {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
+      background: var(--panel); border-left: 1px solid var(--border);
+      transform: translateX(100%); transition: transform 0.15s ease-out;
+      display: flex; flex-direction: column; z-index: 50;
+    }
+    .editor.open { transform: translateX(0); }
+    .editor header { padding: 10px 14px; border-bottom: 1px solid var(--border);
+                     display: flex; align-items: center; gap: 8px; }
+    .editor header h2 { margin: 0; font-size: 13px; color: var(--accent); flex: 1; }
+    .editor .body { flex: 1; overflow: auto; padding: 10px 14px; }
+    .editor .field { margin-bottom: 10px; }
+    .editor label { display: block; color: var(--muted); font-size: 11px;
+                    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+    .editor input, .editor select, .editor textarea { width: 100%; }
+    .editor textarea { min-height: 80px; font-size: 12px; }
+    .editor .field-row { display: flex; gap: 8px; }
+    .editor .field-row > * { flex: 1; }
+    .editor footer { padding: 10px 14px; border-top: 1px solid var(--border);
+                     display: flex; gap: 8px; }
+
+    /* --- Explore view --- */
+    .explore { display: flex; flex-direction: column; height: calc(100vh - 49px); }
+    .explore .controls {
+      display: flex; gap: 8px; align-items: stretch; padding: 10px 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .explore .controls textarea { flex: 1; min-height: 60px; }
+    .explore .result { flex: 1; overflow: auto; padding: 10px 14px; }
+    .explore .result .uplot { background: var(--panel); border-radius: 6px; padding: 8px; }
+    .explore .meta { color: var(--muted); font-size: 11px; margin: 4px 0 8px; }
+
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
+             background: var(--panel-3); font-size: 10px; color: var(--muted); }
+    .hidden { display: none !important; }
+
+    /* uPlot theming */
+    .u-legend { font-size: 11px !important; color: var(--muted) !important; }
+    .u-legend .u-marker { width: 8px !important; height: 8px !important; }
   </style>
 </head>
 <body>
-<header>
+
+<header class="topbar">
   <h1>PULSEBOARD</h1>
-  <span class="status"><span id="dot" class="dot"></span><span id="conn">connecting…</span></span>
-  <span class="status" id="counts"></span>
-  <span class="status" style="margin-left:auto;"><a href="/admin" style="color:var(--accent);text-decoration:none;">admin →</a></span>
+  <nav>
+    <a href="#/dashboards" id="tab-dashboards" class="active">Dashboards</a>
+    <a href="#/explore"    id="tab-explore">Explore</a>
+    <a href="/live"        target="_blank">Live →</a>
+  </nav>
+  <div class="grow"></div>
+  <span class="status"><span id="dot" class="dot"></span><span id="conn">offline</span></span>
+  <span class="status" style="margin-left:12px;"><a href="/admin">admin →</a></span>
 </header>
-<main>
-  <section id="metrics">
-    <h2>Metrics</h2>
-    <div class="grid" id="metric-grid"></div>
-  </section>
-  <section id="alerts">
-    <h2>Alerts</h2>
-    <ul id="alert-list"><li style="border:none;background:none;color:var(--muted);">No alerts.</li></ul>
-  </section>
-  <section id="logs">
-    <h2>Logs</h2>
-    <ul id="log-list"></ul>
-  </section>
-</main>
 
+<!-- Dashboards view -->
+<div id="view-dashboards">
+  <div class="dash-toolbar">
+    <select id="dash-picker"></select>
+    <button id="dash-new">+ New</button>
+    <button id="dash-rename">Rename</button>
+    <button id="dash-delete" class="danger">Delete</button>
+    <div class="right">
+      <label class="status">Range</label>
+      <select id="time-range">
+        <option value="300">Last 5 min</option>
+        <option value="900">Last 15 min</option>
+        <option value="3600" selected>Last 1 hour</option>
+        <option value="21600">Last 6 hours</option>
+        <option value="86400">Last 24 hours</option>
+      </select>
+      <label class="status">Refresh</label>
+      <select id="refresh-int">
+        <option value="0">Off</option>
+        <option value="5">5s</option>
+        <option value="15" selected>15s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+      <button id="refresh-now">⟳</button>
+      <button id="edit-toggle">✎ Edit</button>
+      <button id="add-panel" class="hidden">+ Panel</button>
+      <button id="save-dash" class="primary hidden">Save</button>
+    </div>
+  </div>
+  <div class="grid" id="dash-grid"></div>
+</div>
+
+<!-- Explore view -->
+<div id="view-explore" class="explore hidden">
+  <div class="controls">
+    <select id="explore-lang">
+      <option value="promql">PromQL</option>
+      <option value="logql">LogQL</option>
+      <option value="native">Native metric</option>
+    </select>
+    <textarea id="explore-expr" placeholder='e.g. rt_test  or  {service=~".+"} |= "error"'></textarea>
+    <select id="explore-range">
+      <option value="300">5 min</option>
+      <option value="900">15 min</option>
+      <option value="3600" selected>1 hour</option>
+      <option value="21600">6 hours</option>
+    </select>
+    <button id="explore-run" class="primary">Run</button>
+  </div>
+  <div class="result">
+    <div class="meta" id="explore-meta">Run a query to see results.</div>
+    <div id="explore-out"></div>
+  </div>
+</div>
+
+<!-- Editor drawer -->
+<aside class="editor" id="editor">
+  <header>
+    <h2 id="editor-title">Edit panel</h2>
+    <button id="editor-close">×</button>
+  </header>
+  <div class="body">
+    <div class="field"><label>Title</label><input id="ed-title" /></div>
+    <div class="field"><label>Panel type</label>
+      <select id="ed-type">
+        <option value="timeseries">Time series</option>
+        <option value="stat">Stat (single value)</option>
+        <option value="logs">Logs</option>
+        <option value="table">Table</option>
+      </select>
+    </div>
+    <div class="field"><label>Query language</label>
+      <select id="ed-lang">
+        <option value="promql">PromQL</option>
+        <option value="logql">LogQL</option>
+        <option value="native">Native</option>
+      </select>
+    </div>
+    <div class="field"><label>Expression</label>
+      <textarea id="ed-expr" placeholder='e.g. cpu_usage'></textarea>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Width</label><input id="ed-w" type="number" min="1" max="12" /></div>
+      <div class="field"><label>Height</label><input id="ed-h" type="number" min="1" max="20" /></div>
+    </div>
+    <div class="field"><label>Options (key=value per line)</label>
+      <textarea id="ed-opts" placeholder="unit=bytes&#10;tail=200"></textarea>
+    </div>
+    <div class="field"><label>Preview</label>
+      <div id="ed-preview" style="height: 160px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; position: relative;"></div>
+    </div>
+  </div>
+  <footer>
+    <button id="ed-preview-btn">Preview</button>
+    <button id="ed-delete" class="danger">Delete panel</button>
+    <button id="ed-apply" class="primary" style="margin-left:auto;">Apply</button>
+  </footer>
+</aside>
+
+<script src="/uPlot.iife.min.js"></script>
 <script>
-const MAX_POINTS = 120;
-const MAX_LOGS   = 300;
+"use strict";
 
-const state = {
-  metrics: new Map(), // name -> { points: [{ts,value}], el, canvas }
-  logs: [],
-  alerts: []
-};
-
+// =====================================================================
+// State + utilities
+// =====================================================================
 const $ = (id) => document.getElementById(id);
-const fmt = (n) => Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(3)) : String(n);
+const fmtNum = (n) => {
+  if (!Number.isFinite(n)) return String(n);
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n/1e9).toFixed(2) + "G";
+  if (a >= 1e6) return (n/1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (n/1e3).toFixed(2) + "k";
+  if (a >= 100) return n.toFixed(0);
+  if (a >= 1)   return n.toFixed(2);
+  return n.toFixed(3);
+};
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
 
-function ensureMetric(name) {
-  let m = state.metrics.get(name);
-  if (m) return m;
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.innerHTML = `<div class="name"></div><div class="value">—</div><canvas></canvas>`;
-  card.querySelector('.name').textContent = name;
-  $('metric-grid').appendChild(card);
-  m = { points: [], el: card, valueEl: card.querySelector('.value'),
-        canvas: card.querySelector('canvas') };
-  state.metrics.set(name, m);
-  return m;
+const state = {
+  dashboards: [],          // [{id,title,...}]
+  current: null,           // active Dashboard (full)
+  editMode: false,
+  editingPanel: null,      // id of panel in editor
+  panels: new Map(),       // panelId -> { dom, uplot, data, raf }
+  refreshTimer: null,
+  ws: null,
+};
+
+function showView(name) {
+  $("view-dashboards").classList.toggle("hidden", name !== "dashboards");
+  $("view-explore").classList.toggle("hidden",    name !== "explore");
+  $("tab-dashboards").classList.toggle("active", name === "dashboards");
+  $("tab-explore").classList.toggle("active",    name === "explore");
 }
 
-function pushMetric(name, ts, value) {
-  const m = ensureMetric(name);
-  m.points.push({ ts, value });
-  if (m.points.length > MAX_POINTS) m.points.splice(0, m.points.length - MAX_POINTS);
-  m.valueEl.textContent = fmt(value);
-  drawSparkline(m);
+function uuid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function drawSparkline(m) {
-  const c = m.canvas;
-  const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth, h = c.clientHeight;
-  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
-  const ctx = c.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  const pts = m.points;
-  if (pts.length < 2) return;
-  let lo = +Infinity, hi = -Infinity;
-  for (const p of pts) { if (p.value < lo) lo = p.value; if (p.value > hi) hi = p.value; }
-  if (lo === hi) { lo -= 1; hi += 1; }
-  ctx.strokeStyle = '#5ec8ff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  pts.forEach((p, i) => {
-    const x = (i / (pts.length - 1)) * w;
-    const y = h - ((p.value - lo) / (hi - lo)) * (h - 2) - 1;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+// =====================================================================
+// Query layer — one place that knows how to fetch any panel/explore source
+// =====================================================================
+async function runQuery(lang, expr, startMs, endMs, stepSec) {
+  const startSec = Math.floor(startMs / 1000);
+  const endSec   = Math.floor(endMs / 1000);
+  if (lang === "promql") {
+    const url = `/api/prom/api/v1/query_range?query=${encodeURIComponent(expr)}` +
+                `&start=${startSec}&end=${endSec}&step=${stepSec}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.status !== "success") throw new Error(j.error || "promql failed");
+    return promMatrixToSeries(j.data);
+  }
+  if (lang === "logql") {
+    const url = `/api/loki/api/v1/query_range?query=${encodeURIComponent(expr)}` +
+                `&start=${startMs*1e6}&end=${endMs*1e6}&limit=500`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.status !== "success") throw new Error(j.error || "logql failed");
+    return logqlToEntries(j.data);
+  }
+  if (lang === "native") {
+    // Single metric name → /api/metrics/<n>?sinceMs=...
+    if (expr.startsWith("__")) {
+      // Synthetic sources used by the default dashboard's stat panels.
+      return await nativeSynthetic(expr);
+    }
+    const url = `/api/metrics/${encodeURIComponent(expr.trim())}?sinceMs=${startMs}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("native metric not found");
+    const arr = await r.json();   // [[ts, value], ...]
+    const xs = arr.map(p => p[0] / 1000);
+    const ys = arr.map(p => p[1]);
+    return { kind: "series", series: [{ name: expr, xs, ys }] };
+  }
+  throw new Error("unknown query language: " + lang);
+}
+
+function promMatrixToSeries(data) {
+  const out = [];
+  if (data.resultType === "matrix") {
+    for (const s of data.result) {
+      const name = labelsLine(s.metric);
+      const xs = s.values.map(v => +v[0]);
+      const ys = s.values.map(v => +v[1]);
+      out.push({ name, xs, ys });
+    }
+    return { kind: "series", series: out };
+  }
+  if (data.resultType === "vector") {
+    for (const s of data.result) {
+      out.push({ name: labelsLine(s.metric), xs: [+s.value[0]], ys: [+s.value[1]] });
+    }
+    return { kind: "series", series: out };
+  }
+  return { kind: "series", series: [] };
+}
+
+function labelsLine(metric) {
+  if (!metric) return "{}";
+  const name = metric.__name__ || "";
+  const kvs  = Object.entries(metric).filter(([k]) => k !== "__name__")
+                     .map(([k,v]) => `${k}="${v}"`).join(",");
+  return kvs ? `${name}{${kvs}}` : (name || "{}");
+}
+
+function logqlToEntries(data) {
+  const entries = [];
+  if (data.resultType === "streams") {
+    for (const s of data.result) {
+      const lbls = labelsLine(s.stream);
+      for (const v of s.values) {
+        entries.push({
+          tsMs: Math.floor(+v[0] / 1e6),
+          stream: lbls,
+          service: s.stream.service || "-",
+          level: s.stream.level || "info",
+          message: v[1],
+        });
+      }
+    }
+    entries.sort((a, b) => a.tsMs - b.tsMs);
+  }
+  return { kind: "logs", entries };
+}
+
+async function nativeSynthetic(key) {
+  // Synthetic sources for the default dashboard. Each returns a stat-ready
+  // single value rather than a series.
+  if (key === "__alerts.firing") {
+    // No /api/alerts endpoint yet — derive from WS counters we keep client-side.
+    return { kind: "stat", value: state.liveAlerts || 0 };
+  }
+  if (key === "__listeners.up") {
+    // No /api/listeners count in single-tenant mode — fall back to WS metric count.
+    return { kind: "stat", value: state.liveMetrics ? state.liveMetrics.size : 0 };
+  }
+  return { kind: "stat", value: 0 };
+}
+
+// =====================================================================
+// Panel rendering
+// =====================================================================
+function placePanel(el, p) {
+  el.style.gridColumn = `${(p.x|0) + 1} / span ${Math.max(1, p.w|0)}`;
+  el.style.gridRow    = `${(p.y|0) + 1} / span ${Math.max(1, p.h|0)}`;
+}
+
+function panelChrome(p) {
+  const el = document.createElement("div");
+  el.className = "panel"; el.dataset.id = p.id;
+  el.innerHTML = `
+    <header>
+      <span class="title"></span>
+      <span class="badge"></span>
+      <span class="actions">
+        <button data-act="edit">edit</button>
+      </span>
+    </header>
+    <div class="body"></div>
+    <div class="resize"></div>`;
+  el.querySelector(".title").textContent = p.title || "(untitled)";
+  el.querySelector(".badge").textContent = p.queryLang;
+  placePanel(el, p);
+  el.querySelector('[data-act="edit"]').addEventListener("click", (e) => {
+    e.stopPropagation();
+    openEditor(p.id);
   });
-  ctx.stroke();
+  return el;
 }
 
-function pushLog(entry) {
-  state.logs.push(entry);
-  if (state.logs.length > MAX_LOGS) state.logs.shift();
-  const ul = $('log-list');
-  const li = document.createElement('li');
-  li.className = 'level-' + (entry.level || 'info').toLowerCase();
-  li.innerHTML = `<span class="ts">${fmtTs(entry.ts)}</span>` +
-                 `<span class="svc">${entry.service || '-'}</span>` +
-                 `<span>${escapeHtml(entry.message || '')}</span>`;
-  ul.appendChild(li);
-  while (ul.childNodes.length > MAX_LOGS) ul.removeChild(ul.firstChild);
-  ul.scrollTop = ul.scrollHeight;
-}
+async function renderPanel(p) {
+  const cached = state.panels.get(p.id);
+  let el;
+  if (cached && cached.dom && cached.dom.isConnected) {
+    el = cached.dom;
+    if (cached.uplot) { try { cached.uplot.destroy(); } catch {} }
+    placePanel(el, p);
+    el.querySelector(".title").textContent = p.title || "(untitled)";
+    el.querySelector(".badge").textContent = p.queryLang;
+  } else {
+    el = panelChrome(p);
+    $("dash-grid").appendChild(el);
+  }
+  const body = el.querySelector(".body");
+  body.className = "body " + p.panelType;
+  body.innerHTML = '<div class="empty">loading…</div>';
 
-function pushAlert(a) {
-  state.alerts.unshift(a);
-  const ul = $('alert-list');
-  ul.innerHTML = '';
-  if (state.alerts.length === 0) {
-    ul.innerHTML = '<li style="border:none;background:none;color:var(--muted);">No alerts.</li>';
+  const now = Date.now();
+  const start = now - state.current.timeRangeSec * 1000;
+  const step  = Math.max(15, Math.floor(state.current.timeRangeSec / 120));
+  let result;
+  try {
+    result = await runQuery(p.queryLang, p.expr, start, now, step);
+  } catch (err) {
+    body.innerHTML = "";
+    const e = document.createElement("div");
+    e.className = "err"; e.textContent = err.message;
+    body.appendChild(e);
+    state.panels.set(p.id, { dom: el });
     return;
   }
-  for (const x of state.alerts.slice(0, 20)) {
-    const li = document.createElement('li');
-    li.textContent = `[${fmtTs(x.firedAt)}] ${x.rule} — ${x.metric} = ${fmt(x.value)}`;
-    ul.appendChild(li);
+
+  body.innerHTML = "";
+  if (p.panelType === "timeseries") {
+    renderTimeseries(body, result, p);
+  } else if (p.panelType === "stat") {
+    renderStat(body, result, p);
+  } else if (p.panelType === "logs") {
+    renderLogs(body, result, p);
+  } else if (p.panelType === "table") {
+    renderTable(body, result, p);
   }
 }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c =>
-    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-}
-
-async function bootstrap() {
-  try {
-    const names = await (await fetch('/api/metrics')).json();
-    for (const n of names) {
-      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n))).json();
-      for (const [ts, v] of series) pushMetric(n, ts, v);
+function renderTimeseries(body, result, p) {
+  const series = result.series || [];
+  if (series.length === 0) {
+    body.innerHTML = '<div class="empty">no data in range</div>'; return;
+  }
+  // Build common x-axis from union of all xs.
+  const xset = new Set();
+  for (const s of series) for (const x of s.xs) xset.add(x);
+  const xs = Array.from(xset).sort((a, b) => a - b);
+  const xi = new Map(); xs.forEach((x, i) => xi.set(x, i));
+  const data = [xs];
+  for (const s of series) {
+    const arr = new Array(xs.length).fill(null);
+    for (let i = 0; i < s.xs.length; i++) {
+      const idx = xi.get(s.xs[i]); if (idx != null) arr[idx] = s.ys[i];
     }
-    const logs = await (await fetch('/api/logs?tail=100')).json();
-    for (const e of logs) pushLog(e);
-  } catch (e) { console.warn('bootstrap failed', e); }
+    data.push(arr);
+  }
+  const opts = {
+    width: body.clientWidth || 300,
+    height: body.clientHeight || 100,
+    cursor: { drag: { x: true, y: false } },
+    legend: { show: series.length > 1 },
+    scales: { x: { time: true } },
+    axes: [
+      { stroke: "#8a93a1", grid: { stroke: "#232833" } },
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
+        values: (u, vals) => vals.map(v => fmtNum(v)) },
+    ],
+    series: [
+      {},
+      ...series.map((s, i) => ({
+        label: s.name, stroke: colorFor(i), width: 1.5,
+        points: { show: xs.length < 60 },
+      })),
+    ],
+  };
+  const plot = new uPlot(opts, data, body);
+  state.panels.set(p.id, { dom: body.closest(".panel"), uplot: plot });
+  // ResizeObserver keeps the chart in sync as the user drags the grid.
+  if (!body._ro) {
+    body._ro = new ResizeObserver(() => {
+      if (state.panels.get(p.id)?.uplot) {
+        try { state.panels.get(p.id).uplot.setSize({ width: body.clientWidth, height: body.clientHeight }); } catch {}
+      }
+    });
+    body._ro.observe(body);
+  }
 }
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+function renderStat(body, result, p) {
+  let value;
+  if (result.kind === "stat") value = result.value;
+  else if (result.kind === "series" && result.series.length) {
+    const last = result.series[0];
+    value = last.ys.length ? last.ys[last.ys.length - 1] : null;
+  } else value = null;
+  const unit = (p.options || {}).unit || "";
+  body.innerHTML = `<div class="v">${value == null ? "—" : fmtNum(value)}</div><div class="u">${unit}</div>`;
+}
+
+function renderLogs(body, result, p) {
+  const entries = (result.entries || []).slice(-((p.options && +p.options.tail) || 200));
+  if (entries.length === 0) { body.innerHTML = '<div class="empty">no log lines</div>'; return; }
+  const ul = document.createElement("ul"); ul.style.margin = "0"; ul.style.padding = "0";
+  for (const e of entries) {
+    const li = document.createElement("li");
+    li.className = "level-" + (e.level || "info").toLowerCase();
+    li.innerHTML = `<span class="ts">${fmtTs(e.tsMs)}</span>` +
+                   `<span class="svc">${e.service}</span>` +
+                   `<span></span>`;
+    li.querySelector("span:last-child").textContent = e.message;
+    ul.appendChild(li);
+  }
+  body.appendChild(ul);
+  body.scrollTop = body.scrollHeight;
+}
+
+function renderTable(body, result, p) {
+  const series = result.series || [];
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+  const table = document.createElement("table");
+  const head  = document.createElement("tr");
+  head.innerHTML = "<th>series</th><th>last</th><th>min</th><th>max</th><th>avg</th>";
+  table.appendChild(head);
+  for (const s of series) {
+    const tr = document.createElement("tr");
+    const last = s.ys[s.ys.length - 1];
+    const min  = Math.min(...s.ys);
+    const max  = Math.max(...s.ys);
+    const avg  = s.ys.reduce((a, b) => a + b, 0) / (s.ys.length || 1);
+    tr.innerHTML = `<td></td><td>${fmtNum(last)}</td><td>${fmtNum(min)}</td>` +
+                   `<td>${fmtNum(max)}</td><td>${fmtNum(avg)}</td>`;
+    tr.firstChild.textContent = s.name;
+    table.appendChild(tr);
+  }
+  body.appendChild(table);
+}
+
+const PALETTE = ["#5ec8ff","#b388ff","#5cd97a","#f0c452","#f25f5c","#79e0c8","#ff9d6c","#d8a0ff"];
+const colorFor = (i) => PALETTE[i % PALETTE.length];
+
+// =====================================================================
+// Dashboard loading + persistence
+// =====================================================================
+async function api(method, path, body) {
+  const opts = { method };
+  if (body !== undefined) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opts);
+  if (r.status === 204) return null;
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("json") ? r.json() : r.text();
+}
+
+async function reloadList(selectId) {
+  const list = await api("GET", "/api/dashboards");
+  state.dashboards = list;
+  const sel = $("dash-picker");
+  sel.innerHTML = "";
+  for (const d of list) {
+    const o = document.createElement("option");
+    o.value = d.id; o.textContent = d.title;
+    sel.appendChild(o);
+  }
+  const target = selectId || (state.current && state.current.id) || (list[0] && list[0].id);
+  if (target) { sel.value = target; await openDashboard(target); }
+}
+
+async function openDashboard(id) {
+  const d = await api("GET", "/api/dashboards/" + encodeURIComponent(id));
+  state.current = d;
+  for (const cached of state.panels.values()) {
+    if (cached.uplot) { try { cached.uplot.destroy(); } catch {} }
+  }
+  state.panels.clear();
+  $("dash-grid").innerHTML = "";
+  $("time-range").value = String(d.timeRangeSec);
+  $("refresh-int").value = String(d.refreshSec);
+  for (const p of d.panels) await renderPanel(p);
+  scheduleRefresh();
+}
+
+async function refreshAll() {
+  if (!state.current) return;
+  for (const p of state.current.panels) await renderPanel(p);
+}
+
+function scheduleRefresh() {
+  if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
+  const sec = +$("refresh-int").value;
+  if (sec > 0) state.refreshTimer = setInterval(refreshAll, sec * 1000);
+}
+
+async function saveCurrent() {
+  if (!state.current) return;
+  const saved = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id),
+                          state.current);
+  state.current = saved;
+  await reloadList(saved.id);
+}
+
+// =====================================================================
+// Editor drawer
+// =====================================================================
+function openEditor(panelId) {
+  state.editingPanel = panelId;
+  const p = state.current.panels.find(x => x.id === panelId);
+  if (!p) return;
+  $("editor-title").textContent = "Edit panel · " + p.title;
+  $("ed-title").value = p.title;
+  $("ed-type").value  = p.panelType;
+  $("ed-lang").value  = p.queryLang;
+  $("ed-expr").value  = p.expr;
+  $("ed-w").value     = p.w;
+  $("ed-h").value     = p.h;
+  $("ed-opts").value  = Object.entries(p.options || {}).map(([k,v]) => `${k}=${v}`).join("\n");
+  $("ed-preview").innerHTML = "";
+  $("editor").classList.add("open");
+}
+
+function closeEditor() {
+  $("editor").classList.remove("open");
+  state.editingPanel = null;
+}
+
+function parseOpts(text) {
+  const out = {};
+  for (const line of (text || "").split("\n")) {
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+
+function readEditorPanel() {
+  const id = state.editingPanel;
+  const base = state.current.panels.find(x => x.id === id);
+  return {
+    ...base,
+    title:     $("ed-title").value || "untitled",
+    panelType: $("ed-type").value,
+    queryLang: $("ed-lang").value,
+    expr:      $("ed-expr").value,
+    w:         Math.max(1, Math.min(12, +$("ed-w").value || base.w)),
+    h:         Math.max(1, +$("ed-h").value || base.h),
+    options:   parseOpts($("ed-opts").value),
+  };
+}
+
+async function applyEditor() {
+  const next = readEditorPanel();
+  state.current.panels = state.current.panels.map(p => p.id === next.id ? next : p);
+  await renderPanel(next);
+  closeEditor();
+  await saveCurrent();
+}
+
+async function previewEditor() {
+  const p = readEditorPanel();
+  const host = $("ed-preview");
+  host.innerHTML = '<div class="empty" style="padding:8px;">loading…</div>';
+  const now = Date.now();
+  const start = now - state.current.timeRangeSec * 1000;
+  const step  = Math.max(15, Math.floor(state.current.timeRangeSec / 60));
+  try {
+    const r = await runQuery(p.queryLang, p.expr, start, now, step);
+    host.innerHTML = "";
+    if (p.panelType === "timeseries") renderTimeseries(host, r, p);
+    else if (p.panelType === "stat") renderStat(host, r, p);
+    else if (p.panelType === "logs") renderLogs(host, r, p);
+    else renderTable(host, r, p);
+  } catch (err) {
+    host.innerHTML = `<div class="err" style="padding:8px;">${err.message}</div>`;
+  }
+}
+
+async function deleteEditorPanel() {
+  if (!state.editingPanel) return;
+  if (!confirm("Delete this panel?")) return;
+  state.current.panels = state.current.panels.filter(p => p.id !== state.editingPanel);
+  closeEditor();
+  await openDashboard(state.current.id);  // re-render
+  await saveCurrent();
+}
+
+function addPanel() {
+  // Find first free row at the bottom.
+  const maxY = state.current.panels.reduce((m, p) => Math.max(m, p.y + p.h), 0);
+  const p = {
+    id: "p-" + uuid(),
+    title: "New panel",
+    panelType: "timeseries",
+    queryLang: "promql",
+    expr: "",
+    x: 0, y: maxY, w: 6, h: 3,
+    options: {},
+  };
+  state.current.panels.push(p);
+  renderPanel(p);
+  openEditor(p.id);
+}
+
+// =====================================================================
+// Drag + resize (edit mode)
+// =====================================================================
+let drag = null;
+
+function gridUnitPx() {
+  const grid = $("dash-grid");
+  const cols = 12;
+  const style = getComputedStyle(grid);
+  const gap = parseFloat(style.gap) || 10;
+  const colW = (grid.clientWidth - (cols - 1) * gap - 20) / cols;
+  const rowH = parseFloat(style.gridAutoRows) || 70;
+  return { colW: colW + gap, rowH: rowH + gap };
+}
+
+$("dash-grid").addEventListener("pointerdown", (e) => {
+  if (!state.editMode) return;
+  const panelEl = e.target.closest(".panel");
+  if (!panelEl) return;
+  const id = panelEl.dataset.id;
+  const p = state.current.panels.find(x => x.id === id);
+  if (!p) return;
+  const isResize = e.target.classList.contains("resize");
+  if (!isResize && (e.target.closest("button") || e.target.closest(".body"))) return;
+  e.preventDefault();
+  panelEl.setPointerCapture(e.pointerId);
+  panelEl.classList.add("dragging");
+  drag = {
+    p, panelEl, mode: isResize ? "resize" : "move",
+    startX: e.clientX, startY: e.clientY,
+    startGx: p.x, startGy: p.y, startGw: p.w, startGh: p.h,
+    units: gridUnitPx(),
+  };
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = Math.round((e.clientX - drag.startX) / drag.units.colW);
+  const dy = Math.round((e.clientY - drag.startY) / drag.units.rowH);
+  const p = drag.p;
+  if (drag.mode === "move") {
+    p.x = Math.max(0, Math.min(12 - p.w, drag.startGx + dx));
+    p.y = Math.max(0, drag.startGy + dy);
+  } else {
+    p.w = Math.max(1, Math.min(12 - p.x, drag.startGw + dx));
+    p.h = Math.max(1, drag.startGh + dy);
+  }
+  placePanel(drag.panelEl, p);
+  // Keep uPlot sized to the new dimensions live.
+  const cached = state.panels.get(p.id);
+  if (cached && cached.uplot) {
+    const body = drag.panelEl.querySelector(".body");
+    try { cached.uplot.setSize({ width: body.clientWidth, height: body.clientHeight }); } catch {}
+  }
+});
+
+window.addEventListener("pointerup", async (e) => {
+  if (!drag) return;
+  drag.panelEl.classList.remove("dragging");
+  try { drag.panelEl.releasePointerCapture(e.pointerId); } catch {}
+  await saveCurrent();
+  drag = null;
+});
+
+// =====================================================================
+// Explore view
+// =====================================================================
+let explorePlot = null;
+async function runExplore() {
+  const lang  = $("explore-lang").value;
+  const expr  = $("explore-expr").value.trim();
+  const range = +$("explore-range").value;
+  if (!expr) return;
+  const meta = $("explore-meta");
+  const out  = $("explore-out");
+  meta.textContent = "running…";
+  out.innerHTML = "";
+  if (explorePlot) { try { explorePlot.destroy(); } catch {} explorePlot = null; }
+  const now = Date.now(), start = now - range * 1000;
+  const step = Math.max(15, Math.floor(range / 240));
+  try {
+    const t0 = performance.now();
+    const r  = await runQuery(lang, expr, start, now, step);
+    const dt = (performance.now() - t0).toFixed(0);
+    if (r.kind === "logs") {
+      meta.textContent = `${r.entries.length} log lines · ${dt}ms`;
+      renderLogs(out, r, { options: { tail: "1000" } });
+    } else if (r.kind === "stat") {
+      meta.textContent = `stat · ${dt}ms`;
+      renderStat(out, r, { options: {} });
+    } else {
+      const total = r.series.reduce((n, s) => n + s.xs.length, 0);
+      meta.textContent = `${r.series.length} series · ${total} samples · ${dt}ms`;
+      const host = document.createElement("div");
+      host.style.height = "60vh"; host.style.background = "var(--panel)";
+      host.style.borderRadius = "6px"; host.style.padding = "8px";
+      out.appendChild(host);
+      renderTimeseries(host, r, { panelType: "timeseries", id: "explore", options: {} });
+    }
+  } catch (err) {
+    meta.textContent = "error";
+    out.innerHTML = `<div class="err" style="padding:8px;">${err.message}</div>`;
+  }
+}
+
+// =====================================================================
+// Live WS (used by synthetic stat sources + connection indicator)
+// =====================================================================
+state.liveMetrics = new Map();
+state.liveAlerts  = 0;
+function connectWs() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { $('dot').classList.add('live'); $('conn').textContent = 'live'; };
-  ws.onclose = () => {
-    $('dot').classList.remove('live'); $('conn').textContent = 'reconnecting…';
-    setTimeout(connect, 1500);
-  };
-  ws.onmessage = ev => {
+  state.ws = ws;
+  ws.onopen  = () => { $("dot").classList.add("live");  $("conn").textContent = "live"; };
+  ws.onclose = () => { $("dot").classList.remove("live"); $("conn").textContent = "reconnecting…";
+                       setTimeout(connectWs, 1500); };
+  ws.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'metric') pushMetric(msg.name, msg.ts, msg.value);
-    else if (msg.type === 'log') pushLog(msg);
-    else if (msg.type === 'alert') pushAlert(msg);
-    $('counts').textContent =
-      `${state.metrics.size} metrics · ${state.logs.length} log lines · ${state.alerts.length} alerts`;
+    if (msg.type === "metric") state.liveMetrics.set(msg.name, msg.value);
+    else if (msg.type === "alert") state.liveAlerts++;
   };
 }
 
-bootstrap().then(connect);
+// =====================================================================
+// Wiring
+// =====================================================================
+function router() {
+  const h = location.hash || "#/dashboards";
+  if (h.startsWith("#/explore")) showView("explore");
+  else showView("dashboards");
+}
+
+$("dash-picker").addEventListener("change", (e) => openDashboard(e.target.value));
+$("dash-new").addEventListener("click", async () => {
+  const title = prompt("Dashboard title", "New dashboard");
+  if (!title) return;
+  const d = await api("POST", "/api/dashboards", {
+    title, timeRangeSec: 3600, refreshSec: 15, panels: [],
+  });
+  await reloadList(d.id);
+});
+$("dash-rename").addEventListener("click", async () => {
+  if (!state.current) return;
+  const t = prompt("Dashboard title", state.current.title);
+  if (!t) return;
+  state.current.title = t;
+  await saveCurrent();
+});
+$("dash-delete").addEventListener("click", async () => {
+  if (!state.current) return;
+  if (!confirm(`Delete dashboard "${state.current.title}"?`)) return;
+  await api("DELETE", "/api/dashboards/" + encodeURIComponent(state.current.id));
+  state.current = null;
+  await reloadList();
+});
+$("time-range").addEventListener("change", async () => {
+  if (!state.current) return;
+  state.current.timeRangeSec = +$("time-range").value;
+  await refreshAll();
+  await saveCurrent();
+});
+$("refresh-int").addEventListener("change", async () => {
+  if (!state.current) return;
+  state.current.refreshSec = +$("refresh-int").value;
+  scheduleRefresh();
+  await saveCurrent();
+});
+$("refresh-now").addEventListener("click", refreshAll);
+$("edit-toggle").addEventListener("click", () => {
+  state.editMode = !state.editMode;
+  document.body.classList.toggle("edit-mode", state.editMode);
+  $("edit-toggle").textContent = state.editMode ? "✓ Done" : "✎ Edit";
+  $("add-panel").classList.toggle("hidden", !state.editMode);
+  $("save-dash").classList.toggle("hidden", !state.editMode);
+});
+$("add-panel").addEventListener("click", addPanel);
+$("save-dash").addEventListener("click", saveCurrent);
+
+$("editor-close").addEventListener("click", closeEditor);
+$("ed-apply").addEventListener("click", applyEditor);
+$("ed-delete").addEventListener("click", deleteEditorPanel);
+$("ed-preview-btn").addEventListener("click", previewEditor);
+
+$("explore-run").addEventListener("click", runExplore);
+$("explore-expr").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runExplore();
+});
+
+window.addEventListener("hashchange", router);
+router();
+
+(async () => {
+  try { await reloadList(); }
+  catch (e) { console.warn("dashboard load failed", e); }
+  connectWs();
+})();
 </script>
 </body>
 </html>

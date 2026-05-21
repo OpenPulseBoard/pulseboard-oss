@@ -668,6 +668,19 @@ let main argv =
   describeQueryBackend "PromQL API" promUpstream
   describeQueryBackend "LogQL  API" lokiUpstream
 
+  // -- Dashboards (PLAN.md Phase 4 step 2) --------------------------------
+  // File-backed per-tenant dashboard store. Auto-seeds an overview
+  // dashboard the first time each tenant is observed (single-tenant
+  // mode pins everything to `singleTenantId`).
+  let dashboardRepo : PulseBoard.Dashboards.IDashboardRepo =
+    PulseBoard.Dashboards.FileDashboardRepo(Path.Combine(dataDir, "dashboards")) :> _
+  if not multiTenant then
+    PulseBoard.Dashboards.seedIfEmpty dashboardRepo PulseBoard.Dashboards.singleTenantId
+  let dashboardsInner =
+    PulseBoard.Dashboards.webPart multiTenant dashboardRepo
+  printfn "  Dashboards: file-backed at %s"
+    (Path.Combine(dataDir, "dashboards"))
+
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 
   // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
@@ -790,7 +803,7 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
-    let combinedInner = choose [ queryApiInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -832,6 +845,7 @@ let main argv =
       GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/admin"      >=> Files.browseFile wwwroot "admin.html"
       GET >=> path "/admin.html" >=> Files.browseFile wwwroot "admin.html"
+      GET >=> path "/live"       >=> Files.browseFile wwwroot "live.html"
       GET >=> Files.browse wwwroot
       NOT_FOUND "Not found."
     ]
@@ -875,6 +889,7 @@ let main argv =
   printfn "  GET  /api/logs?tail=N"
   printfn "  GET  /api/prom/api/v1/{query,query_range,labels,label/<n>/values,series}"
   printfn "  GET  /api/loki/api/v1/{query_range,labels,label/<n>/values}"
+  printfn "  GET  /api/dashboards | POST /api/dashboards | GET/PUT/DELETE /api/dashboards/<id>"
   if multiTenant then
     printfn "  GET  /api/admin/audit?tail=N        (Admin scope)"
     printfn "  GET  /api/admin/tenants              (Admin scope)"

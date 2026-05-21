@@ -198,10 +198,30 @@ pipeline, the UI, billing.
    queries, json/logfmt extractors) requires a real Loki via
    `--loki-url=`. The native query DSL in [Query.fs](src/edge/Query.fs)
    stays the simple API surface for the dashboard SPA.
-2. **Dashboards.** Embed Grafana OSS first (SSO bridge, we provide
-   datasources). In-house dashboard v2 only after PMF.
-3. **Explore view** for ad-hoc query + log tail — extend the existing
-   dashboard SPA in [wwwroot/index.html](src/edge/wwwroot/index.html).
+2. **Dashboards.** ✅ DONE — in-house (no Grafana embed). Per-tenant
+   CRUD store in [Dashboards.fs](src/edge/Dashboards.fs) (file-backed
+   JSON at `<dataDir>/dashboards/<tenant>/<id>.json`, in-memory cache,
+   atomic-ish writes, auto-seeded `overview` default for empty tenants).
+   REST surface gated by the existing Query quota: `GET /api/dashboards`,
+   `POST /api/dashboards` (server assigns a fresh id), `GET/PUT/DELETE
+   /api/dashboards/<id>` (PUT preserves `createdAt`, stamps `updatedAt`).
+   Single-tenant mode uses synthetic `TenantId "__local__"`.
+   Frontend ([wwwroot/index.html](src/edge/wwwroot/index.html)) is a
+   zero-build vanilla-JS SPA with a tabbed shell (Dashboards / Explore),
+   12-column CSS grid, drag-to-move + drag-to-resize panels (edit mode),
+   right-side editor drawer (title / panel type / query lang / expression
+   / w·h / options / live preview), time-range + auto-refresh pickers,
+   and uPlot ([wwwroot/uPlot.iife.min.js](src/edge/wwwroot/uPlot.iife.min.js),
+   ~50 KB MIT, vendored) for time-series charts. Panel types:
+   `timeseries`, `stat`, `logs`, `table`; query languages: `promql`
+   (proxied to embedded `/api/prom/api/v1/query_range`), `logql`
+   (`/api/loki/api/v1/query_range`), `native` (`/api/metrics/<n>`).
+   The legacy real-time view is preserved at [`/live`](src/edge/wwwroot/live.html).
+3. **Explore view** ✅ DONE alongside #2 — same SPA, second tab.
+   Free-form query input with PromQL / LogQL / native picker, range
+   selector (5m / 15m / 1h / 6h), Cmd/Ctrl-Enter to run, results render
+   as uPlot chart or log list depending on result shape. Live-tail
+   beyond static range still uses the legacy [`/live`](src/edge/wwwroot/live.html) WS view.
 4. **Service map / RUM stubs** once traces land.
 
 ---

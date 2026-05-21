@@ -37,12 +37,22 @@
     <Compile Include="Rollups.fs" />
     <Compile Include="Query.fs" />
     <Compile Include="QueryApi.fs" />
+    <Compile Include="Dashboards.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/admin.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/live.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/uPlot.iife.min.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/uPlot.min.css">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
