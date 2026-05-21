@@ -447,8 +447,207 @@ retry/dedup.
 
 1. **HA topology.** Edge tier behind LB; storage tier replicated (Mimir
    RF=3); Postgres HA (Patroni or RDS Multi-AZ); regional failover runbook.
+
+   📐 **DESIGNED (deployment architecture; no edge code changes).** The
+   target topology is a single active region with a warm standby in a
+   second region, all on Kubernetes. The edge process (this repo) is a
+   stateless 12-factor service and scales horizontally; durable state
+   lives outside it.
+
+   **Layers, top to bottom:**
+
+   - **Global edge (anycast / GeoDNS).** Cloudflare (or Route 53 +
+     CloudFront) terminates TLS for `*.pulseboard.app` and forwards to
+     the active-region public NLB. Health checks at
+     `GET /api/healthz` (to be added — returns `200 {ok:true}` once
+     storage adapters report ready) drive automatic failover to the
+     standby region's NLB. TTL ≤ 30 s.
+   - **Regional load balancer.** AWS NLB (or GCP TCP LB) in front of a
+     Kubernetes Service of type `LoadBalancer`. Two listeners: 443 for
+     ingest + query + admin, 9090 for the Prometheus remote_write
+     fast path. Cross-zone load balancing on. Connection draining
+     30 s. PROXY protocol v2 enabled so the edge sees real client IPs
+     for rate-limit accounting.
+   - **Ingress / TLS termination.** `ingress-nginx` (or Envoy via
+     Contour) deployed as a DaemonSet across ≥ 3 AZs. Terminates
+     external TLS, re-originates internal mTLS to the edge (see #2).
+     Pod anti-affinity by `topology.kubernetes.io/zone` so a single
+     AZ outage cannot drain the ingress pool.
+   - **Edge tier (this F# service).** Deployment with
+     `replicas >= 3` (HPA target: 60 % CPU, min 3, max 30),
+     `topologySpreadConstraints` on `zone`, `PodDisruptionBudget`
+     `minAvailable: 2`. Probes:
+     - `readinessProbe` → `GET /api/readyz` — fails until tenant
+       store, metric backend, and queue all answer; gates LB traffic.
+     - `livenessProbe` → `GET /api/livez` — process-only, never
+       depends on downstream stores (avoids cascading restarts).
+     - `startupProbe` → 30-attempt grace for cold caches and Self
+       bootstrap.
+     The pod is single-container, runs as non-root, read-only root FS,
+     `seccompProfile: RuntimeDefault`. The only writable volume is
+     `/var/lib/pulseboard` (ephemeral `emptyDir` in stateless mode;
+     EBS PVC only when local file-backed stores are deliberately
+     enabled for dev / single-node deploys).
+   - **Control plane store (Postgres).** Tenants, API keys (already
+     Argon2id-hashed — Phase 6 #3), audit log, dashboards, alert
+     rules, routing config, scrape targets, listener configs. Deployed
+     as **RDS Aurora PostgreSQL Multi-AZ** in prod (writer + ≥ 2
+     readers across AZs, automated failover ≤ 35 s). On-prem
+     equivalent: **Patroni 3.x** with 3 PG nodes + 3 etcd nodes, sync
+     replication to one replica (`synchronous_commit = on`,
+     `synchronous_standby_names = 'ANY 1 (*)'`). PITR with 14-day
+     window; nightly logical dump shipped to object store for
+     bootstrap restore. Connection pool: **PgBouncer** (transaction
+     mode) sidecar per edge pod, 25 conns/pod, hard cap server-side
+     at `pool_max * replicas + 50` headroom.
+   - **Metrics backend.** **Grafana Mimir** in microservices mode,
+     **replication factor 3** across AZs (ingesters, store-gateways,
+     compactors). Backed by S3 (or GCS) with SSE-KMS. Ingest path:
+     edge → Mimir distributor over remote_write (already supported);
+     query path: edge → Mimir query-frontend with split-by-interval
+     + result caching (memcached). Tenant header
+     `X-Scope-OrgID: <tenantId>` is set by the edge.
+   - **Logs backend.** **Grafana Loki** in microservices mode, RF=3,
+     boltdb-shipper + TSDB shipper on S3. Edge speaks the existing
+     Loki push API on egress.
+   - **Traces backend.** **Grafana Tempo**, RF=2 (traces tolerate
+     lower RF), object-store backed. Edge forwards via OTLP/HTTP.
+   - **Notify queue.** Redis (ElastiCache Multi-AZ) cluster mode
+     enabled, RF=2; persistence AOF every-sec. The edge's existing
+     file-backed `NotifyQueue` is swapped for a Redis-backed adapter
+     in cloud deploys (interface already abstract, implementation TBD).
+     Dead-letter list per receiver, alarm at depth > 1 000.
+   - **Object store.** S3 (or GCS) — versioning on, lifecycle to
+     Glacier after 90 days, SSE-KMS with a per-environment CMK.
+     Holds Mimir/Loki/Tempo blocks, Postgres backups, KEK escrow
+     (sealed copy of the cluster KEK for DR).
+
+   **Regional failover.** Active/standby, **RPO ≤ 60 s, RTO ≤ 15 min.**
+   Postgres uses cross-region read replicas (Aurora Global Database, or
+   logical streaming for self-hosted Patroni). Mimir/Loki/Tempo use
+   S3 Cross-Region Replication on the bucket. Standby region runs the
+   edge tier at `replicas: 1` (warm), scaled out by the failover
+   runbook. Promotion sequence is documented in
+   [`infra/runbooks/regional-failover.md`](infra/runbooks/regional-failover.md).
+   GeoDNS is the user-visible cutover; storage promotion happens
+   first.
+
+   **Single-AZ resilience.** Any one AZ may fail without user impact:
+   - ingress, edge, Mimir/Loki/Tempo ingesters are spread across ≥ 3
+     AZs;
+   - Postgres failover is automatic;
+   - Redis fails over via Sentinel/cluster mode;
+   - object store is regionally durable by definition.
+
+   **Capacity tiers.**
+
+   | Tier   | Edge replicas | Mimir ing. | Loki ing. | Postgres        |
+   |--------|---------------|------------|-----------|-----------------|
+   | dev    | 1             | 1×RF1      | 1×RF1     | single t4g.medium |
+   | stage  | 3             | 3×RF3      | 3×RF3     | Aurora 2 inst.  |
+   | prod   | 6+ (HPA)      | 9×RF3      | 9×RF3     | Aurora 3 inst.  |
+
+   **Edge-side prerequisites still to ship (small, tracked separately):**
+   - `GET /api/healthz` / `/api/readyz` / `/api/livez` endpoints.
+   - Redis-backed `INotifyQueue` adapter (file-backed remains for OSS).
+   - Postgres connection-string env override is already supported via
+     `--postgres=` (Phase 5).
+
 2. **TLS everywhere.** Terminate at the LB; mTLS between edge and
    storage; cert-manager rotation.
+
+   📐 **DESIGNED (deployment architecture; no edge code changes
+   required for the OSS edge — TLS is terminated at ingress in cloud
+   deploys).**
+
+   **Trust zones.**
+
+   - **Public zone.** `*.pulseboard.app`, `*.ingest.pulseboard.app`,
+     `*.api.pulseboard.app`. Certs issued by **Let's Encrypt**
+     (ACME DNS-01 via Route 53) using **cert-manager** with a
+     `ClusterIssuer` per environment. Wildcard certs; 90-day lifetime,
+     auto-renewed at T-30 days. TLS 1.3 only; TLS 1.2 allowed for
+     ingest endpoints (some Prom/OTel collectors lag). HSTS
+     `max-age=31536000; includeSubDomains; preload`. OCSP stapling on.
+   - **Cluster-internal zone.** `*.svc.cluster.local`. A **private
+     PKI** rooted at an offline (HSM-held) root CA issues a per-cluster
+     intermediate that lives in cert-manager as a `CA` `ClusterIssuer`.
+     Every pod-to-pod hop runs **mTLS** (see below). Internal cert
+     lifetime 30 days, auto-renewed at T-7. SPIFFE-style identities
+     `spiffe://pulseboard.internal/ns/<ns>/sa/<serviceAccount>`.
+   - **Out-of-cluster managed services** (RDS, ElastiCache, S3). TLS
+     to the managed endpoint with the cloud-provided CA bundle pinned
+     in a `ConfigMap` and rotated via Renovate PRs.
+
+   **mTLS topology.**
+
+   ```
+   client ──TLS(public)──► NLB ──TLS(public)──► ingress-nginx
+       ingress-nginx ──mTLS(internal CA)──► edge
+       edge ──mTLS(internal CA)──► PgBouncer ──TLS──► Postgres
+       edge ──mTLS(internal CA)──► Mimir distributor
+       edge ──mTLS(internal CA)──► Loki distributor
+       edge ──mTLS(internal CA)──► Tempo distributor
+       edge ──TLS+AUTH──► Redis (ElastiCache encryption in transit)
+   ```
+
+   The edge does not currently originate mTLS in code; in the target
+   deploy this is handled transparently by a **per-pod sidecar
+   (Linkerd or Istio in `STRICT` mTLS mode)**, so the edge keeps
+   talking plain HTTP to `localhost` and the mesh upgrades the
+   connection. This keeps the OSS edge mesh-agnostic and lets the
+   self-hosted footprint stay sidecar-free.
+
+   **Certificate lifecycle (cert-manager).**
+
+   - `ClusterIssuer/letsencrypt-prod` → public certs, DNS-01.
+   - `ClusterIssuer/pulseboard-internal-ca` → mTLS certs.
+   - One `Certificate` per public hostname (renewed centrally at the
+     ingress) and one per workload `ServiceAccount` for internal
+     identities (renewed by cert-manager-csi-driver, mounted as a
+     short-lived projected volume — no secrets-in-etcd).
+   - Renewal alerts fire 14 days and 3 days before expiry via the
+     existing alert pipeline.
+   - **Annual root rotation drill** documented in
+     [`infra/runbooks/tls-rotation.md`](infra/runbooks/tls-rotation.md);
+     intermediate is rotated every 18 months with a 6-month overlap.
+
+   **Cipher / protocol policy (Mozilla "intermediate", May 2026):**
+
+   - Protocols: TLS 1.3 + TLS 1.2.
+   - TLS 1.3 ciphers: `TLS_AES_128_GCM_SHA256`,
+     `TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`.
+   - TLS 1.2 ciphers: ECDHE+AES-GCM and ECDHE+CHACHA20 only.
+   - No RSA key exchange, no CBC, no SHA-1.
+   - X25519 + secp384r1 curves.
+
+   **BYO certs (Enterprise plan, Phase 7).** A tenant may bring a
+   public-CA cert for a custom CNAME (e.g.
+   `metrics.acme.com → acme.ingest.pulseboard.app`); cert-manager
+   handles issuance via DNS-01 against the customer's delegated zone,
+   plus a per-tenant `Ingress` with SNI routing. The admin REST surface
+   (`POST /api/admin/tenants/<id>/domains`) is not yet implemented —
+   tracked separately under Phase 7 onboarding.
+
+   **OSS / self-hosted story.** For single-node OSS deploys, the edge
+   speaks plain HTTP on `:5000` by default and is expected to live
+   behind the user's own reverse proxy (Caddy, Traefik, nginx) which
+   handles TLS. We ship a sample Caddyfile and a Compose stack in
+   [`infra/docker/`](infra/docker/) (to be added) so a `caddy run`
+   gets HTTPS via Let's Encrypt with one line. The edge itself does
+   not need to grow a TLS listener in code — keeping that concern at
+   the proxy layer matches the deployment guidance for both cloud and
+   self-hosted users.
+
+   **Edge-side prerequisites still to ship (small, tracked separately):**
+   - Honor `X-Forwarded-For` / PROXY protocol for client IP in
+     rate-limit accounting (currently uses the socket peer).
+   - Surface `Strict-Transport-Security` and the rest of the standard
+     security header set on every response (defense-in-depth even
+     though ingress sets them too).
+   - Document the cert-manager `ClusterIssuer` manifests in
+     `infra/helm/` once Helm charts land.
+
 3. **Secrets.** Vault or AWS Secrets Manager for tenant API keys
    (Argon2id-hashed at rest), receiver credentials, signing keys.
 
