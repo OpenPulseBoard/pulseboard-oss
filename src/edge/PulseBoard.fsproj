@@ -13,6 +13,7 @@
     <Compile Include="Segments.fs" />
     <Compile Include="Tenancy.fs" />
     <Compile Include="Audit.fs" />
+    <Compile Include="Quotas.fs" />
     <Compile Include="Rbac.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Oidc.fs" />

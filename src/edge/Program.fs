@@ -65,6 +65,35 @@ let main argv =
   let auditLog : PulseBoard.Audit.IAuditLog =
     PulseBoard.Audit.InMemoryAuditLog(1024) :> _
 
+  // -- Per-tenant quotas (token bucket; PLAN.md Phase 1 step 5) -------------
+  // Defaults are generous enough that the demo and smoke tests never trip
+  // them; set capacity to 0 (via --quota-*-burst=0) to disable a kind.
+  let parseFloat (envName : string) (flag : string) (fallback : float) =
+    let raw =
+      match argv |> Array.tryFind (fun a -> a.StartsWith flag) with
+      | Some s -> Some (s.Substring flag.Length)
+      | None ->
+        let v = Environment.GetEnvironmentVariable envName
+        if String.IsNullOrWhiteSpace v then None else Some v
+    match raw with
+    | None -> fallback
+    | Some s ->
+      match Double.TryParse(s, Globalization.NumberStyles.Float,
+                            Globalization.CultureInfo.InvariantCulture) with
+      | true, n when n >= 0.0 -> n
+      | _ ->
+        eprintfn "  [ERROR] %s expects a non-negative number, got %s" flag s
+        exit 2
+  let ingestRps   = parseFloat "PULSE_QUOTA_INGEST_RPS"   "--quota-ingest-rps="   500.0
+  let ingestBurst = parseFloat "PULSE_QUOTA_INGEST_BURST" "--quota-ingest-burst=" 1000.0
+  let queryRps    = parseFloat "PULSE_QUOTA_QUERY_RPS"    "--quota-query-rps="    100.0
+  let queryBurst  = parseFloat "PULSE_QUOTA_QUERY_BURST"  "--quota-query-burst="  200.0
+  let quotaStore : PulseBoard.Quotas.IQuotaStore =
+    PulseBoard.Quotas.DefaultQuotaStore(
+      ingest = { capacity = ingestBurst; refillPerSec = ingestRps },
+      query  = { capacity = queryBurst;  refillPerSec = queryRps  }) :> _
+  let limiter = PulseBoard.Quotas.Limiter(quotaStore)
+
   // -- OIDC browser SSO ------------------------------------------------------
   // Opt-in: enabled when --oidc-issuer + --oidc-client-id + --oidc-redirect-uri
   // are all present. Requires --multi-tenant (the SSO user maps to a tenant
@@ -266,7 +295,9 @@ let main argv =
          resolveSession (
            PulseBoard.Auth.resolveApiKey tenantStore
              (PulseBoard.Rbac.requireScope auditLog
-                "ingest" PulseBoard.Tenancy.Scope.Ingest ingestInner))
+                "ingest" PulseBoard.Tenancy.Scope.Ingest
+                (PulseBoard.Rbac.requireQuota auditLog limiter
+                   PulseBoard.Quotas.Ingest 1.0 ingestInner)))
        else
          PulseBoard.Auth.protect tokens ingestInner)
 
@@ -287,7 +318,9 @@ let main argv =
         resolveSession (
           PulseBoard.Auth.resolveApiKey tenantStore
             (PulseBoard.Rbac.requireScope auditLog
-               "query" PulseBoard.Tenancy.Scope.Query queryInner))
+               "query" PulseBoard.Tenancy.Scope.Query
+               (PulseBoard.Rbac.requireQuota auditLog limiter
+                  PulseBoard.Quotas.Query 1.0 queryInner)))
     else
       queryInner
 
@@ -312,6 +345,8 @@ let main argv =
   printfn "PulseBoard listening on http://127.0.0.1:%d" port
   if multiTenant then
     printfn "  Mode: multi-tenant. /ingest/* requires scope=ingest, /api/* requires scope=query, /api/admin/* requires scope=admin."
+    printfn "  Quotas: ingest=%g rps (burst %g), query=%g rps (burst %g) per tenant."
+      ingestRps ingestBurst queryRps queryBurst
   elif Map.isEmpty tokens then
     printfn "  Mode: single-tenant. [WARN] /ingest/* is OPEN. Provide --tokens-file=<path> or PULSE_TOKENS to require auth, or --multi-tenant to switch to scoped API keys."
   else

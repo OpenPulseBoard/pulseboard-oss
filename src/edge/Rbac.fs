@@ -65,3 +65,39 @@ let requireScope (log : IAuditLog) (action : string) (need : Scope)
       emit log action Deny ctx (Some "missing scope")
       return! forbidden "insufficient scope" ctx
   }
+
+/// WebPart guard: charge `cost` tokens against the tenant's bucket for
+/// `kind`. On allow, falls through to `inner`. On throttle, returns 429
+/// with a `Retry-After` header (seconds, RFC 7231) and audits one
+/// `quota.<kind>` deny event with the projected wait in details. Assumes
+/// a TenantCtx is already attached (i.e. composed after `requireScope`).
+let requireQuota (log : IAuditLog)
+                 (limiter : PulseBoard.Quotas.Limiter)
+                 (kind : PulseBoard.Quotas.Kind)
+                 (cost : float)
+                 (inner : WebPart) : WebPart =
+  let action = "quota." + PulseBoard.Quotas.kindStr kind
+  fun ctx -> async {
+    match tryGetTenant ctx with
+    | None ->
+      // No tenant attached — the upstream `requireScope` should have
+      // already 403'd. Be safe and pass through; the gate after us will
+      // catch it.
+      return! inner ctx
+    | Some t ->
+      match limiter.TryAcquire(t.tenant.id, kind, cost) with
+      | PulseBoard.Quotas.AcquireResult.Ok ->
+        return! inner ctx
+      | PulseBoard.Quotas.AcquireResult.Throttled retryMs ->
+        let retrySec = max 1 (int (ceil (float retryMs / 1000.0)))
+        emit log action Deny ctx
+          (Some (sprintf "retryAfterMs=%d cost=%g" retryMs cost))
+        let body =
+          sprintf
+            """{"error":"rate limit exceeded","kind":"%s","retryAfterMs":%d}"""
+            (PulseBoard.Quotas.kindStr kind) retryMs
+        return!
+          (Suave.RequestErrors.TOO_MANY_REQUESTS body
+           >=> Writers.setMimeType "application/json"
+           >=> Writers.setHeader "Retry-After" (string retrySec)) ctx
+  }
