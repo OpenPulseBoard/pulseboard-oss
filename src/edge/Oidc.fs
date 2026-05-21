@@ -30,10 +30,16 @@ open PulseBoard.Tenancy
 //   /auth/logout   -> clear cookie, optionally redirect
 //   /auth/me       -> return current session as JSON, or 401
 //
-// Tenant mapping: every successful SSO login is assigned the role
-// `Admin` (with all scopes) in the tenant configured via `--oidc-tenant=<slug>`.
-// That tenant is auto-created on first hit so a fresh deployment can SSO in
-// without a pre-seeded API key. Per-user role mapping is a Phase 2 concern.
+// Tenant mapping: every successful SSO login lands in the tenant configured
+// via `--oidc-tenant=<slug>` (auto-created on first hit so a fresh deployment
+// can SSO in without seeding). Role assignment:
+//   1. If the (issuer, sub) is already a known user — reuse the stored
+//      role (sticky; admin REST is the only way to change it).
+//   2. Otherwise, if the user's email matches a `roleOverrides` entry —
+//      use that role and persist a new user record.
+//   3. Otherwise, fall back to `defaultRole`. If `defaultRole` is `None`,
+//      reject the login (403).
+// Scopes are derived from the resolved role via `Tenancy.scopesForRole`.
 
 [<NoComparison; NoEquality>]
 type Config =
@@ -49,7 +55,15 @@ type Config =
     /// Session lifetime issued after a successful login.
     sessionTtl   : TimeSpan
     /// HS256 signing key for our own session JWTs.
-    sessionKey   : byte[] }
+    sessionKey   : byte[]
+    /// Role assigned to a brand-new user whose email doesn't match any
+    /// override. `None` means new users are rejected (403) — useful for
+    /// closed-membership tenants where users must be pre-provisioned.
+    defaultRole  : Role option
+    /// Case-insensitive email → role overrides. Applied only on first
+    /// login; subsequent role changes live in the store (sticky) and must
+    /// be managed via the admin REST surface.
+    roleOverrides : Map<string, Role> }
 
 let scopesDefault = "openid email profile"
 
@@ -310,23 +324,44 @@ let private callbackHandler (cfg : Config)
                 // Map IdP user to tenant. Auto-create tenant on first use
                 // so a fresh deployment can SSO in without seeding.
                 let tenant = store.CreateTenant cfg.tenantSlug
-                let allScopes =
-                  Scope.Ingest ||| Scope.Query ||| Scope.Admin
-                let now = DateTimeOffset.UtcNow
-                let claims : Session.SessionClaims =
-                  { subject  = sub
-                    email    = email
-                    tenantId = tenant.id
-                    role     = Admin
-                    scopes   = allScopes
-                    issuedAt = now
-                    expires  = now + cfg.sessionTtl
-                    issuer   = oidc.Issuer }
-                let token = Session.mint cfg.sessionKey claims
-                let setC =
-                  Session.setSessionCookie cfg.cookieSecure claims.expires token
-                return!
-                  (setC >=> FOUND pending.returnTo) ctx
+                let existing = store.TryGetUser (oidc.Issuer, sub)
+                let resolvedRole =
+                  match existing with
+                  | Some u -> Some u.role          // sticky
+                  | None ->
+                    let overrideRole =
+                      email
+                      |> Option.map (fun e -> e.Trim().ToLowerInvariant())
+                      |> Option.bind (fun e -> Map.tryFind e cfg.roleOverrides)
+                    match overrideRole with
+                    | Some r -> Some r
+                    | None   -> cfg.defaultRole
+                match resolvedRole with
+                | None ->
+                  return!
+                    htmlError 403
+                      (sprintf "user %s is not provisioned for tenant '%s'"
+                         (email |> Option.defaultValue sub) cfg.tenantSlug)
+                      ctx
+                | Some role ->
+                  let user =
+                    store.UpsertUser(tenant.id, oidc.Issuer, sub, email, role)
+                  let scopes = scopesForRole user.role
+                  let now = DateTimeOffset.UtcNow
+                  let claims : Session.SessionClaims =
+                    { subject  = sub
+                      email    = email
+                      tenantId = tenant.id
+                      role     = user.role
+                      scopes   = scopes
+                      issuedAt = now
+                      expires  = now + cfg.sessionTtl
+                      issuer   = oidc.Issuer }
+                  let token = Session.mint cfg.sessionKey claims
+                  let setC =
+                    Session.setSessionCookie cfg.cookieSecure claims.expires token
+                  return!
+                    (setC >=> FOUND pending.returnTo) ctx
           with ex ->
             return! htmlError 500 (sprintf "callback failed: %s" ex.Message) ctx
   }

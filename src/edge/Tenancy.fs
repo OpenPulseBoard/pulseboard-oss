@@ -10,6 +10,7 @@ open System.Security.Cryptography
 
 type TenantId = TenantId of string
 type ApiKeyId = ApiKeyId of string
+type UserId   = UserId of string
 
 type Role =
   | Viewer
@@ -26,6 +27,15 @@ type Scope =
   | Ingest  = 1
   | Query   = 2
   | Admin   = 4
+
+/// Canonical role → scope mapping. Single source of truth used by both the
+/// Admin REST default-scope picker and the OIDC session minter so the two
+/// surfaces can't drift.
+let scopesForRole = function
+  | Viewer  -> Scope.Query
+  | Editor  -> Scope.Ingest ||| Scope.Query
+  | Admin   -> Scope.Ingest ||| Scope.Query ||| Scope.Admin
+  | Billing -> Scope.None
 
 [<NoComparison; NoEquality>]
 type Tenant =
@@ -54,6 +64,21 @@ type TenantCtx =
     role     : Role
     scopes   : Scope }
 
+/// Persistent record for an SSO-authenticated user. Identity is the
+/// (issuer, subject) tuple from the upstream id_token — stable per IdP and
+/// independent of email rename. Email is captured for display/override
+/// matching only.
+[<NoComparison; NoEquality>]
+type UserRecord =
+  { id          : UserId
+    tenantId    : TenantId
+    issuer      : string
+    subject     : string
+    email       : string option
+    role        : Role
+    createdAt   : DateTimeOffset
+    lastLoginAt : DateTimeOffset option ref }
+
 [<NoComparison; NoEquality>]
 type IssuedKey =
   { record    : ApiKeyRecord
@@ -76,6 +101,7 @@ let private toBase64Url (b : byte[]) =
 
 let private newTenantId () = TenantId (toBase64Url (genBytes 9))
 let private newApiKeyId () = ApiKeyId (toBase64Url (genBytes 9))
+let private newUserId ()   = UserId   (toBase64Url (genBytes 9))
 
 let private defaultIterations = 100_000
 
@@ -116,11 +142,28 @@ type ITenantStore =
   abstract TryGetApiKey       : ApiKeyId -> ApiKeyRecord option
   abstract ApiKeysFor         : TenantId -> ApiKeyRecord[]
   abstract MarkUsed           : ApiKeyId -> unit
+  // -- SSO users ------------------------------------------------------------
+  /// Lookup an existing user by (issuer, subject). Returns `None` for a
+  /// first-time login.
+  abstract TryGetUser         : issuer : string * subject : string -> UserRecord option
+  abstract TryGetUserById     : UserId -> UserRecord option
+  /// Insert-or-update on first login. Email is refreshed each time; role
+  /// is sticky (use `UpdateUserRole` to change it). Updates `lastLoginAt`.
+  abstract UpsertUser         :
+    tenantId : TenantId * issuer : string * subject : string *
+    email : string option * roleIfNew : Role -> UserRecord
+  abstract UpdateUserRole     : UserId * Role -> UserRecord option
+  abstract UsersFor           : TenantId -> UserRecord[]
 
 type InMemoryTenantStore () =
   let tenants = ConcurrentDictionary<TenantId, Tenant>()
   let bySlug  = ConcurrentDictionary<string, TenantId>(StringComparer.OrdinalIgnoreCase)
   let keys    = ConcurrentDictionary<ApiKeyId, ApiKeyRecord>()
+  let users   = ConcurrentDictionary<UserId, UserRecord>()
+  // Secondary index: "<issuer>|<subject>" -> UserId. Case-sensitive (both
+  // halves are opaque IdP-issued strings).
+  let userBySub = ConcurrentDictionary<string, UserId>(StringComparer.Ordinal)
+  let subKey (issuer : string) (subject : string) = issuer + "|" + subject
 
   interface ITenantStore with
     member _.CreateTenant slug =
@@ -192,6 +235,59 @@ type InMemoryTenantStore () =
       match keys.TryGetValue id with
       | true, r -> r.lastUsedAt := Some DateTimeOffset.UtcNow
       | _ -> ()
+
+    member _.TryGetUser (issuer, subject) =
+      match userBySub.TryGetValue (subKey issuer subject) with
+      | true, uid ->
+        match users.TryGetValue uid with
+        | true, u -> Some u
+        | _ -> None
+      | _ -> None
+
+    member _.TryGetUserById id =
+      match users.TryGetValue id with
+      | true, u -> Some u
+      | _ -> None
+
+    member this.UpsertUser (tenantId, issuer, subject, email, roleIfNew) =
+      if not (tenants.ContainsKey tenantId) then
+        invalidArg "tenantId" "tenant not found"
+      let now = DateTimeOffset.UtcNow
+      match (this :> ITenantStore).TryGetUser (issuer, subject) with
+      | Some existing ->
+        // Refresh email opportunistically; role is sticky.
+        let updated = { existing with email = email; tenantId = tenantId }
+        updated.lastLoginAt := Some now
+        users.[existing.id] <- updated
+        updated
+      | None ->
+        let id = newUserId ()
+        let rec' =
+          { id          = id
+            tenantId    = tenantId
+            issuer      = issuer
+            subject     = subject
+            email       = email
+            role        = roleIfNew
+            createdAt   = now
+            lastLoginAt = ref (Some now) }
+        users.[id] <- rec'
+        userBySub.[subKey issuer subject] <- id
+        rec'
+
+    member _.UpdateUserRole (id, role) =
+      match users.TryGetValue id with
+      | true, u ->
+        let updated = { u with role = role }
+        users.[id] <- updated
+        Some updated
+      | _ -> None
+
+    member _.UsersFor tenantId =
+      users.Values
+      |> Seq.filter (fun u -> u.tenantId = tenantId)
+      |> Seq.sortBy (fun u -> u.createdAt)
+      |> Seq.toArray
 
 /// Verify a presented `pk_<id>.<secret>` against `store`. Performs a
 /// fixed-cost PBKDF2 on an unknown key id to avoid trivially revealing

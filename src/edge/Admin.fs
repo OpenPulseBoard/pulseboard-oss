@@ -122,6 +122,24 @@ let private issuedKeyJson (issued : IssuedKey) =
     (r.createdAt.ToString("o"))
     (JsonSerializer.Serialize issued.plaintext)
 
+let private userJson (u : UserRecord) =
+  let (UserId uid)   = u.id
+  let (TenantId tid) = u.tenantId
+  let lastLogin =
+    match !u.lastLoginAt with
+    | Some ts -> sprintf "\"%s\"" (ts.ToString("o"))
+    | None    -> "null"
+  sprintf
+    """{"id":%s,"tenantId":%s,"issuer":%s,"subject":%s,"email":%s,"role":"%s","createdAt":"%s","lastLoginAt":%s}"""
+    (JsonSerializer.Serialize uid)
+    (JsonSerializer.Serialize tid)
+    (JsonSerializer.Serialize u.issuer)
+    (JsonSerializer.Serialize u.subject)
+    (match u.email with Some e -> JsonSerializer.Serialize e | None -> "null")
+    (roleStr u.role)
+    (u.createdAt.ToString("o"))
+    lastLogin
+
 // -- audit helpers ----------------------------------------------------------
 
 let private auditEvent (log : IAuditLog) (ctx : HttpContext)
@@ -273,6 +291,60 @@ let private issueApiKey (store : ITenantStore) (log : IAuditLog)
               return! errJson 400 ex.Message ctx
   }
 
+let private listUsers (store : ITenantStore) (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None ->
+      return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      let body =
+        store.UsersFor (TenantId tenantId)
+        |> Array.map userJson
+        |> String.concat ","
+        |> sprintf "[%s]"
+      return! jsonResp 200 body ctx
+  }
+
+let private updateUserRole (store : ITenantStore) (log : IAuditLog)
+                           (userId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetUserById (UserId userId) with
+    | None ->
+      auditEvent log ctx "admin.user.update" Deny
+        (Some (sprintf "userId=%s not found" userId))
+      return! errJson 404 "user not found" ctx
+    | Some _ ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None ->
+        auditEvent log ctx "admin.user.update" Deny (Some "invalid json")
+        return! errJson 400 "invalid JSON body" ctx
+      | Some doc ->
+        use _ = doc
+        match tryGetString doc.RootElement "role" with
+        | None ->
+          auditEvent log ctx "admin.user.update" Deny (Some "missing role")
+          return! errJson 400 "field 'role' is required" ctx
+        | Some roleRaw ->
+          match parseRole roleRaw with
+          | None ->
+            auditEvent log ctx "admin.user.update" Deny
+              (Some (sprintf "bad role=%s" roleRaw))
+            return! errJson 400
+              "field 'role' must be one of: viewer|editor|admin|billing" ctx
+          | Some role ->
+            match store.UpdateUserRole(UserId userId, role) with
+            | None ->
+              auditEvent log ctx "admin.user.update" Error
+                (Some "update returned None")
+              return! errJson 500 "failed to update user" ctx
+            | Some updated ->
+              let (UserId uid) = updated.id
+              auditEvent log ctx "admin.user.update" Allow
+                (Some (sprintf "userId=%s role=%s" uid (roleStr role)))
+              return! jsonResp 200 (userJson updated) ctx
+  }
+
 let private auditTail (log : IAuditLog) : WebPart =
   fun ctx -> async {
     let tail =
@@ -299,6 +371,8 @@ let webPart (store : ITenantStore) (log : IAuditLog) : WebPart =
     POST >=> path "/api/admin/tenants"      >=> createTenant store log
     GET  >=> pathScan "/api/admin/tenants/%s/api-keys" (listApiKeys store)
     POST >=> pathScan "/api/admin/tenants/%s/api-keys" (issueApiKey store log)
+    GET  >=> pathScan "/api/admin/tenants/%s/users"    (listUsers store)
+    PATCH >=> pathScan "/api/admin/users/%s"           (updateUserRole store log)
     NOT_FOUND """{"error":"unknown admin endpoint"}"""
       >=> Writers.setMimeType "application/json"
   ]

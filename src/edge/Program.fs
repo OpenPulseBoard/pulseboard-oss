@@ -87,6 +87,38 @@ let main argv =
   let oidcScopes   =
     envOr "PULSE_OIDC_SCOPES" (argValue "--oidc-scopes=")
     |> Option.defaultValue PulseBoard.Oidc.scopesDefault
+  let parseRoleFlag (s : string) =
+    match s.Trim().ToLowerInvariant() with
+    | "viewer"  -> Some PulseBoard.Tenancy.Viewer
+    | "editor"  -> Some PulseBoard.Tenancy.Editor
+    | "admin"   -> Some PulseBoard.Tenancy.Admin
+    | "billing" -> Some PulseBoard.Tenancy.Billing
+    | "none" | "deny" | "" -> None
+    | other ->
+      eprintfn "  [ERROR] unknown role '%s' (allowed: viewer|editor|admin|billing|none)" other
+      exit 2
+  let oidcDefaultRole =
+    match envOr "PULSE_OIDC_DEFAULT_ROLE" (argValue "--oidc-default-role=") with
+    | Some s -> parseRoleFlag s
+    | None   -> None     // deny new users by default — fail-closed
+  let parseEmails (raw : string option) =
+    match raw with
+    | None -> []
+    | Some s ->
+      s.Split([| ','; ' '; '\n'; '\r'; '\t' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.map (fun e -> e.Trim().ToLowerInvariant())
+      |> Array.filter (fun e -> e.Length > 0)
+      |> Array.toList
+  let oidcRoleMap =
+    [ PulseBoard.Tenancy.Admin,   envOr "PULSE_OIDC_ADMINS"   (argValue "--oidc-admins=")
+      PulseBoard.Tenancy.Editor,  envOr "PULSE_OIDC_EDITORS"  (argValue "--oidc-editors=")
+      PulseBoard.Tenancy.Viewer,  envOr "PULSE_OIDC_VIEWERS"  (argValue "--oidc-viewers=")
+      PulseBoard.Tenancy.Billing, envOr "PULSE_OIDC_BILLING"  (argValue "--oidc-billing=") ]
+    |> List.collect (fun (role, raw) ->
+         parseEmails raw |> List.map (fun e -> e, role))
+    // Later entries win on duplicate emails; reverse so first-listed flag wins.
+    |> List.rev
+    |> Map.ofList
   let sessionKey =
     match envOr "PULSE_SESSION_SECRET" (argValue "--session-secret=") with
     | Some s ->
@@ -100,15 +132,17 @@ let main argv =
     match oidcIssuer, oidcClientId, oidcRedirect, oidcTenant with
     | Some iss, Some cid, Some redir, Some slug ->
       Some
-        { issuer       = iss
-          clientId     = cid
-          clientSecret = oidcClientSec
-          redirectUri  = redir
-          tenantSlug   = slug.Trim().ToLowerInvariant()
-          scopes       = oidcScopes
-          cookieSecure = redir.StartsWith "https://"
-          sessionTtl   = PulseBoard.Session.defaultLifetime
-          sessionKey   = sessionKey }
+        { issuer        = iss
+          clientId      = cid
+          clientSecret  = oidcClientSec
+          redirectUri   = redir
+          tenantSlug    = slug.Trim().ToLowerInvariant()
+          scopes        = oidcScopes
+          cookieSecure  = redir.StartsWith "https://"
+          sessionTtl    = PulseBoard.Session.defaultLifetime
+          sessionKey    = sessionKey
+          defaultRole   = oidcDefaultRole
+          roleOverrides = oidcRoleMap }
     | _ -> None
 
   if oidcConfig.IsSome && not multiTenant then
@@ -299,6 +333,8 @@ let main argv =
     printfn "  POST /api/admin/tenants              (Admin scope, JSON {slug})"
     printfn "  GET  /api/admin/tenants/<id>/api-keys (Admin scope)"
     printfn "  POST /api/admin/tenants/<id>/api-keys (Admin scope, JSON {label,role,scopes?})"
+    printfn "  GET  /api/admin/tenants/<id>/users    (Admin scope)"
+    printfn "  PATCH /api/admin/users/<id>           (Admin scope, JSON {role})"
   match oidcConfig with
   | Some cfg ->
     printfn "  OIDC SSO: issuer=%s  client=%s  tenant=%s  cookie.secure=%b"
@@ -309,6 +345,13 @@ let main argv =
     printfn "  GET  /auth/me"
     if oidcClientSec.IsNone then
       printfn "  (public client — PKCE only, no client_secret)"
+    match cfg.defaultRole with
+    | Some r ->
+      printfn "  OIDC default role for new users: %A" r
+    | None ->
+      printfn "  OIDC default role: deny (unmapped users get 403)"
+    if not (Map.isEmpty cfg.roleOverrides) then
+      printfn "  OIDC role overrides: %d email(s)" cfg.roleOverrides.Count
   | None -> ()
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
