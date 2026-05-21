@@ -429,6 +429,29 @@ let main argv =
        else
          PulseBoard.Auth.protect tokens ingestInner)
 
+  // Compatibility receivers (Prom remote_write, OTLP, Loki push) share
+  // the ingest auth/scope/quota chain but live at well-known external
+  // paths, so factor the gate out so each new receiver only wires its
+  // handler.
+  let protectIngest (inner : WebPart) : WebPart =
+    if multiTenant then
+      resolveSession (
+        PulseBoard.Auth.resolveApiKey tenantStore
+          (PulseBoard.Rbac.requireScope auditLog
+             "ingest" PulseBoard.Tenancy.Scope.Ingest
+             (PulseBoard.Rbac.requireQuota auditLog limiter
+                PulseBoard.Quotas.Ingest 1.0 inner)))
+    else
+      PulseBoard.Auth.protect tokens inner
+
+  let promRemoteWriteInner =
+    PulseBoard.PromRemoteWrite.handler metricStore hub ingestQuotas
+  let promRemoteWrite : WebPart =
+    POST >=> choose [
+      path "/api/v1/write"     // Prometheus standard
+      path "/api/prom/push"    // Cortex / Mimir convention
+    ] >=> protectIngest promRemoteWriteInner
+
   let admin : WebPart =
     if multiTenant then
       pathStarts "/api/admin/" >=>
@@ -455,6 +478,7 @@ let main argv =
   let app : WebPart =
     choose [
       ingest
+      promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
       admin     // must precede `query` because /api/admin/* also matches /api/
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
@@ -495,6 +519,8 @@ let main argv =
       webhookUrls.Length slackUrls.Length
   printfn "  POST /ingest/metrics   (JSON or JSON array)"
   printfn "  POST /ingest/logs      (JSON, array, or NDJSON)"
+  printfn "  POST /api/v1/write     (Prometheus remote_write 1.0, snappy-protobuf)"
+  printfn "  POST /api/prom/push    (alias of /api/v1/write)"
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"
