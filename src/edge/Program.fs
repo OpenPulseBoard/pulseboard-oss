@@ -65,6 +65,56 @@ let main argv =
   let auditLog : PulseBoard.Audit.IAuditLog =
     PulseBoard.Audit.InMemoryAuditLog(1024) :> _
 
+  // -- OIDC browser SSO ------------------------------------------------------
+  // Opt-in: enabled when --oidc-issuer + --oidc-client-id + --oidc-redirect-uri
+  // are all present. Requires --multi-tenant (the SSO user maps to a tenant
+  // role/scope; single-tenant mode has no concept of tenants to map into).
+  let argValue (prefix : string) =
+    argv
+    |> Array.tryFind (fun a -> a.StartsWith prefix)
+    |> Option.map (fun a -> a.Substring prefix.Length)
+  let envOr (envName : string) (cli : string option) =
+    match cli with
+    | Some v -> Some v
+    | None ->
+      let v = Environment.GetEnvironmentVariable envName
+      if String.IsNullOrWhiteSpace v then None else Some v
+  let oidcIssuer   = envOr "PULSE_OIDC_ISSUER"        (argValue "--oidc-issuer=")
+  let oidcClientId = envOr "PULSE_OIDC_CLIENT_ID"     (argValue "--oidc-client-id=")
+  let oidcClientSec= envOr "PULSE_OIDC_CLIENT_SECRET" (argValue "--oidc-client-secret=")
+  let oidcRedirect = envOr "PULSE_OIDC_REDIRECT_URI"  (argValue "--oidc-redirect-uri=")
+  let oidcTenant   = envOr "PULSE_OIDC_TENANT"        (argValue "--oidc-tenant=")
+  let oidcScopes   =
+    envOr "PULSE_OIDC_SCOPES" (argValue "--oidc-scopes=")
+    |> Option.defaultValue PulseBoard.Oidc.scopesDefault
+  let sessionKey =
+    match envOr "PULSE_SESSION_SECRET" (argValue "--session-secret=") with
+    | Some s ->
+      try PulseBoard.Session.keyFromBase64 s
+      with ex ->
+        eprintfn "  [ERROR] invalid --session-secret: %s" ex.Message
+        exit 2
+    | None -> PulseBoard.Session.generateKey ()
+
+  let oidcConfig : PulseBoard.Oidc.Config option =
+    match oidcIssuer, oidcClientId, oidcRedirect, oidcTenant with
+    | Some iss, Some cid, Some redir, Some slug ->
+      Some
+        { issuer       = iss
+          clientId     = cid
+          clientSecret = oidcClientSec
+          redirectUri  = redir
+          tenantSlug   = slug.Trim().ToLowerInvariant()
+          scopes       = oidcScopes
+          cookieSecure = redir.StartsWith "https://"
+          sessionTtl   = PulseBoard.Session.defaultLifetime
+          sessionKey   = sessionKey }
+    | _ -> None
+
+  if oidcConfig.IsSome && not multiTenant then
+    eprintfn "  [ERROR] OIDC requires --multi-tenant"
+    exit 2
+
   // Outbound alert delivery. `--webhook=` / `--slack=` may be repeated on
   // the command line; `PULSE_WEBHOOKS` / `PULSE_SLACK` env vars accept a
   // comma/newline-separated list. Each endpoint becomes its own sink so a
@@ -168,21 +218,31 @@ let main argv =
 
   let adminInner = PulseBoard.Admin.webPart tenantStore auditLog
 
+  // Build OIDC routes + session-resolving middleware (only if configured).
+  let oidcRoutes, resolveSession =
+    match oidcConfig with
+    | Some cfg ->
+      let routes, mw = PulseBoard.Oidc.build cfg tenantStore
+      Some routes, mw
+    | None -> None, (fun inner -> inner)
+
   let ingest =
     pathStarts "/ingest" >=>
       (if multiTenant then
-         PulseBoard.Auth.resolveApiKey tenantStore
-           (PulseBoard.Rbac.requireScope auditLog
-              "ingest" PulseBoard.Tenancy.Scope.Ingest ingestInner)
+         resolveSession (
+           PulseBoard.Auth.resolveApiKey tenantStore
+             (PulseBoard.Rbac.requireScope auditLog
+                "ingest" PulseBoard.Tenancy.Scope.Ingest ingestInner))
        else
          PulseBoard.Auth.protect tokens ingestInner)
 
   let admin : WebPart =
     if multiTenant then
       pathStarts "/api/admin/" >=>
-        PulseBoard.Auth.resolveApiKey tenantStore
-          (PulseBoard.Rbac.requireScope auditLog
-             "admin" PulseBoard.Tenancy.Scope.Admin adminInner)
+        resolveSession (
+          PulseBoard.Auth.resolveApiKey tenantStore
+            (PulseBoard.Rbac.requireScope auditLog
+               "admin" PulseBoard.Tenancy.Scope.Admin adminInner))
     else
       // No admin surface in single-tenant mode — fall through to NOT_FOUND.
       fun _ -> async { return None }
@@ -190,9 +250,10 @@ let main argv =
   let query : WebPart =
     if multiTenant then
       pathStarts "/api/" >=>
-        PulseBoard.Auth.resolveApiKey tenantStore
-          (PulseBoard.Rbac.requireScope auditLog
-             "query" PulseBoard.Tenancy.Scope.Query queryInner)
+        resolveSession (
+          PulseBoard.Auth.resolveApiKey tenantStore
+            (PulseBoard.Rbac.requireScope auditLog
+               "query" PulseBoard.Tenancy.Scope.Query queryInner))
     else
       queryInner
 
@@ -201,6 +262,7 @@ let main argv =
       ingest
       admin     // must precede `query` because /api/admin/* also matches /api/
       query
+      (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       path "/ws"   >=> handShake (Hub.handler hub)
       GET >=> path "/"      >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
@@ -237,6 +299,17 @@ let main argv =
     printfn "  POST /api/admin/tenants              (Admin scope, JSON {slug})"
     printfn "  GET  /api/admin/tenants/<id>/api-keys (Admin scope)"
     printfn "  POST /api/admin/tenants/<id>/api-keys (Admin scope, JSON {label,role,scopes?})"
+  match oidcConfig with
+  | Some cfg ->
+    printfn "  OIDC SSO: issuer=%s  client=%s  tenant=%s  cookie.secure=%b"
+      cfg.issuer cfg.clientId cfg.tenantSlug cfg.cookieSecure
+    printfn "  GET  /auth/login[?returnTo=/path]"
+    printfn "  GET  /auth/callback"
+    printfn "  ANY  /auth/logout[?returnTo=/path]"
+    printfn "  GET  /auth/me"
+    if oidcClientSec.IsNone then
+      printfn "  (public client — PKCE only, no client_secret)"
+  | None -> ()
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
 
