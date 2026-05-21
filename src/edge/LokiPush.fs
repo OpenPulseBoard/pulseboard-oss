@@ -11,10 +11,10 @@ open Suave.RequestErrors
 open Google.Protobuf
 open Snappier
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 open PulseBoard.Ingest
 
 // Grafana Loki push receiver. Loki agents (Promtail, Grafana Agent /
@@ -161,15 +161,6 @@ let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
       details  = Some details }
   try q.auditLog.Append ev with _ -> ()
 
-let private publishLog (hub : Broadcaster) (e : LogEntry) =
-  let json =
-    sprintf """{"type":"log","ts":%d,"service":%s,"level":%s,"message":%s}"""
-      e.ts
-      (JsonSerializer.Serialize e.service)
-      (JsonSerializer.Serialize e.level)
-      (JsonSerializer.Serialize e.message)
-  hub.Publish json
-
 let private serviceFromLabels (labels : Map<string, string>) : string =
   match Map.tryFind "service_name" labels with
   | Some v when v.Length > 0 -> v
@@ -253,7 +244,7 @@ let private streamsFromJson (raw : byte[]) : Stream[] =
 /// payloads. Body length is charged against the tenant's LogBytes
 /// bucket before parsing; over-quota → 429. Loki convention is to
 /// respond 204 on success — that's what most agents check.
-let handler (store : LogStore) (hub : Broadcaster)
+let handler (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
@@ -304,22 +295,23 @@ let handler (store : LogStore) (hub : Broadcaster)
             use ms = new MemoryStream(decompressed)
             let input = new CodedInputStream(ms)
             decodePushRequest input
-        let mutable accepted = 0
+        let entries = ResizeArray<LogEntry>()
         for s in streams do
           let labelMap = parseLabelString s.labels
           let service = serviceFromLabels labelMap
           let level   = levelFromLabels   labelMap
           for e in s.entries do
             let ts = if e.tsMs > 0L then e.tsMs else DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            let entry : LogEntry =
-              { ts = ts; service = service; level = level; message = e.line }
-            store.Add entry
-            publishLog hub entry
-            accepted <- accepted + 1
+            entries.Add { ts = ts; service = service; level = level; message = e.line }
+        let tid =
+          PulseBoard.Rbac.tryGetTenant ctx
+          |> Option.map (fun t -> let (TenantId s) = t.tenant.id in s)
+          |> Option.defaultValue ""
+        do! storage.WriteLogs(tid, entries)
         // Loki convention: 204 No Content on success.
         return!
           (NO_CONTENT
-           >=> Writers.setHeader "X-PulseBoard-Accepted" (string accepted)) ctx
+           >=> Writers.setHeader "X-PulseBoard-Accepted" (string entries.Count)) ctx
     with ex ->
       return!
         BAD_REQUEST

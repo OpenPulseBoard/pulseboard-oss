@@ -11,10 +11,10 @@ open Suave.RequestErrors
 open Google.Protobuf
 open Snappier
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 open PulseBoard.Ingest
 
 // Prometheus remote_write 1.0 receiver. The wire format is a snappy-
@@ -129,21 +129,15 @@ let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
       details  = Some details }
   try q.auditLog.Append ev with _ -> ()
 
-let private publishMetric (hub : Broadcaster) (name : string) (p : Point) =
-  let json =
-    sprintf """{"type":"metric","name":%s,"ts":%d,"value":%s}"""
-      (JsonSerializer.Serialize name)
-      p.ts
-      (p.value.ToString(System.Globalization.CultureInfo.InvariantCulture))
-  hub.Publish json
-
 /// POST /api/v1/write — Prometheus remote_write 1.0. Body is snappy-
 /// compressed protobuf `prometheus.WriteRequest`. NaN samples (Prom
 /// "stale marker" convention) are silently dropped. Cardinality
 /// admission is per fully-qualified series name (metric + sorted
 /// labelset); over-cap series have all their samples in this request
-/// dropped and counted, mirroring the JSON ingest path.
-let handler (store : MetricStore) (hub : Broadcaster)
+/// dropped and counted, mirroring the JSON ingest path. Accepted
+/// samples are batched into a single `IStorageClient.WriteMetricSamples`
+/// call per request.
+let handler (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
@@ -163,9 +157,9 @@ let handler (store : MetricStore) (hub : Broadcaster)
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
-      let mutable acceptedSamples = 0
       let mutable rejectedSamples = 0
       let mutable rejectedCap     = 0
+      let samples = ResizeArray<MetricSample>()
       for s in series do
         let name = seriesName s.labels
         if name.Length > 0 then
@@ -184,10 +178,10 @@ let handler (store : MetricStore) (hub : Broadcaster)
           if admit then
             for sample in s.samples do
               if not (Double.IsNaN sample.value) then
-                let p : Point = { ts = sample.tsMs; value = sample.value }
-                store.Record(name, p)
-                publishMetric hub name p
-                acceptedSamples <- acceptedSamples + 1
+                samples.Add { seriesName = name; tsMs = sample.tsMs; value = sample.value }
+      let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      do! storage.WriteMetricSamples(tid, samples)
+      let acceptedSamples = samples.Count
       let body =
         if rejectedSamples > 0 then
           sprintf

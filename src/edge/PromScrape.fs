@@ -14,10 +14,10 @@ open Suave.Successful
 open Suave.RequestErrors
 open Suave.ServerErrors
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 open PulseBoard.Ingest
 
 // Prometheus scrape mode (PLAN.md Phase 2 step 3). A tenant registers a
@@ -290,19 +290,10 @@ let private auditScrape (log : IAuditLog) (target : ScrapeTarget)
 
 // -- background scraper ------------------------------------------------------
 
-let private publishMetric (hub : Broadcaster) (name : string) (p : Point) =
-  let json =
-    sprintf """{"type":"metric","name":%s,"ts":%d,"value":%s}"""
-      (JsonSerializer.Serialize name)
-      p.ts
-      (p.value.ToString(CultureInfo.InvariantCulture))
-  hub.Publish json
-
 [<NoComparison; NoEquality>]
 type ScrapeDeps =
   { repo       : IScrapeRepo
-    store      : MetricStore
-    hub        : Broadcaster
+    storage    : IStorageClient
     quotas     : IngestQuotas option
     httpClient : HttpClient }
 
@@ -330,9 +321,10 @@ let private scrapeOnce (deps : ScrapeDeps) (target : ScrapeTarget) : Async<unit>
         err <- Some (sprintf "HTTP %d" (int resp.StatusCode))
       else
         let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-        let samples = parseExposition body
+        let parsed = parseExposition body
         let scrapeTsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        for s in samples do
+        let samples = ResizeArray<MetricSample>()
+        for s in parsed do
           let merged = mergeLabels target s.labels
           let name = canonicalName s.metric merged
           if name.Length > 0 && not (Double.IsNaN s.value) then
@@ -351,10 +343,10 @@ let private scrapeOnce (deps : ScrapeDeps) (target : ScrapeTarget) : Async<unit>
                 match s.tsMs with
                 | ValueSome n -> n
                 | ValueNone   -> scrapeTsMs
-              let p : Point = { ts = ts; value = s.value }
-              deps.store.Record(name, p)
-              publishMetric deps.hub name p
-              accepted <- accepted + 1
+              samples.Add { seriesName = name; tsMs = ts; value = s.value }
+        let (TenantId tidStr) = target.tenantId
+        do! deps.storage.WriteMetricSamples(tidStr, samples)
+        accepted <- samples.Count
     with ex ->
       err <- Some ex.Message
     sw.Stop()

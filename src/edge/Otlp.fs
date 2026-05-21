@@ -10,10 +10,10 @@ open Suave.Successful
 open Suave.RequestErrors
 open Google.Protobuf
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 open PulseBoard.Ingest
 
 // OpenTelemetry OTLP/HTTP receiver. The wire format is protobuf-encoded
@@ -340,23 +340,6 @@ let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
       details  = Some details }
   try q.auditLog.Append ev with _ -> ()
 
-let private publishMetric (hub : Broadcaster) (name : string) (p : Point) =
-  let json =
-    sprintf """{"type":"metric","name":%s,"ts":%d,"value":%s}"""
-      (JsonSerializer.Serialize name)
-      p.ts
-      (p.value.ToString(System.Globalization.CultureInfo.InvariantCulture))
-  hub.Publish json
-
-let private publishLog (hub : Broadcaster) (e : LogEntry) =
-  let json =
-    sprintf """{"type":"log","ts":%d,"service":%s,"level":%s,"message":%s}"""
-      e.ts
-      (JsonSerializer.Serialize e.service)
-      (JsonSerializer.Serialize e.level)
-      (JsonSerializer.Serialize e.message)
-  hub.Publish json
-
 let private severityName (n : int) (text : string) =
   if text.Length > 0 then text.ToLowerInvariant()
   else
@@ -382,10 +365,10 @@ let private partialSuccessBody = """{"partialSuccess":{}}"""
 
 /// POST /v1/metrics — OTLP/HTTP metrics. Body is a protobuf
 /// `ExportMetricsServiceRequest`. We map every NumberDataPoint of every
-/// Gauge / Sum metric to a `Point` in `MetricStore`, naming series with
-/// resource attrs ∪ scope name ∪ point attrs. Histograms / summaries are
-/// silently ignored for now.
-let metrics (store : MetricStore) (hub : Broadcaster)
+/// Gauge / Sum metric to a `MetricSample`, naming series with resource
+/// attrs ∪ scope name ∪ point attrs. Histograms / summaries are silently
+/// ignored for now.
+let metrics (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
@@ -399,7 +382,7 @@ let metrics (store : MetricStore) (hub : Broadcaster)
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
-      let mutable accepted = 0
+      let samples = ResizeArray<MetricSample>()
       for rm in resourceMetrics do
         for sm in rm.scopes do
           for m in sm.metrics do
@@ -420,11 +403,10 @@ let metrics (store : MetricStore) (hub : Broadcaster)
                   let tsMs =
                     if p.tsNano > 0UL then int64 (p.tsNano / 1_000_000UL)
                     else DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                  let pt : Point = { ts = tsMs; value = p.value }
-                  store.Record(name, pt)
-                  publishMetric hub name pt
-                  accepted <- accepted + 1
-      return! (OK partialSuccessBody >=> okHeaders accepted) ctx
+                  samples.Add { seriesName = name; tsMs = tsMs; value = p.value }
+      let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      do! storage.WriteMetricSamples(tid, samples)
+      return! (OK partialSuccessBody >=> okHeaders samples.Count) ctx
     with ex ->
       return!
         BAD_REQUEST
@@ -434,7 +416,7 @@ let metrics (store : MetricStore) (hub : Broadcaster)
 
 /// POST /v1/logs — OTLP/HTTP logs. Body length charged against the
 /// tenant's LogBytes bucket before parsing; over-quota → 429.
-let logs (store : LogStore) (hub : Broadcaster)
+let logs (storage : IStorageClient)
          (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
@@ -469,7 +451,7 @@ let logs (store : LogStore) (hub : Broadcaster)
         use mstream = new MemoryStream(raw)
         let input = new CodedInputStream(mstream)
         let resourceLogs = decodeExportLogsRequest input
-        let mutable accepted = 0
+        let entries = ResizeArray<LogEntry>()
         for rl in resourceLogs do
           let service =
             attrLookup rl.resource "service.name"
@@ -481,12 +463,10 @@ let logs (store : LogStore) (hub : Broadcaster)
                 else DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
               let level = severityName lr.sevNum lr.sevText
               let message = valueText lr.body
-              let entry : LogEntry =
-                { ts = tsMs; service = service; level = level; message = message }
-              store.Add entry
-              publishLog hub entry
-              accepted <- accepted + 1
-        return! (OK partialSuccessBody >=> okHeaders accepted) ctx
+              entries.Add { ts = tsMs; service = service; level = level; message = message }
+        let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+        do! storage.WriteLogs(tid, entries)
+        return! (OK partialSuccessBody >=> okHeaders entries.Count) ctx
     with ex ->
       return!
         BAD_REQUEST
@@ -496,8 +476,10 @@ let logs (store : LogStore) (hub : Broadcaster)
 
 /// POST /v1/traces — accepted and counted only. Storage will land with
 /// the Tempo backend in Phase 3; until then we return a successful
-/// `partialSuccess:{}` so OTel SDKs don't retry / back off.
-let traces : WebPart =
+/// `partialSuccess:{}` so OTel SDKs don't retry / back off. The count
+/// flows through `IStorageClient.IncTraceCount` so the storage tier can
+/// surface it in its own diagnostics.
+let traces (storage : IStorageClient) : WebPart =
   fun ctx -> async {
     try
       let raw = ctx.request.rawForm
@@ -507,6 +489,11 @@ let traces : WebPart =
       use ms = new MemoryStream(raw)
       let input = new CodedInputStream(ms)
       let n = countSpans input
+      let tenantId =
+        PulseBoard.Rbac.tryGetTenant ctx
+        |> Option.map (fun t -> t.tenant.id)
+      let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      do! storage.IncTraceCount(tid, n)
       return! (OK partialSuccessBody >=> okHeaders n) ctx
     with ex ->
       return!

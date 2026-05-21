@@ -23,6 +23,7 @@
     <Compile Include="Oidc.fs" />
     <Compile Include="Auth.fs" />
     <Compile Include="Notify.fs" />
+    <Compile Include="Gateway.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />
     <Compile Include="Otlp.fs" />

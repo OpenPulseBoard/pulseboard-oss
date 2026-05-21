@@ -82,10 +82,17 @@ instrumentation.
    and snappy-protobuf.
 5. **StatsD UDP + Carbon plaintext TCP** for legacy stacks. Deferrable
    to Phase 4 if backlog is heavy.
-6. **Edge gateway split.** Carve the monolith into a stateless "ingest
-   edge" tier (Suave) that authenticates, validates, applies quotas, and
-   forwards to the storage tier over an internal protocol. **This unlocks
-   horizontal scaling for everything after it.**
+6. **Edge gateway split.** ✅ DONE. `--role=edge|storage|all` (default
+   `all`). Edge tier authenticates, validates, applies quotas, then
+   forwards to storage over an HMAC-signed protobuf internal protocol
+   (`/_internal/v1/{metrics,logs,trace-count}`); 3-attempt retry with
+   100/200/400ms backoff, single shared `HttpClient`. All six receivers
+   (Ingest, PromRemoteWrite, Otlp metrics/logs/traces, LokiPush,
+   PromScrape, UDP/TCP Listeners) route through `IStorageClient`
+   (`Gateway.fs`). Constant-time HMAC compare; 401 on missing/bad sig.
+   **Deferred:** edge process still allocates the in-memory
+   MetricStore/hub/alert engine (they sit idle); a follow-up will skip
+   them for zero-overhead edge.
 
 **Reuse.** Keep [Ingest.fs](src/edge/Ingest.fs) `JsonDocument` path as the
 "PulseBoard native" format for the demo SDK; new receivers compose

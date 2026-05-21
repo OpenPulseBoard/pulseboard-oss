@@ -8,11 +8,12 @@ open Suave.Operators
 open Suave.Filters
 open Suave.Successful
 open Suave.RequestErrors
+open Suave.ServerErrors
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 
 let private readBody (ctx : HttpContext) : string =
   Encoding.UTF8.GetString ctx.request.rawForm
@@ -35,23 +36,6 @@ let private tryGetInt64 (el : JsonElement) (name : string) : int64 option =
     let ok, v = p.TryGetInt64()
     if ok then Some v else None
   | _ -> None
-
-let private publishMetric (hub : Broadcaster) (name : string) (p : Point) =
-  let json =
-    sprintf """{"type":"metric","name":%s,"ts":%d,"value":%s}"""
-      (JsonSerializer.Serialize name)
-      p.ts
-      (p.value.ToString(System.Globalization.CultureInfo.InvariantCulture))
-  hub.Publish json
-
-let private publishLog (hub : Broadcaster) (e : LogEntry) =
-  let json =
-    sprintf """{"type":"log","ts":%d,"service":%s,"level":%s,"message":%s}"""
-      e.ts
-      (JsonSerializer.Serialize e.service)
-      (JsonSerializer.Serialize e.level)
-      (JsonSerializer.Serialize e.message)
-  hub.Publish json
 
 let private parseRootAsArray (body : string) : JsonElement array =
   use doc = JsonDocument.Parse body
@@ -100,9 +84,11 @@ let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
 /// POST /ingest/metrics — accepts a single object, JSON array, or NDJSON.
 /// When `quotas` is `Some`, each distinct metric name is admitted against
 /// the tenant cardinality cap; points for rejected names are dropped and
-/// counted under `"rejectedCardinality"`.
-let metrics (store : MetricStore) (hub : Broadcaster)
-            (quotas : IngestQuotas option) : WebPart =
+/// counted under `"rejectedCardinality"`. Accepted points are buffered
+/// then handed to `IStorageClient.WriteMetricSamples` in one batch — the
+/// in-process client writes straight to MetricStore/Hub; in
+/// `--role=edge` it POSTs protobuf to the storage tier.
+let metrics (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -112,9 +98,9 @@ let metrics (store : MetricStore) (hub : Broadcaster)
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
-      let mutable accepted = 0
       let mutable rejected = 0
       let mutable rejectedCap = 0
+      let samples = ResizeArray<MetricSample>()
       for el in items do
         match tryGetString el "name", tryGetDouble el "value" with
         | Some name, Some value ->
@@ -132,11 +118,11 @@ let metrics (store : MetricStore) (hub : Broadcaster)
             | _ -> true
           if admit then
             let ts = tryGetInt64 el "ts" |> Option.defaultWith nowMs
-            let p = { ts = ts; value = value }
-            store.Record(name, p)
-            publishMetric hub name p
-            accepted <- accepted + 1
+            samples.Add { seriesName = name; tsMs = ts; value = value }
         | _ -> ()
+      let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      do! storage.WriteMetricSamples(tid, samples)
+      let accepted = samples.Count
       let body =
         if rejected > 0 then
           sprintf """{"accepted":%d,"rejectedCardinality":%d,"cap":%d}"""
@@ -145,15 +131,14 @@ let metrics (store : MetricStore) (hub : Broadcaster)
           sprintf """{"accepted":%d}""" accepted
       return! (OK body >=> Writers.setMimeType "application/json") ctx
     with ex ->
-      return! BAD_REQUEST (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
+      return! INTERNAL_ERROR (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
 /// POST /ingest/logs — accepts a single object, JSON array, or NDJSON.
 /// When `quotas` is `Some`, the raw request body length (UTF-8 bytes) is
 /// charged against the tenant LogBytes token bucket; over-quota requests
 /// are rejected with 429 before any payload parsing.
-let logs (store : LogStore) (hub : Broadcaster)
-         (quotas : IngestQuotas option) : WebPart =
+let logs (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -185,26 +170,23 @@ let logs (store : LogStore) (hub : Broadcaster)
         let items =
           if isNdjson body then parseNdjson body
           else parseRootAsArray body
-        let mutable accepted = 0
+        let entries = ResizeArray<LogEntry>()
         for el in items do
           let ts      = tryGetInt64  el "ts"      |> Option.defaultWith nowMs
           let service = tryGetString el "service" |> Option.defaultValue "unknown"
           let level   = tryGetString el "level"   |> Option.defaultValue "info"
           let message = tryGetString el "message" |> Option.defaultValue ""
-          let entry : LogEntry =
-            { ts = ts; service = service; level = level; message = message }
-          store.Add entry
-          publishLog hub entry
-          accepted <- accepted + 1
-        return! (OK (sprintf """{"accepted":%d}""" accepted)
+          entries.Add { ts = ts; service = service; level = level; message = message }
+        let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+        do! storage.WriteLogs(tid, entries)
+        return! (OK (sprintf """{"accepted":%d}""" entries.Count)
                  >=> Writers.setMimeType "application/json") ctx
     with ex ->
-      return! BAD_REQUEST (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
+      return! INTERNAL_ERROR (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
-let webPart (metricStore : MetricStore) (logStore : LogStore)
-            (hub : Broadcaster) (quotas : IngestQuotas option) : WebPart =
+let webPart (storage : IStorageClient) (quotas : IngestQuotas option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics metricStore hub quotas
-    POST >=> path "/ingest/logs"    >=> logs    logStore    hub quotas
+    POST >=> path "/ingest/metrics" >=> metrics storage quotas
+    POST >=> path "/ingest/logs"    >=> logs    storage quotas
   ]

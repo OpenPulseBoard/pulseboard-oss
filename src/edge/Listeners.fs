@@ -15,10 +15,10 @@ open Suave.Successful
 open Suave.RequestErrors
 open Suave.ServerErrors
 open PulseBoard.TimeSeries
-open PulseBoard.Hub
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.Audit
+open PulseBoard.Gateway
 open PulseBoard.Ingest
 
 // StatsD UDP + Carbon plaintext TCP (PLAN.md Phase 2 step 5). Both are
@@ -107,14 +107,6 @@ let private canonicalName (metric : string) (labels : Label[]) : string =
       sb.Append '"' |> ignore
     sb.Append '}' |> ignore
     sb.ToString()
-
-let private publishMetric (hub : Broadcaster) (name : string) (p : Point) =
-  let json =
-    sprintf """{"type":"metric","name":%s,"ts":%d,"value":%s}"""
-      (JsonSerializer.Serialize name)
-      p.ts
-      (p.value.ToString(CultureInfo.InvariantCulture))
-  hub.Publish json
 
 // -- repo --------------------------------------------------------------------
 
@@ -238,10 +230,9 @@ let private parseCarbonLine (line : string) : ParsedMetric option =
 
 [<NoComparison; NoEquality>]
 type ListenerDeps =
-  { repo   : IListenerRepo
-    store  : MetricStore
-    hub    : Broadcaster
-    quotas : IngestQuotas option }
+  { repo    : IListenerRepo
+    storage : IStorageClient
+    quotas  : IngestQuotas option }
 
 let private auditDeny (q : IngestQuotas) (listener : Listener)
                       (details : string) =
@@ -280,9 +271,16 @@ let private ingestOne (deps : ListenerDeps) (l : Listener)
         match m.tsMs with
         | Some n -> n
         | None   -> DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-      let p : Point = { ts = ts; value = m.value }
-      deps.store.Record(name, p)
-      publishMetric deps.hub name p
+      // UDP/TCP listeners drive `ingestOne` per parsed line. We push
+      // single-sample batches to the storage client; under the in-proc
+      // implementation this is just MetricStore.Record + hub.Publish.
+      // Under the HTTP edge variant the listener naturally backpressures
+      // through the synchronous wait — that's the right behaviour for a
+      // packet-driven receiver.
+      let sample : MetricSample = { seriesName = name; tsMs = ts; value = m.value }
+      let (TenantId tidStr) = l.tenantId
+      deps.storage.WriteMetricSamples(tidStr, [| sample |])
+      |> Async.RunSynchronously
       struct(1, 0)
 
 let private bumpStatus (repo : IListenerRepo) (id : string)

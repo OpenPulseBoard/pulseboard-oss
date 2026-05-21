@@ -266,9 +266,62 @@ let main argv =
   let webhookUrls = argUrls "--webhook=" @ envUrls "PULSE_WEBHOOKS"
   let slackUrls   = argUrls "--slack="   @ envUrls "PULSE_SLACK"
 
+  // -- Edge / storage split (PLAN.md Phase 2 step 6) -----------------------
+  // Three roles, default `all` (monolith — today's behaviour):
+  //   * `all`     : runs every component in one process; receivers write
+  //                 through `InProcessStorageClient`. Optionally also
+  //                 hosts the internal protocol endpoints when
+  //                 `--edge-secret` is supplied, so a separate edge
+  //                 process can push into the same store.
+  //   * `storage` : same as `all` but expects to be paired with at least
+  //                 one edge process; requires `--edge-secret`.
+  //   * `edge`    : routes every receiver through `HttpStorageClient`
+  //                 to a remote storage tier; requires
+  //                 `--storage-endpoint` and `--edge-secret`. Note: in
+  //                 this iteration the edge process still allocates the
+  //                 in-process MetricStore / hub / alert engine — they
+  //                 sit idle (no receiver writes into them) and the
+  //                 dashboard / query API run against an empty store. A
+  //                 follow-up commit will skip those components in
+  //                 `--role=edge` for a true zero-overhead edge.
+  let role =
+    (argValue "--role=" |> Option.defaultValue "all").ToLowerInvariant()
+  if not (List.contains role [ "all"; "edge"; "storage" ]) then
+    eprintfn "  [ERROR] --role must be one of: all | edge | storage (got %s)" role
+    exit 2
+  let storageEndpoint = envOr "PULSE_STORAGE_ENDPOINT" (argValue "--storage-endpoint=")
+  let edgeSecretHex   = envOr "PULSE_EDGE_SECRET"      (argValue "--edge-secret=")
+  let edgeSecret : byte[] option =
+    edgeSecretHex
+    |> Option.map (fun s ->
+        try PulseBoard.Gateway.secretFromHex s
+        with _ ->
+          eprintfn "  [ERROR] --edge-secret must be hex-encoded"
+          exit 2)
+  if role = "edge" && storageEndpoint.IsNone then
+    eprintfn "  [ERROR] --role=edge requires --storage-endpoint=URL"
+    exit 2
+  if (role = "edge" || role = "storage") && edgeSecret.IsNone then
+    eprintfn "  [ERROR] --role=%s requires --edge-secret=<hex>" role
+    exit 2
+
   let metricStore = MetricStore(capacityPerMetric = 4096)
   let logStore    = LogStore(capacity = 4096)
   let hub         = Broadcaster()
+
+  // Storage client: every receiver path (HTTP ingest, scrape, UDP/TCP
+  // listeners) writes through this. In `all` and `storage` it's a thin
+  // wrapper around the in-process MetricStore/LogStore/hub; in `edge` it
+  // POSTs hand-rolled protobuf to the storage tier.
+  let storage : PulseBoard.Gateway.IStorageClient =
+    match role with
+    | "edge" ->
+      let c =
+        new PulseBoard.Gateway.HttpStorageClient(
+          storageEndpoint.Value, edgeSecret.Value)
+      c :> _
+    | _ ->
+      PulseBoard.Gateway.InProcessStorageClient(metricStore, hub, logStore) :> _
 
   // On-disk segment store: 1 MiB per segment (~65k points per file).
   let segments = new PulseBoard.Segments.SegmentStore(dataDir)
@@ -403,7 +456,7 @@ let main argv =
       Some { limiter = limiter; auditLog = auditLog }
     else None
   let ingestInner =
-    PulseBoard.Ingest.webPart metricStore logStore hub ingestQuotas
+    PulseBoard.Ingest.webPart storage ingestQuotas
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore
 
@@ -422,8 +475,7 @@ let main argv =
     if multiTenant then
       let deps : PulseBoard.PromScrape.ScrapeDeps =
         { repo       = scrapeRepo
-          store      = metricStore
-          hub        = hub
+          storage    = storage
           quotas     = ingestQuotas
           httpClient = scrapeHttp }
       let s = new PulseBoard.PromScrape.Scraper(deps)
@@ -441,10 +493,9 @@ let main argv =
   let listenerManager : PulseBoard.Listeners.Manager option =
     if multiTenant then
       let deps : PulseBoard.Listeners.ListenerDeps =
-        { repo = listenerRepo
-          store = metricStore
-          hub = hub
-          quotas = ingestQuotas }
+        { repo    = listenerRepo
+          storage = storage
+          quotas  = ingestQuotas }
       let m = new PulseBoard.Listeners.Manager(deps)
       m.StartAll()  // no-op now (in-memory repo is empty); future Pg repo wins
       Some m
@@ -490,7 +541,7 @@ let main argv =
       PulseBoard.Auth.protect tokens inner
 
   let promRemoteWriteInner =
-    PulseBoard.PromRemoteWrite.handler metricStore hub ingestQuotas
+    PulseBoard.PromRemoteWrite.handler storage ingestQuotas
   let promRemoteWrite : WebPart =
     POST >=> choose [
       path "/api/v1/write"     // Prometheus standard
@@ -500,9 +551,9 @@ let main argv =
   // OTLP/HTTP receivers. Distinct paths per signal (metrics/logs/traces)
   // because each carries a different ExportXServiceRequest protobuf and
   // we want per-signal protect wrappers for clean audit lines.
-  let otlpMetricsInner = PulseBoard.Otlp.metrics metricStore hub ingestQuotas
-  let otlpLogsInner    = PulseBoard.Otlp.logs    logStore    hub ingestQuotas
-  let otlpTracesInner  = PulseBoard.Otlp.traces
+  let otlpMetricsInner = PulseBoard.Otlp.metrics storage ingestQuotas
+  let otlpLogsInner    = PulseBoard.Otlp.logs    storage ingestQuotas
+  let otlpTracesInner  = PulseBoard.Otlp.traces  storage
   let otlp : WebPart =
     POST >=> choose [
       path "/v1/metrics" >=> protectIngest otlpMetricsInner
@@ -511,7 +562,7 @@ let main argv =
     ]
 
   // Grafana Loki push (Promtail / Alloy / Vector / fluent-bit).
-  let lokiPushInner = PulseBoard.LokiPush.handler logStore hub ingestQuotas
+  let lokiPushInner = PulseBoard.LokiPush.handler storage ingestQuotas
   let lokiPush : WebPart =
     POST >=> path "/loki/api/v1/push" >=> protectIngest lokiPushInner
 
@@ -542,8 +593,23 @@ let main argv =
     else
       queryInner
 
+  // Internal protocol endpoints: when `--edge-secret` is set and we are
+  // running a storage-capable role, expose the HMAC-protected
+  // /_internal/v1/* routes so a paired edge process can push protobuf
+  // batches into our MetricStore / LogStore / hub. Edge-only processes
+  // skip this (nothing to host).
+  let internalRoutes : WebPart =
+    match edgeSecret, role with
+    | Some secret, ("storage" | "all") ->
+      let inproc =
+        PulseBoard.Gateway.InProcessStorageClient(metricStore, hub, logStore)
+        :> PulseBoard.Gateway.IStorageClient
+      PulseBoard.Gateway.internalWebPart inproc secret
+    | _ -> fun _ -> async { return None }
+
   let app : WebPart =
     choose [
+      internalRoutes    // unauthenticated by API key — HMAC-guarded inside
       ingest
       promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
       otlp              // /v1/* doesn't overlap /api/, but keep grouped with the other ingest receivers
