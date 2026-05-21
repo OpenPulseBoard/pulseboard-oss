@@ -166,25 +166,7 @@ let main argv =
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore
 
-  /// GET /api/admin/audit?tail=N — most recent audit events, newest last.
-  /// Capped at 1000 per request; default 100. Multi-tenant only.
-  let adminAudit : WebPart =
-    GET >=> path "/api/admin/audit" >=> (fun ctx -> async {
-      let tail =
-        match ctx.request.queryParam "tail" with
-        | Choice1Of2 v ->
-          match Int32.TryParse v with
-          | true, n when n > 0 -> min n 1000
-          | _ -> 100
-        | _ -> 100
-      let events = auditLog.Tail tail
-      let body =
-        events
-        |> Array.map PulseBoard.Audit.serialize
-        |> String.concat ","
-        |> sprintf "[%s]"
-      return! (OK body >=> Writers.setMimeType "application/json") ctx
-    })
+  let adminInner = PulseBoard.Admin.webPart tenantStore auditLog
 
   let ingest =
     pathStarts "/ingest" >=>
@@ -200,7 +182,7 @@ let main argv =
       pathStarts "/api/admin/" >=>
         PulseBoard.Auth.resolveApiKey tenantStore
           (PulseBoard.Rbac.requireScope auditLog
-             "admin" PulseBoard.Tenancy.Scope.Admin adminAudit)
+             "admin" PulseBoard.Tenancy.Scope.Admin adminInner)
     else
       // No admin surface in single-tenant mode — fall through to NOT_FOUND.
       fun _ -> async { return None }
@@ -251,6 +233,10 @@ let main argv =
   printfn "  GET  /api/logs?tail=N"
   if multiTenant then
     printfn "  GET  /api/admin/audit?tail=N        (Admin scope)"
+    printfn "  GET  /api/admin/tenants              (Admin scope)"
+    printfn "  POST /api/admin/tenants              (Admin scope, JSON {slug})"
+    printfn "  GET  /api/admin/tenants/<id>/api-keys (Admin scope)"
+    printfn "  POST /api/admin/tenants/<id>/api-keys (Admin scope, JSON {label,role,scopes?})"
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
 

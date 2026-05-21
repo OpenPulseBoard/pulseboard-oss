@@ -18,6 +18,7 @@
     <Compile Include="Notify.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="Query.fs" />
+    <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

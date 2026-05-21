@@ -114,6 +114,7 @@ type ITenantStore =
     tenantId : TenantId * label : string * role : Role * scopes : Scope ->
       IssuedKey
   abstract TryGetApiKey       : ApiKeyId -> ApiKeyRecord option
+  abstract ApiKeysFor         : TenantId -> ApiKeyRecord[]
   abstract MarkUsed           : ApiKeyId -> unit
 
 type InMemoryTenantStore () =
@@ -180,6 +181,12 @@ type InMemoryTenantStore () =
       match keys.TryGetValue id with
       | true, r -> Some r
       | _ -> None
+
+    member _.ApiKeysFor tenantId =
+      keys.Values
+      |> Seq.filter (fun r -> r.tenantId = tenantId)
+      |> Seq.sortBy (fun r -> r.createdAt)
+      |> Seq.toArray
 
     member _.MarkUsed id =
       match keys.TryGetValue id with
