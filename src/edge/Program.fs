@@ -311,20 +311,75 @@ let main argv =
 
   // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
   // seam is still `IStorageClient`; `InProcessStorageClient` now
-  // delegates to these. A future commit can swap any of them for a
-  // Mimir / Loki / Tempo HTTP client without touching receivers.
+  // delegates to these. With `--mimir-url=`, `--loki-url=`, or
+  // `--tempo-url=` set, the matching pillar fans out over HTTP to an
+  // upstream tenant-aware backend (Mimir / Loki / Tempo or a
+  // compatible vendor like Grafana Cloud, AWS Managed Prometheus,
+  // Honeycomb's OTel proxy, etc.). Without those flags everything
+  // stays embedded so the OSS demo keeps booting with zero config.
+  //
   // Cardinality enforcement is wired here: when running multi-tenant
-  // we pass the `Limiter` into the metric backend; it calls
+  // we pass the `Limiter` into the embedded metric backend; it calls
   // `TryAdmitSeries` per sample and drops samples that would exceed
-  // the per-tenant cap.
+  // the per-tenant cap. The Mimir backend doesn't enforce locally
+  // (Mimir has its own per-tenant series budgets); receivers still
+  // do the up-front admission check based on PulseBoard's limiter.
+  let mimirUrl   = envOr "PULSE_MIMIR_URL"   (argValue "--mimir-url=")
+  let mimirOrg   = envOr "PULSE_MIMIR_ORG_HEADER" (argValue "--mimir-org-header=")
+                   |> Option.defaultValue "X-Scope-OrgID"
+  let mimirToken = envOr "PULSE_MIMIR_BEARER" (argValue "--mimir-bearer=")
+  let lokiUrl    = envOr "PULSE_LOKI_URL"    (argValue "--loki-url=")
+  let lokiOrg    = envOr "PULSE_LOKI_ORG_HEADER"  (argValue "--loki-org-header=")
+                   |> Option.defaultValue "X-Scope-OrgID"
+  let lokiToken  = envOr "PULSE_LOKI_BEARER"  (argValue "--loki-bearer=")
+  let tempoUrl   = envOr "PULSE_TEMPO_URL"   (argValue "--tempo-url=")
+  let tempoOrg   = envOr "PULSE_TEMPO_ORG_HEADER" (argValue "--tempo-org-header=")
+                   |> Option.defaultValue "X-Scope-OrgID"
+  let tempoToken = envOr "PULSE_TEMPO_BEARER" (argValue "--tempo-bearer=")
+  let optOrg (h : string) =
+    if h = "none" || String.IsNullOrWhiteSpace h then None else Some h
   let metricBackend : PulseBoard.Storage.IMetricBackend =
-    PulseBoard.Storage.EmbeddedMetricBackend(
-      metricStore,
-      (if multiTenant then Some limiter else None)) :> _
+    match mimirUrl with
+    | Some url ->
+      printfn "  MetricBackend: Mimir remote_write -> %s/api/v1/push (org-header=%s)"
+        url mimirOrg
+      let opts =
+        { PulseBoard.CloudBackends.MimirOptions.Default url with
+            OrgIdHeader = optOrg mimirOrg
+            Bearer      = mimirToken }
+      new PulseBoard.CloudBackends.MimirMetricBackend(opts) :> _
+    | None ->
+      PulseBoard.Storage.EmbeddedMetricBackend(
+        metricStore,
+        (if multiTenant then Some limiter else None)) :> _
   let logBackend : PulseBoard.Storage.ILogBackend =
-    PulseBoard.Storage.EmbeddedLogBackend(logStore) :> _
+    match lokiUrl with
+    | Some url ->
+      printfn "  LogBackend:    Loki push -> %s/loki/api/v1/push (org-header=%s)"
+        url lokiOrg
+      let opts =
+        { PulseBoard.CloudBackends.LokiOptions.Default url with
+            OrgIdHeader = optOrg lokiOrg
+            Bearer      = lokiToken }
+      new PulseBoard.CloudBackends.LokiLogBackend(opts) :> _
+    | None ->
+      PulseBoard.Storage.EmbeddedLogBackend(logStore) :> _
   let traceBackend : PulseBoard.Storage.ITraceBackend =
-    PulseBoard.Storage.EmbeddedTraceBackend() :> _
+    match tempoUrl with
+    | Some url ->
+      printfn "  TraceBackend:  Tempo OTLP/HTTP -> %s/v1/traces (org-header=%s)"
+        url tempoOrg
+      let opts =
+        { PulseBoard.CloudBackends.TempoOptions.Default url with
+            OrgIdHeader = optOrg tempoOrg
+            Bearer      = tempoToken }
+      new PulseBoard.CloudBackends.TempoTraceBackend(opts) :> _
+    | None ->
+      PulseBoard.Storage.EmbeddedTraceBackend() :> _
+  let rawTraceBackend : PulseBoard.CloudBackends.IRawTraceBackend option =
+    match traceBackend with
+    | :? PulseBoard.CloudBackends.IRawTraceBackend as rt -> Some rt
+    | _ -> None
 
   // Storage client: every receiver path (HTTP ingest, scrape, UDP/TCP
   // listeners) writes through this. In `all` and `storage` it's a thin
@@ -571,7 +626,7 @@ let main argv =
   // we want per-signal protect wrappers for clean audit lines.
   let otlpMetricsInner = PulseBoard.Otlp.metrics storage ingestQuotas
   let otlpLogsInner    = PulseBoard.Otlp.logs    storage ingestQuotas
-  let otlpTracesInner  = PulseBoard.Otlp.traces  storage
+  let otlpTracesInner  = PulseBoard.Otlp.traces  storage rawTraceBackend
   let otlp : WebPart =
     POST >=> choose [
       path "/v1/metrics" >=> protectIngest otlpMetricsInner

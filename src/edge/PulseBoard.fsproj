@@ -24,6 +24,7 @@
     <Compile Include="Auth.fs" />
     <Compile Include="Notify.fs" />
     <Compile Include="Storage.fs" />
+    <Compile Include="CloudBackends.fs" />
     <Compile Include="Gateway.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />

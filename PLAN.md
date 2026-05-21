@@ -117,13 +117,17 @@ downsampling, no cardinality control, no HA).
 We own: the edge, the control plane, the alert engine, the notify
 pipeline, the UI, billing.
 
-1. **Pluggable storage backend.** ✅ DONE (embedded only). `Storage.fs`
-   defines `IMetricBackend` / `ILogBackend` / `ITraceBackend`; the
-   in-process `Embedded*Backend` impls wrap today's `MetricStore` /
-   `LogStore` / a per-tenant trace counter. `Gateway.InProcessStorageClient`
-   now delegates through these interfaces, so a Mimir / Loki / Tempo
-   client can be dropped in without touching any receiver. (Cloud
-   impls deferred to a follow-up commit.)
+1. **Pluggable storage backend.** ✅ DONE. `Storage.fs` defines
+   `IMetricBackend` / `ILogBackend` / `ITraceBackend`; `Embedded*Backend`
+   wraps today's in-process stores. `CloudBackends.fs` adds real HTTP
+   impls: `MimirMetricBackend` (Prometheus remote_write 1.0, snappy +
+   protobuf, `X-Scope-OrgID`), `LokiLogBackend` (JSON `/loki/api/v1/push`),
+   `TempoTraceBackend` (OTLP/HTTP passthrough on `/v1/traces` via the
+   new `IRawTraceBackend` extension that `Otlp.traces` forwards raw
+   bytes through). Selection is per-pillar via
+   `--mimir-url=` / `--loki-url=` / `--tempo-url=` (plus optional
+   `--*-bearer=` and `--*-org-header=`); without those flags every
+   pillar stays embedded so the OSS demo keeps booting with zero config.
 2. **Cardinality control.** ✅ DONE. Receivers (Ingest / PromRemoteWrite /
    Otlp / PromScrape / Listeners) already call `Limiter.TryAdmitSeries`
    and surface `rejectedCardinality` to the caller. `EmbeddedMetricBackend`

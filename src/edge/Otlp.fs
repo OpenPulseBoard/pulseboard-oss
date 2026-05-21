@@ -474,12 +474,14 @@ let logs (storage : IStorageClient)
              (JsonSerializer.Serialize ex.Message)) ctx
   }
 
-/// POST /v1/traces — accepted and counted only. Storage will land with
-/// the Tempo backend in Phase 3; until then we return a successful
-/// `partialSuccess:{}` so OTel SDKs don't retry / back off. The count
-/// flows through `IStorageClient.IncTraceCount` so the storage tier can
-/// surface it in its own diagnostics.
-let traces (storage : IStorageClient) : WebPart =
+/// POST /v1/traces — accepted, counted, and (optionally) forwarded.
+/// The count always flows through `IStorageClient.IncTraceCount` so
+/// the storage tier sees the activity. When `rawTrace` is supplied
+/// (e.g. `TempoTraceBackend` wired in Program.fs), the unmodified
+/// OTLP/protobuf body is also handed to it for upstream upload — this
+/// preserves full span fidelity without re-encoding.
+let traces (storage : IStorageClient)
+           (rawTrace : PulseBoard.CloudBackends.IRawTraceBackend option) : WebPart =
   fun ctx -> async {
     try
       let raw = ctx.request.rawForm
@@ -494,6 +496,10 @@ let traces (storage : IStorageClient) : WebPart =
         |> Option.map (fun t -> t.tenant.id)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.IncTraceCount(tid, n)
+      match rawTrace with
+      | Some rt ->
+        try rt.IngestOtlpProtobuf(tid, raw) with _ -> ()
+      | None -> ()
       return! (OK partialSuccessBody >=> okHeaders n) ctx
     with ex ->
       return!
