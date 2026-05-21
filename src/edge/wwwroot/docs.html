@@ -85,8 +85,6 @@
   <nav>
     <a href="/docs" class="active">Docs</a>
     <a href="/pricing">Pricing</a>
-    <a href="/app">Dashboard</a>
-    <a href="/admin">Admin</a>
   </nav>
   <span class="grow"></span>
   <a href="/signin">Sign in</a>
@@ -96,6 +94,11 @@
 <div class="layout">
 
 <aside class="toc">
+  <h4>Concepts</h4>
+  <ul>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#deploy-modes">Deployment modes</a></li>
+  </ul>
   <h4>Getting started</h4>
   <ul>
     <li><a href="#quickstart">Quickstart</a></li>
@@ -130,6 +133,61 @@
   serves a live dashboard; and surfaces cost + AI insights over your own data.
   Everything below speaks plain HTTP.
 </p>
+
+<h2 id="architecture">Architecture in one minute</h2>
+<p>PulseBoard is <strong>one binary</strong> that plays two distinct roles. Pick
+   the role at startup with command-line flags &mdash; you never need two
+   different builds.</p>
+<table>
+  <tr><th>Surface</th><th>What it is</th><th>Audience</th></tr>
+  <tr><td><code>/</code>, <code>/docs</code>, <code>/pricing</code>, <code>/signup</code>, <code>/signin</code></td>
+      <td>The <strong>public marketing site</strong> &mdash; static pages,
+          unauthenticated. Same content for every visitor.</td>
+      <td>Prospects, search engines.</td></tr>
+  <tr><td><code>/app</code></td>
+      <td>The <strong>dashboard SPA</strong> &mdash; charts, queries, alerts.
+          Authenticated with an API key (Bearer).</td>
+      <td>A signed-in member of <em>one specific tenant</em>.</td></tr>
+  <tr><td><code>/admin</code></td>
+      <td>The <strong>workspace admin</strong> &mdash; keys, members, plan,
+          billing, audit. Same Bearer auth, requires the <code>admin</code> scope.</td>
+      <td>A workspace owner / operator.</td></tr>
+  <tr><td><code>/ingest/*</code>, <code>/v1/*</code>, <code>/loki/*</code>, <code>/api/v1/write</code></td>
+      <td>The <strong>data plane</strong>. Bearer-authenticated, RBAC-scoped.</td>
+      <td>Your agents, SDKs, scrapers.</td></tr>
+</table>
+<p>The dashboard and admin are <em>per-workspace</em> surfaces. In a real
+   hosted deployment they live behind a tenant-specific URL (for example
+   <code>https://acme.pulseboard.cloud/app</code>), and the public website at
+   <code>pulseboard.cloud</code> never links to them directly &mdash; you reach your
+   workspace by following the URL you got at sign-up, or by signing in with
+   your API key.</p>
+
+<h2 id="deploy-modes">Deployment modes</h2>
+<p>The same binary runs in two configurations:</p>
+<h3>Single-tenant (default)</h3>
+<pre><code>dotnet run -- --port=8080</code></pre>
+<p>One workspace per process. No <code>/api/signup</code> &mdash; the operator
+   provisions keys directly. Best for self-hosting one team or running
+   locally for development. This is what you get when you clone the repo
+   and run <code>dotnet run</code> with no flags.</p>
+<h3>Multi-tenant (the “edge”)</h3>
+<pre><code>dotnet run -- --multi-tenant --port=8080 \
+  --postgres="Host=db;Database=pulse;Username=pulse"</code></pre>
+<p>Many workspaces share one process, isolated by tenant ID. The public
+   onboarding endpoint <code>/api/signup</code> is enabled and creates a new
+   tenant + API key on demand. Recommended for a hosted product. The
+   public marketing pages are served alongside, so a small deployment can
+   keep “website” and “edge” in one process.</p>
+<div class="note">
+  In a larger hosted deployment you would run the marketing pages on a
+  dedicated <code>pulseboard.cloud</code> host that <em>only</em> serves
+  <code>/</code>, <code>/docs</code>, <code>/pricing</code>, <code>/signup</code>, and proxies the actual
+  <code>POST /api/signup</code> to a provisioning service that spins up a
+  per-tenant workspace on a subdomain like <code>https://acme.pulseboard.cloud</code>.
+  See <a href="#selfhost">self-hosting</a> for the current recipe and the
+  project <code>PLAN.md</code> for the hosted/provisioner roadmap.
+</div>
 
 <h2 id="quickstart">Quickstart</h2>
 <p>Sign up gets you an API key. Use it as a <code>Bearer</code> on every data-plane call.</p>

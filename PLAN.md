@@ -925,6 +925,59 @@ Pick 2-3 to over-invest in vs. competing flat.
 
 ---
 
+## Phase 9 — Hosted product / provisioner (planned, not built)
+
+User feedback after Phase 8 #6 surfaced a real conceptual gap: the
+same binary today is trying to be both the *public marketing site* at
+`pulseboard.cloud` and a *per-customer workspace* at
+`<slug>.pulseboard.cloud`. Functionally fine for self-hosters; visibly
+wrong for a hosted product (the public nav linking to `/admin` and
+`/app` makes no sense to a prospect, and `/api/signup` only works in
+multi-tenant mode which a single-tenant binary doesn't enable).
+
+The hosted shape we want:
+
+```
+visitor → pulseboard.cloud (marketing only, no /app or /admin)
+           │ POST /api/signup
+           ▼
+        provisioner ──► allocates slug, DNS, key, workspace runtime
+           │
+           ▼
+        https://acme-7f3a.pulseboard.cloud (workspace: /app + /admin + /ingest)
+```
+
+Three pieces of work:
+
+1. **`--site-only` mode** for the existing binary. Serves only the
+   marketing routes (`/`, `/docs`, `/pricing`, `/signup`, `/signin`)
+   and forwards `POST /api/signup` to a configurable provisioner URL.
+   Strips all workspace / data-plane routes. This is the smallest
+   change and unblocks deploying `pulseboard.cloud` separately from
+   any tenant runtime.
+
+2. **Provisioner service.** Receives signup requests, allocates a
+   tenant slug + suffix (`acme-7f3a`), creates DNS, ensures a
+   workspace runtime exists for that slug, returns `{url, apiKey}`.
+   Stores `(slug, tenantId, workspaceUrl, createdAt)` in a central
+   Postgres. Open choices: orchestrator (Kubernetes / Fly Machines /
+   Nomad / systemd-with-control-plane), DNS strategy (wildcard cert +
+   API-driven A records vs. on-demand TLS), runtime topology
+   (process-per-tenant vs. shared multi-tenant edges with hostname
+   routing). All four scenarios are documented in
+   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §6.
+
+3. **Workspace bootstrap.** When the provisioner spawns / assigns a
+   workspace, seed its tenant store with the first key, owner email,
+   and Free-plan caps so the user lands in a working dashboard with
+   no manual setup.
+
+Deliberately punted until we pick an orchestrator: actual provisioner
+implementation, the DNS automation, billing/Stripe linkage to plan
+upgrades on hosted, and the multi-region / data-residency story.
+
+---
+
 ## Relevant existing code (informs Phase 1-2 hand-off)
 
 - [src/edge/Program.fs](src/edge/Program.fs) — wiring point that becomes "edge service"
