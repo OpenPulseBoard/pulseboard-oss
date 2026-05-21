@@ -10,6 +10,9 @@ open Suave.Successful
 open Suave.RequestErrors
 open PulseBoard.TimeSeries
 open PulseBoard.Hub
+open PulseBoard.Tenancy
+open PulseBoard.Quotas
+open PulseBoard.Audit
 
 let private readBody (ctx : HttpContext) : string =
   Encoding.UTF8.GetString ctx.request.rawForm
@@ -71,57 +74,137 @@ let private isNdjson (body : string) =
   let trimmed = body.TrimStart()
   trimmed.StartsWith "{" && body.Contains '\n'
 
+/// Hook for per-tenant quota enforcement at the ingest edge. When `None`
+/// the handlers behave exactly as in single-tenant mode (no cardinality
+/// admission, no log-byte charging). Passed `Some` from the multi-tenant
+/// wiring in `Program.fs`.
+[<NoComparison; NoEquality>]
+type IngestQuotas =
+  { limiter  : Limiter
+    auditLog : IAuditLog }
+
+let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
+                          (action : string) (details : string) =
+  let t = PulseBoard.Rbac.tryGetTenant ctx
+  let ev : AuditEvent =
+    { ts       = DateTimeOffset.UtcNow
+      tenant   = t |> Option.map (fun x -> x.tenant.id)
+      apiKeyId = t |> Option.map (fun x -> x.apiKeyId)
+      action   = action
+      resource = ctx.request.path
+      outcome  = Deny
+      remoteIp = None
+      details  = Some details }
+  try q.auditLog.Append ev with _ -> ()
+
 /// POST /ingest/metrics — accepts a single object, JSON array, or NDJSON.
-let metrics (store : MetricStore) (hub : Broadcaster) : WebPart =
+/// When `quotas` is `Some`, each distinct metric name is admitted against
+/// the tenant cardinality cap; points for rejected names are dropped and
+/// counted under `"rejectedCardinality"`.
+let metrics (store : MetricStore) (hub : Broadcaster)
+            (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
       let items =
         if isNdjson body then parseNdjson body
         else parseRootAsArray body
+      let tenantId =
+        PulseBoard.Rbac.tryGetTenant ctx
+        |> Option.map (fun t -> t.tenant.id)
       let mutable accepted = 0
+      let mutable rejected = 0
+      let mutable rejectedCap = 0
       for el in items do
         match tryGetString el "name", tryGetDouble el "value" with
         | Some name, Some value ->
-          let ts = tryGetInt64 el "ts" |> Option.defaultWith nowMs
-          let p = { ts = ts; value = value }
-          store.Record(name, p)
-          publishMetric hub name p
-          accepted <- accepted + 1
+          let admit =
+            match quotas, tenantId with
+            | Some q, Some tid ->
+              match q.limiter.TryAdmitSeries(tid, name) with
+              | CardinalityResult.Ok -> true
+              | CardinalityResult.Rejected cap ->
+                rejected    <- rejected + 1
+                rejectedCap <- cap
+                emitQuotaDeny q ctx "quota.cardinality"
+                  (sprintf "series=%s cap=%d" name cap)
+                false
+            | _ -> true
+          if admit then
+            let ts = tryGetInt64 el "ts" |> Option.defaultWith nowMs
+            let p = { ts = ts; value = value }
+            store.Record(name, p)
+            publishMetric hub name p
+            accepted <- accepted + 1
         | _ -> ()
-      return! (OK (sprintf """{"accepted":%d}""" accepted)
-               >=> Writers.setMimeType "application/json") ctx
+      let body =
+        if rejected > 0 then
+          sprintf """{"accepted":%d,"rejectedCardinality":%d,"cap":%d}"""
+            accepted rejected rejectedCap
+        else
+          sprintf """{"accepted":%d}""" accepted
+      return! (OK body >=> Writers.setMimeType "application/json") ctx
     with ex ->
       return! BAD_REQUEST (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
 /// POST /ingest/logs — accepts a single object, JSON array, or NDJSON.
-let logs (store : LogStore) (hub : Broadcaster) : WebPart =
+/// When `quotas` is `Some`, the raw request body length (UTF-8 bytes) is
+/// charged against the tenant LogBytes token bucket; over-quota requests
+/// are rejected with 429 before any payload parsing.
+let logs (store : LogStore) (hub : Broadcaster)
+         (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
-      let items =
-        if isNdjson body then parseNdjson body
-        else parseRootAsArray body
-      let mutable accepted = 0
-      for el in items do
-        let ts      = tryGetInt64  el "ts"      |> Option.defaultWith nowMs
-        let service = tryGetString el "service" |> Option.defaultValue "unknown"
-        let level   = tryGetString el "level"   |> Option.defaultValue "info"
-        let message = tryGetString el "message" |> Option.defaultValue ""
-        let entry : LogEntry =
-          { ts = ts; service = service; level = level; message = message }
-        store.Add entry
-        publishLog hub entry
-        accepted <- accepted + 1
-      return! (OK (sprintf """{"accepted":%d}""" accepted)
-               >=> Writers.setMimeType "application/json") ctx
+      let tenantId =
+        PulseBoard.Rbac.tryGetTenant ctx
+        |> Option.map (fun t -> t.tenant.id)
+      let bytes = float (Encoding.UTF8.GetByteCount body)
+      let throttle =
+        match quotas, tenantId with
+        | Some q, Some tid ->
+          match q.limiter.TryAcquire(tid, LogBytes, bytes) with
+          | AcquireResult.Ok -> None
+          | AcquireResult.Throttled ms ->
+            emitQuotaDeny q ctx "quota.logBytes"
+              (sprintf "bytes=%g retryAfterMs=%d" bytes ms)
+            Some ms
+        | _ -> None
+      match throttle with
+      | Some ms ->
+        let retrySec = max 1 (int (ceil (float ms / 1000.0)))
+        let body =
+          sprintf
+            """{"error":"rate limit exceeded","kind":"logBytes","retryAfterMs":%d}""" ms
+        return!
+          (TOO_MANY_REQUESTS body
+           >=> Writers.setMimeType "application/json"
+           >=> Writers.setHeader "Retry-After" (string retrySec)) ctx
+      | None ->
+        let items =
+          if isNdjson body then parseNdjson body
+          else parseRootAsArray body
+        let mutable accepted = 0
+        for el in items do
+          let ts      = tryGetInt64  el "ts"      |> Option.defaultWith nowMs
+          let service = tryGetString el "service" |> Option.defaultValue "unknown"
+          let level   = tryGetString el "level"   |> Option.defaultValue "info"
+          let message = tryGetString el "message" |> Option.defaultValue ""
+          let entry : LogEntry =
+            { ts = ts; service = service; level = level; message = message }
+          store.Add entry
+          publishLog hub entry
+          accepted <- accepted + 1
+        return! (OK (sprintf """{"accepted":%d}""" accepted)
+                 >=> Writers.setMimeType "application/json") ctx
     with ex ->
       return! BAD_REQUEST (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
-let webPart (metricStore : MetricStore) (logStore : LogStore) (hub : Broadcaster) : WebPart =
+let webPart (metricStore : MetricStore) (logStore : LogStore)
+            (hub : Broadcaster) (quotas : IngestQuotas option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics metricStore hub
-    POST >=> path "/ingest/logs"    >=> logs    logStore    hub
+    POST >=> path "/ingest/metrics" >=> metrics metricStore hub quotas
+    POST >=> path "/ingest/logs"    >=> logs    logStore    hub quotas
   ]

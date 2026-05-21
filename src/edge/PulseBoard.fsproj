@@ -15,6 +15,7 @@
     <Compile Include="Audit.fs" />
     <Compile Include="Quotas.fs" />
     <Compile Include="PgTenantStore.fs" />
+    <Compile Include="PgQuotaOverrides.fs" />
     <Compile Include="Rbac.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Oidc.fs" />

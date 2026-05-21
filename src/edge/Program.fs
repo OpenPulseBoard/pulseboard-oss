@@ -60,16 +60,18 @@ let main argv =
     |> Array.tryFind (fun a -> a.StartsWith "--seed-tenant=")
     |> Option.map   (fun a -> a.Substring 14)
 
+  // Postgres connection string (used by tenant store + quota overrides).
+  let pgConn =
+    match argv |> Array.tryFind (fun a -> a.StartsWith "--postgres=") with
+    | Some s -> Some (s.Substring 11)
+    | None ->
+      let v = Environment.GetEnvironmentVariable "PULSE_POSTGRES"
+      if String.IsNullOrWhiteSpace v then None else Some v
+
   let tenantStore : PulseBoard.Tenancy.ITenantStore =
     // Postgres-backed store when --postgres=<connstr> (or PULSE_POSTGRES) is
     // provided; otherwise the in-memory store (data vaporizes on restart).
     // Schema is applied idempotently at startup.
-    let pgConn =
-      match argv |> Array.tryFind (fun a -> a.StartsWith "--postgres=") with
-      | Some s -> Some (s.Substring 11)
-      | None ->
-        let v = Environment.GetEnvironmentVariable "PULSE_POSTGRES"
-        if String.IsNullOrWhiteSpace v then None else Some v
     match pgConn with
     | Some cs ->
       try
@@ -109,10 +111,45 @@ let main argv =
   let ingestBurst = parseFloat "PULSE_QUOTA_INGEST_BURST" "--quota-ingest-burst=" 1000.0
   let queryRps    = parseFloat "PULSE_QUOTA_QUERY_RPS"    "--quota-query-rps="    100.0
   let queryBurst  = parseFloat "PULSE_QUOTA_QUERY_BURST"  "--quota-query-burst="  200.0
-  let quotaStore : PulseBoard.Quotas.IQuotaStore =
-    PulseBoard.Quotas.DefaultQuotaStore(
-      ingest = { capacity = ingestBurst; refillPerSec = ingestRps },
-      query  = { capacity = queryBurst;  refillPerSec = queryRps  }) :> _
+  let alertRps    = parseFloat "PULSE_QUOTA_ALERT_EVAL_RPS"   "--quota-alert-eval-rps="   0.0
+  let alertBurst  = parseFloat "PULSE_QUOTA_ALERT_EVAL_BURST" "--quota-alert-eval-burst=" 0.0
+  // Log volume is charged in bytes (one token per UTF-8 byte). A 1 GiB/day
+  // budget is ~12,427 B/s sustained; configure via --quota-log-bytes-per-sec.
+  let logBps      = parseFloat "PULSE_QUOTA_LOG_BPS"         "--quota-log-bytes-per-sec=" 0.0
+  let logBurst    = parseFloat "PULSE_QUOTA_LOG_BURST_BYTES" "--quota-log-burst-bytes="   0.0
+  let cardinalityCap =
+    let raw =
+      match argv |> Array.tryFind (fun a -> a.StartsWith "--quota-cardinality=") with
+      | Some s -> Some (s.Substring "--quota-cardinality=".Length)
+      | None ->
+        let v = Environment.GetEnvironmentVariable "PULSE_QUOTA_CARDINALITY"
+        if String.IsNullOrWhiteSpace v then None else Some v
+    match raw with
+    | None -> 0
+    | Some s ->
+      match Int32.TryParse s with
+      | true, n when n >= 0 -> n
+      | _ ->
+        eprintfn "  [ERROR] --quota-cardinality expects a non-negative integer, got %s" s
+        exit 2
+  let quotaDefaults : Map<PulseBoard.Quotas.Kind, PulseBoard.Quotas.Limit> =
+    Map.ofList
+      [ PulseBoard.Quotas.Ingest,    { capacity = ingestBurst; refillPerSec = ingestRps }
+        PulseBoard.Quotas.Query,     { capacity = queryBurst;  refillPerSec = queryRps  }
+        PulseBoard.Quotas.AlertEval, { capacity = alertBurst;  refillPerSec = alertRps  }
+        PulseBoard.Quotas.LogBytes,  { capacity = logBurst;    refillPerSec = logBps    } ]
+  let overrideRepo : PulseBoard.Quotas.IOverrideRepo =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgQuotaOverrides.ensureSchema cs
+        PulseBoard.PgQuotaOverrides.PgOverrideRepo(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres quota overrides: %s" ex.Message
+        exit 2
+    | None -> PulseBoard.Quotas.InMemoryOverrideRepo() :> _
+  let quotaStore =
+    PulseBoard.Quotas.QuotaStore(quotaDefaults, cardinalityCap, overrideRepo)
   let limiter = PulseBoard.Quotas.Limiter(quotaStore)
 
   // -- OIDC browser SSO ------------------------------------------------------
@@ -248,6 +285,26 @@ let main argv =
 
   let alertEngine = Engine(metricStore, alertSink)
 
+  // When multi-tenant + alert-eval quota is set, gate each Tick against
+  // the engine's nominal tenant. Single-tenant mode runs free.
+  match seedTenantSlug with
+  | Some _ when multiTenant && alertBurst > 0.0 ->
+    let gateTenant =
+      // Use whichever tenant exists; for now this engine is global and we
+      // charge the first tenant we find. A future per-tenant Engine fan-out
+      // will key this properly.
+      tenantStore.Tenants()
+      |> Array.tryHead
+      |> Option.map (fun t -> t.id)
+    alertEngine.SetEvalGate(fun () ->
+      match gateTenant with
+      | Some tid ->
+        match limiter.TryAcquire(tid, PulseBoard.Quotas.AlertEval) with
+        | PulseBoard.Quotas.AcquireResult.Ok -> true
+        | _ -> false
+      | None -> true)
+  | _ -> ()
+
   alertEngine.Add
     { name = "cpu-high"; metric = "cpu"; cmp = Gt
       threshold = 0.9; durationMs = 30_000L }
@@ -295,12 +352,16 @@ let main argv =
 
   // -- Route composition ------------------------------------------------------
 
+  let ingestQuotas : PulseBoard.Ingest.IngestQuotas option =
+    if multiTenant then
+      Some { limiter = limiter; auditLog = auditLog }
+    else None
   let ingestInner =
-    PulseBoard.Ingest.webPart metricStore logStore hub
+    PulseBoard.Ingest.webPart metricStore logStore hub ingestQuotas
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore
 
-  let adminInner = PulseBoard.Admin.webPart tenantStore auditLog
+  let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore auditLog
 
   // Build OIDC routes + session-resolving middleware (only if configured).
   let oidcRoutes, resolveSession =
@@ -368,6 +429,12 @@ let main argv =
     printfn "  Mode: multi-tenant. /ingest/* requires scope=ingest, /api/* requires scope=query, /api/admin/* requires scope=admin."
     printfn "  Quotas: ingest=%g rps (burst %g), query=%g rps (burst %g) per tenant."
       ingestRps ingestBurst queryRps queryBurst
+    if logBurst > 0.0 then
+      printfn "  Quotas: logBytes=%g B/s (burst %g B) per tenant." logBps logBurst
+    if alertBurst > 0.0 then
+      printfn "  Quotas: alertEval=%g rps (burst %g) per tenant." alertRps alertBurst
+    if cardinalityCap > 0 then
+      printfn "  Quotas: cardinality cap=%d active series per tenant." cardinalityCap
   elif Map.isEmpty tokens then
     printfn "  Mode: single-tenant. [WARN] /ingest/* is OPEN. Provide --tokens-file=<path> or PULSE_TOKENS to require auth, or --multi-tenant to switch to scoped API keys."
   else
@@ -391,6 +458,8 @@ let main argv =
     printfn "  POST /api/admin/tenants/<id>/api-keys (Admin scope, JSON {label,role,scopes?})"
     printfn "  GET  /api/admin/tenants/<id>/users    (Admin scope)"
     printfn "  PATCH /api/admin/users/<id>           (Admin scope, JSON {role})"
+    printfn "  GET  /api/admin/tenants/<id>/quotas   (Admin scope)"
+    printfn "  PUT  /api/admin/tenants/<id>/quotas   (Admin scope, JSON per-kind overrides)"
   match oidcConfig with
   | Some cfg ->
     printfn "  OIDC SSO: issuer=%s  client=%s  tenant=%s  cookie.secure=%b"

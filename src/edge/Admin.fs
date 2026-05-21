@@ -12,6 +12,7 @@ open Suave.RequestErrors
 open Suave.ServerErrors
 open PulseBoard.Tenancy
 open PulseBoard.Audit
+open PulseBoard.Quotas
 
 // REST surface for tenant + API key management. All routes require the
 // `Admin` scope; gating is composed at the call site in Program.fs via
@@ -363,8 +364,141 @@ let private auditTail (log : IAuditLog) : WebPart =
     return! jsonResp 200 body ctx
   }
 
+// -- quota handlers ---------------------------------------------------------
+
+let private limitJson (l : Limit) =
+  sprintf """{"capacity":%g,"refillPerSec":%g}""" l.capacity l.refillPerSec
+
+let private quotasJson (eff : Effective) =
+  let rates =
+    allKinds
+    |> Array.map (fun k ->
+        let l = Map.find k eff.rates
+        sprintf "%s:%s" (JsonSerializer.Serialize (kindStr k)) (limitJson l))
+    |> String.concat ","
+  let overrides =
+    eff.rateOverrides
+    |> Seq.map (fun k -> JsonSerializer.Serialize (kindStr k))
+    |> String.concat ","
+  sprintf
+    """{"rates":{%s},"cardinality":%d,"rateOverrides":[%s],"cardinalityOverridden":%b}"""
+    rates eff.cardinality overrides eff.cardinalityOverridden
+
+let private showQuotas (store : ITenantStore) (quotaStore : QuotaStore)
+                       (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None -> return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      let eff = quotaStore.Effective (TenantId tenantId)
+      return! jsonResp 200 (quotasJson eff) ctx
+  }
+
+/// Parse a rate-limit object: `null` means "clear override", a `{capacity,
+/// refillPerSec}` object means "set". Returns `Error` for malformed shapes.
+let private parseRateOverride (el : JsonElement) : Result<Limit option, string> =
+  match el.ValueKind with
+  | JsonValueKind.Null -> Result.Ok None
+  | JsonValueKind.Object ->
+    let cap =
+      match el.TryGetProperty "capacity" with
+      | true, v when v.ValueKind = JsonValueKind.Number -> Some (v.GetDouble())
+      | _ -> None
+    let rate =
+      match el.TryGetProperty "refillPerSec" with
+      | true, v when v.ValueKind = JsonValueKind.Number -> Some (v.GetDouble())
+      | _ -> None
+    match cap, rate with
+    | Some c, Some r when c >= 0.0 && r >= 0.0 ->
+      Result.Ok (Some { capacity = c; refillPerSec = r })
+    | _ ->
+      Result.Error "rate override requires non-negative 'capacity' and 'refillPerSec'"
+  | _ -> Result.Error "rate override must be object or null"
+
+let private updateQuotas (store : ITenantStore) (quotaStore : QuotaStore)
+                         (log : IAuditLog) (tenantId : string) : WebPart =
+  fun ctx -> async {
+    match store.TryGetTenant (TenantId tenantId) with
+    | None ->
+      auditEvent log ctx "admin.quota.set" Deny
+        (Some (sprintf "tenantId=%s not found" tenantId))
+      return! errJson 404 "tenant not found" ctx
+    | Some _ ->
+      let body = readBody ctx.request
+      match tryParseJson body with
+      | None ->
+        auditEvent log ctx "admin.quota.set" Deny (Some "invalid json")
+        return! errJson 400 "invalid JSON body" ctx
+      | Some doc ->
+        use _ = doc
+        let root = doc.RootElement
+        if root.ValueKind <> JsonValueKind.Object then
+          auditEvent log ctx "admin.quota.set" Deny (Some "body not object")
+          return! errJson 400 "body must be a JSON object" ctx
+        else
+          // Validate everything first so a malformed field doesn't leave
+          // the store half-updated.
+          let mutable err : string option = None
+          let rateUpdates = ResizeArray<Kind * Limit option>()
+          let mutable cardUpdate : (int option * bool) = (None, false)
+          for prop in root.EnumerateObject() do
+            if err.IsNone then
+              if prop.Name = "cardinality" then
+                match prop.Value.ValueKind with
+                | JsonValueKind.Null ->
+                  cardUpdate <- (None, true)
+                | JsonValueKind.Number ->
+                  let n = prop.Value.GetInt32()
+                  if n < 0 then
+                    err <- Some "cardinality must be >= 0 (0 = unlimited)"
+                  else
+                    cardUpdate <- (Some n, true)
+                | _ ->
+                  err <- Some "cardinality must be integer or null"
+              else
+                match tryParseKind prop.Name with
+                | None ->
+                  err <- Some (sprintf "unknown quota kind '%s'" prop.Name)
+                | Some k ->
+                  match parseRateOverride prop.Value with
+                  | Result.Error m -> err <- Some m
+                  | Result.Ok lo   -> rateUpdates.Add(k, lo)
+          match err with
+          | Some m ->
+            auditEvent log ctx "admin.quota.set" Deny (Some m)
+            return! errJson 400 m ctx
+          | None ->
+            try
+              for k, lo in rateUpdates do
+                quotaStore.SetRateOverride(TenantId tenantId, k, lo)
+              let cardOpt, cardSet = cardUpdate
+              if cardSet then
+                quotaStore.SetCardinalityOverride(TenantId tenantId, cardOpt)
+              let detail =
+                let parts =
+                  [ for k, lo in rateUpdates ->
+                      match lo with
+                      | Some l ->
+                        sprintf "%s=%g/%g" (kindStr k) l.capacity l.refillPerSec
+                      | None ->
+                        sprintf "%s=clear" (kindStr k)
+                    if cardSet then
+                      match cardOpt with
+                      | Some n -> yield sprintf "cardinality=%d" n
+                      | None   -> yield "cardinality=clear" ]
+                String.concat " " parts
+              auditEvent log ctx "admin.quota.set" Allow
+                (Some (sprintf "tenantId=%s %s" tenantId detail))
+              let eff = quotaStore.Effective (TenantId tenantId)
+              return! jsonResp 200 (quotasJson eff) ctx
+            with ex ->
+              auditEvent log ctx "admin.quota.set" Error (Some ex.Message)
+              return! errJson 500 ex.Message ctx
+  }
+
 /// Complete admin WebPart. Gating (`Admin` scope) is applied by the caller.
-let webPart (store : ITenantStore) (log : IAuditLog) : WebPart =
+let webPart (store : ITenantStore) (quotaStore : QuotaStore)
+            (log : IAuditLog) : WebPart =
   choose [
     GET  >=> path "/api/admin/audit"        >=> auditTail log
     GET  >=> path "/api/admin/tenants"      >=> listTenants store
@@ -373,6 +507,8 @@ let webPart (store : ITenantStore) (log : IAuditLog) : WebPart =
     POST >=> pathScan "/api/admin/tenants/%s/api-keys" (issueApiKey store log)
     GET  >=> pathScan "/api/admin/tenants/%s/users"    (listUsers store)
     PATCH >=> pathScan "/api/admin/users/%s"           (updateUserRole store log)
+    GET  >=> pathScan "/api/admin/tenants/%s/quotas"   (showQuotas store quotaStore)
+    PUT  >=> pathScan "/api/admin/tenants/%s/quotas"   (updateQuotas store quotaStore log)
     NOT_FOUND """{"error":"unknown admin endpoint"}"""
       >=> Writers.setMimeType "application/json"
   ]

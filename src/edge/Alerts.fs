@@ -29,13 +29,26 @@ type Engine(store : MetricStore, onFire : Alert -> unit) =
   let rules = ConcurrentBag<Rule>()
   let firedSince = ConcurrentDictionary<string, int64>() // rule -> first-breach ts
   let active = ConcurrentDictionary<string, bool>()
+  // Optional gate consulted before each `Tick`. Returns `false` to skip
+  // this evaluation cycle (e.g. when a per-tenant alert-eval RPS bucket
+  // is empty). `None` means always-allow, matching legacy behaviour.
+  let mutable gate : (unit -> bool) option = None
 
   member _.Add(r : Rule) = rules.Add r
 
   member _.Rules() = rules |> Seq.toArray
 
+  /// Install a pre-tick gate. Callers that don't enforce alert-eval
+  /// throttling can leave this unset.
+  member _.SetEvalGate(f : unit -> bool) = gate <- Some f
+
   /// Evaluate every rule against the latest snapshot. Call periodically.
   member _.Tick() =
+    let allow =
+      match gate with
+      | Some g -> try g () with _ -> true
+      | None   -> true
+    if not allow then () else
     let now = nowMs ()
     for r in rules do
       let points = store.GetSince(r.metric, now - r.durationMs)
