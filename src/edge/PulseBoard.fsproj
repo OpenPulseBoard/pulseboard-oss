@@ -11,6 +11,9 @@
     <Compile Include="Hub.fs" />
     <Compile Include="Alerts.fs" />
     <Compile Include="Segments.fs" />
+    <Compile Include="Tenancy.fs" />
+    <Compile Include="Audit.fs" />
+    <Compile Include="Rbac.fs" />
     <Compile Include="Auth.fs" />
     <Compile Include="Notify.fs" />
     <Compile Include="Ingest.fs" />

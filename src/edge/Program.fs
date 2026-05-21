@@ -39,14 +39,31 @@ let main argv =
     | Some s -> s.Substring 7
     | None   -> Path.Combine(Directory.GetCurrentDirectory(), "pulse-data")
 
-  // Per-token auth for /ingest/*. Tokens are loaded from --tokens-file=<path>
-  // (one `name:secret` per line, # comments OK) or from the PULSE_TOKENS env
-  // var (comma- or newline-separated). When empty, ingest is left OPEN so the
-  // demo "just works" — a loud warning is printed in that case.
+  // Per-token Basic-Auth for /ingest/* in the legacy / single-tenant mode.
+  // Tokens are loaded from --tokens-file=<path> (one `name:secret` per
+  // line, # comments OK) or from the PULSE_TOKENS env var (comma- or
+  // newline-separated). When empty, ingest is left OPEN so the demo "just
+  // works" — a loud warning is printed in that case.
   let tokens =
     match argv |> Array.tryFind (fun a -> a.StartsWith "--tokens-file=") with
     | Some s -> PulseBoard.Auth.loadFromFile (s.Substring 14)
     | None   -> PulseBoard.Auth.loadFromEnv  "PULSE_TOKENS"
+
+  // Phase 1 multi-tenant mode. Off by default so the OSS demo keeps booting
+  // with zero config. When enabled, /ingest/* and /api/* both require a
+  // scoped API key; legacy Basic-Auth `tokens` are ignored. Tenants live in
+  // an in-memory store for this slice — Npgsql-backed `ITenantStore` lands
+  // later behind the same interface.
+  let multiTenant = argv |> Array.contains "--multi-tenant"
+  let seedTenantSlug =
+    argv
+    |> Array.tryFind (fun a -> a.StartsWith "--seed-tenant=")
+    |> Option.map   (fun a -> a.Substring 14)
+
+  let tenantStore : PulseBoard.Tenancy.ITenantStore =
+    PulseBoard.Tenancy.InMemoryTenantStore() :> _
+  let auditLog : PulseBoard.Audit.IAuditLog =
+    PulseBoard.Audit.InMemoryAuditLog(1024) :> _
 
   // Outbound alert delivery. `--webhook=` / `--slack=` may be repeated on
   // the command line; `PULSE_WEBHOOKS` / `PULSE_SLACK` env vars accept a
@@ -122,18 +139,86 @@ let main argv =
   let wwwroot = resolveWwwRoot ()
   printfn "PulseBoard serving static files from %s" wwwroot
 
+  // Seed a tenant + admin API key when running in multi-tenant mode. Without
+  // a seed the in-memory store is empty and every authenticated route 403s,
+  // which is correct but unhelpful; print a clear warning instead.
+  if multiTenant then
+    match seedTenantSlug with
+    | Some slug ->
+      let t = tenantStore.CreateTenant slug
+      let allScopes =
+        PulseBoard.Tenancy.Scope.Ingest
+        ||| PulseBoard.Tenancy.Scope.Query
+        ||| PulseBoard.Tenancy.Scope.Admin
+      let issued =
+        tenantStore.IssueApiKey(
+          t.id, "seed", PulseBoard.Tenancy.Admin, allScopes)
+      printfn "  Seeded tenant '%s' with admin API key:" slug
+      printfn "    %s" issued.plaintext
+      printfn "    (shown once — pass via 'Authorization: Bearer <key>' or 'X-API-Key: <key>')"
+    | None ->
+      printfn "  [WARN] --multi-tenant set without --seed-tenant=<slug>. No tenants exist; all gated routes will 403."
+
+  // -- Route composition ------------------------------------------------------
+
+  let ingestInner =
+    PulseBoard.Ingest.webPart metricStore logStore hub
+  let queryInner =
+    PulseBoard.Query.webPart  metricStore logStore
+
+  /// GET /api/admin/audit?tail=N — most recent audit events, newest last.
+  /// Capped at 1000 per request; default 100. Multi-tenant only.
+  let adminAudit : WebPart =
+    GET >=> path "/api/admin/audit" >=> (fun ctx -> async {
+      let tail =
+        match ctx.request.queryParam "tail" with
+        | Choice1Of2 v ->
+          match Int32.TryParse v with
+          | true, n when n > 0 -> min n 1000
+          | _ -> 100
+        | _ -> 100
+      let events = auditLog.Tail tail
+      let body =
+        events
+        |> Array.map PulseBoard.Audit.serialize
+        |> String.concat ","
+        |> sprintf "[%s]"
+      return! (OK body >=> Writers.setMimeType "application/json") ctx
+    })
+
   let ingest =
-    // Gate auth on the path itself: when the request isn't aimed at /ingest/*
-    // we let `choose` move on to the next arm (query/static/etc.) instead of
-    // letting Basic-Auth's 401 challenge short-circuit unrelated routes.
     pathStarts "/ingest" >=>
-      PulseBoard.Auth.protect tokens
-        (PulseBoard.Ingest.webPart metricStore logStore hub)
+      (if multiTenant then
+         PulseBoard.Auth.resolveApiKey tenantStore
+           (PulseBoard.Rbac.requireScope auditLog
+              "ingest" PulseBoard.Tenancy.Scope.Ingest ingestInner)
+       else
+         PulseBoard.Auth.protect tokens ingestInner)
+
+  let admin : WebPart =
+    if multiTenant then
+      pathStarts "/api/admin/" >=>
+        PulseBoard.Auth.resolveApiKey tenantStore
+          (PulseBoard.Rbac.requireScope auditLog
+             "admin" PulseBoard.Tenancy.Scope.Admin adminAudit)
+    else
+      // No admin surface in single-tenant mode — fall through to NOT_FOUND.
+      fun _ -> async { return None }
+
+  let query : WebPart =
+    if multiTenant then
+      pathStarts "/api/" >=>
+        PulseBoard.Auth.resolveApiKey tenantStore
+          (PulseBoard.Rbac.requireScope auditLog
+             "query" PulseBoard.Tenancy.Scope.Query queryInner)
+    else
+      queryInner
 
   let app : WebPart =
     choose [
       ingest
-      PulseBoard.Query.webPart  metricStore logStore
+      admin     // must precede `query` because /api/admin/* also matches /api/
+      query
       path "/ws"   >=> handShake (Hub.handler hub)
       GET >=> path "/"      >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
@@ -147,10 +232,12 @@ let main argv =
         homeFolder = Some wwwroot }
 
   printfn "PulseBoard listening on http://127.0.0.1:%d" port
-  if Map.isEmpty tokens then
-    printfn "  [WARN] /ingest/* is OPEN. Provide --tokens-file=<path> or PULSE_TOKENS to require auth."
+  if multiTenant then
+    printfn "  Mode: multi-tenant. /ingest/* requires scope=ingest, /api/* requires scope=query, /api/admin/* requires scope=admin."
+  elif Map.isEmpty tokens then
+    printfn "  Mode: single-tenant. [WARN] /ingest/* is OPEN. Provide --tokens-file=<path> or PULSE_TOKENS to require auth, or --multi-tenant to switch to scoped API keys."
   else
-    printfn "  Auth: %d token(s) loaded; /ingest/* requires HTTP Basic." tokens.Count
+    printfn "  Mode: single-tenant. Auth: %d token(s) loaded; /ingest/* requires HTTP Basic." tokens.Count
   match webhookUrls, slackUrls with
   | [], [] ->
     printfn "  Alert delivery: console + WebSocket hub only (use --webhook=URL / --slack=URL to fan out)."
@@ -162,6 +249,8 @@ let main argv =
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"
+  if multiTenant then
+    printfn "  GET  /api/admin/audit?tail=N        (Admin scope)"
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
 

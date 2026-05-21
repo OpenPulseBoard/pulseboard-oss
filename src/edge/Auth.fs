@@ -64,3 +64,38 @@ let verify (tokens : TokenMap) (username : string, password : string) : bool =
 let protect (tokens : TokenMap) (inner : WebPart) : WebPart =
   if Map.isEmpty tokens then inner
   else authenticateBasic (verify tokens) inner
+
+// -- Scoped API keys (Phase 1) ------------------------------------------------
+
+/// Pull a presented API key out of the request. Accepts either
+/// `X-API-Key: <token>` or `Authorization: Bearer <token>` (case-insensitive).
+let private extractApiKey (req : HttpRequest) : string option =
+  let header (name : string) =
+    req.headers
+    |> Seq.tryFind (fun (k, _) ->
+         String.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+    |> Option.map (snd >> fun v -> v.Trim())
+  match header "x-api-key" with
+  | Some v when v.Length > 0 -> Some v
+  | _ ->
+    match header "authorization" with
+    | Some v when v.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ->
+      let token = v.Substring(7).Trim()
+      if token.Length > 0 then Some token else None
+    | _ -> None
+
+/// WebPart middleware: if a valid API key is presented, attach the resolved
+/// `TenantCtx` to `ctx.userState`. Always falls through to `inner` — actual
+/// gating is the job of `PulseBoard.Rbac.requireScope`. Invalid or absent
+/// keys leave `userState` untouched (so the request reaches a 403 via the
+/// scope check rather than a 401 here).
+let resolveApiKey (store : PulseBoard.Tenancy.ITenantStore)
+                  (inner : WebPart) : WebPart =
+  fun ctx -> async {
+    match extractApiKey ctx.request with
+    | None -> return! inner ctx
+    | Some presented ->
+      match PulseBoard.Tenancy.verify store presented with
+      | None   -> return! inner ctx
+      | Some t -> return! inner (PulseBoard.Rbac.attachTenant ctx t)
+  }
