@@ -681,7 +681,7 @@ let parseLogQl (expr : string) : Result<LogQuery, string> =
         | Result.Error e -> Result.Error e
         | Result.Ok lf   -> Result.Ok { matchers = matchers; lineFilter = lf }
 
-let private logMatches (q : LogQuery) (e : LogEntry) : bool =
+let logMatches (q : LogQuery) (e : LogEntry) : bool =
   let getLabel = function
     | "service" -> e.service
     | "level"   -> e.level

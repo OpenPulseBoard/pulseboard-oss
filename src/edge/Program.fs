@@ -511,57 +511,116 @@ let main argv =
 
   printfn "PulseBoard persisting metric history under %s" dataDir
 
-  // Demo alert rule: cpu > 0.9 sustained for 30s.
-  let consoleSink : PulseBoard.Notify.Sink =
-    fun alert ->
-      printfn "[ALERT] %s metric=%s value=%f at=%d"
-        alert.rule alert.metric alert.value alert.firedAt
+  // -- Alerting pipeline (PLAN.md Phase 5) --------------------------------
+  // 1. Rule engine: persisted PromQL/LogQL rule groups under
+  //    `<dataDir>/rules/<tenant>/<groupId>.json`, evaluator pool with
+  //    group-id shard hashing, `pulse_rule_eval_seconds` metric.
+  // 2. Alertmanager-equivalent: per-tenant config under
+  //    `<dataDir>/routing/<tenant>.json` (route tree, receivers,
+  //    silences, inhibitions, mute time intervals). Routing/grouping/
+  //    dedup happen here.
+  // 3. Notify pipeline reliability: persistent NDJSON outbound queue
+  //    under `<dataDir>/notify/` with retry/backoff and a sibling
+  //    dead-letter file.
+  //
+  // The legacy `--webhook=` / `--slack=` URLs are migrated into the
+  // default routing config as auto-named receivers, so out-of-the-box
+  // behaviour is preserved when no Alertmanager config has been
+  // persisted yet.
 
-  let hubSink : PulseBoard.Notify.Sink =
-    fun alert ->
+  let routingStore : PulseBoard.Routing.IConfigStore =
+    PulseBoard.Routing.FileConfigStore(Path.Combine(dataDir, "routing")) :> _
+  let notifyQueue : PulseBoard.NotifyQueue.INotifyQueue =
+    PulseBoard.NotifyQueue.FileNotifyQueue(Path.Combine(dataDir, "notify")) :> _
+  let ruleStore : PulseBoard.Rules.IRuleStore =
+    PulseBoard.Rules.FileRuleStore(Path.Combine(dataDir, "rules")) :> _
+
+  // Seed default rule group + default routing config (with legacy
+  // webhook/slack URLs lifted into receivers) for single-tenant mode.
+  let bootstrapAlerting (tid : PulseBoard.Tenancy.TenantId) =
+    PulseBoard.Rules.seedIfEmpty ruleStore tid
+    let cfg = routingStore.Get tid
+    let needsSeed =
+      cfg.receivers.Length = 0
+      && (webhookUrls.Length > 0 || slackUrls.Length > 0
+          || cfg.route.receiverId.IsNone)
+    if needsSeed then
+      let mkReceiver i (typ : string) (url : string) : PulseBoard.Routing.Receiver =
+        { id = sprintf "%s-%d" typ i
+          name = sprintf "%s-%d" typ i
+          type_ = typ
+          url = Some url
+          secret = None
+          extra = Map.empty }
+      let receivers =
+        [
+          yield! webhookUrls |> List.mapi (fun i u -> mkReceiver i "webhook" u)
+          yield! slackUrls   |> List.mapi (fun i u -> mkReceiver i "slack" u)
+        ]
+        |> List.toArray
+      let firstId =
+        receivers |> Array.tryHead |> Option.map (fun r -> r.id)
+      let route =
+        { cfg.route with receiverId = firstId }
+      routingStore.Set(tid, { cfg with route = route; receivers = receivers })
+  if not multiTenant then
+    bootstrapAlerting (PulseBoard.Tenancy.TenantId "__local__")
+
+  // Hub sink — broadcasts firing alerts to the WS hub so the live page
+  // and dashboards see them in real time. Schema matches the legacy
+  // `{type:"alert",...}` shape so existing clients keep working.
+  let hubAlertSink (a : PulseBoard.Rules.AlertInstance) =
+    if a.state = PulseBoard.Rules.AlertState.Firing then
       let payload =
-        sprintf """{"type":"alert","rule":%s,"metric":%s,"value":%f,"firedAt":%d}"""
-          (System.Text.Json.JsonSerializer.Serialize alert.rule)
-          (System.Text.Json.JsonSerializer.Serialize alert.metric)
-          alert.value alert.firedAt
+        sprintf """{"type":"alert","rule":%s,"value":%f,"firedAt":%d,"severity":%s,"labels":%s}"""
+          (System.Text.Json.JsonSerializer.Serialize a.ruleName)
+          a.value
+          (a.firedAt |> Option.defaultValue (nowMs ()))
+          (System.Text.Json.JsonSerializer.Serialize (PulseBoard.Rules.severityToStr a.severity))
+          (System.Text.Json.JsonSerializer.Serialize a.labels)
       hub.Publish payload
 
+  let consoleAlertSink (a : PulseBoard.Rules.AlertInstance) =
+    let label = PulseBoard.Rules.alertStateToStr a.state
+    printfn "[ALERT:%s] %s value=%f labels=%A"
+      label a.ruleName a.value a.labels
+
+  let alertingPipeline =
+    PulseBoard.Routing.Pipeline(routingStore, notifyQueue, metricStore)
+
   let alertSink =
-    PulseBoard.Notify.fanout (
-      [ consoleSink; hubSink ]
-      @ (webhookUrls |> List.map PulseBoard.Notify.webhook)
-      @ (slackUrls   |> List.map PulseBoard.Notify.slack))
+    { new PulseBoard.Rules.IAlertSink with
+        member _.OnAlert a =
+          try consoleAlertSink a with _ -> ()
+          try hubAlertSink a    with _ -> ()
+          try alertingPipeline.OnAlert a with ex ->
+            eprintfn "[routing] OnAlert failed: %s" ex.Message }
 
-  let alertEngine = Engine(metricStore, alertSink)
+  let ruleEvaluator =
+    PulseBoard.Rules.Evaluator(metricStore, logStore, ruleStore, alertSink, metricStore)
+  ruleEvaluator.SetTenantsProvider(fun () ->
+    if multiTenant then
+      tenantStore.Tenants() |> Array.map (fun t -> t.id)
+    else
+      [| PulseBoard.Tenancy.TenantId "__local__" |])
+  ruleEvaluator.Start()
 
-  // When multi-tenant + alert-eval quota is set, gate each Tick against
-  // the engine's nominal tenant. Single-tenant mode runs free.
-  match seedTenantSlug with
-  | Some _ when multiTenant && alertBurst > 0.0 ->
-    let gateTenant =
-      // Use whichever tenant exists; for now this engine is global and we
-      // charge the first tenant we find. A future per-tenant Engine fan-out
-      // will key this properly.
-      tenantStore.Tenants()
-      |> Array.tryHead
-      |> Option.map (fun t -> t.id)
-    alertEngine.SetEvalGate(fun () ->
-      match gateTenant with
-      | Some tid ->
-        match limiter.TryAcquire(tid, PulseBoard.Quotas.AlertEval) with
-        | PulseBoard.Quotas.AcquireResult.Ok -> true
-        | _ -> false
-      | None -> true)
-  | _ -> ()
+  // Outbound queue workers.
+  let notifyCts = new CancellationTokenSource()
+  let notifyWorkers =
+    [ for _ in 1 .. 2 ->
+        PulseBoard.NotifyQueue.runWorker
+          notifyQueue (Some metricStore)
+          1_000L 60_000L notifyCts.Token ]
 
-  alertEngine.Add
-    { name = "cpu-high"; metric = "cpu"; cmp = Gt
-      threshold = 0.9; durationMs = 30_000L }
+  let rulesInner       = PulseBoard.Rules.webPart       multiTenant ruleStore ruleEvaluator
+  let routingInner     = PulseBoard.Routing.webPart     multiTenant routingStore
+  let notifyQueueInner = PulseBoard.NotifyQueue.webPart multiTenant notifyQueue
 
-  // Background timer to evaluate rules every 2s.
-  let evalTimer =
-    new Timer((fun _ -> try alertEngine.Tick() with _ -> ()),
-              null, TimeSpan.FromSeconds 2., TimeSpan.FromSeconds 2.)
+  printfn "  Alerting: rule store under %s; routing under %s; queue under %s"
+    (Path.Combine(dataDir, "rules"))
+    (Path.Combine(dataDir, "routing"))
+    (Path.Combine(dataDir, "notify"))
 
   // -- Nightly audit-log S3 export (PLAN.md Phase 1 step 4) ----------------
   // Opt-in: requires both Postgres (durable audit source) and --audit-s3-bucket.
@@ -819,7 +878,7 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -955,7 +1014,9 @@ let main argv =
   printfn "  GET  /                 (dashboard)"
 
   startWebServer config app
-  GC.KeepAlive evalTimer
+  GC.KeepAlive ruleEvaluator
+  GC.KeepAlive notifyWorkers
+  GC.KeepAlive alertingPipeline
   GC.KeepAlive flushTimer
   match auditExportTimer with Some t -> GC.KeepAlive t | None -> ()
   0

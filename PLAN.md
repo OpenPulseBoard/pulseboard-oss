@@ -318,19 +318,84 @@ Today: [Alerts.fs](src/edge/Alerts.fs) evaluates a hardcoded `cpu > 0.9 for 30s`
 rule; [Notify.fs](src/edge/Notify.fs) fans out to webhook + Slack with no
 retry/dedup.
 
-1. **Rule engine.** Persisted PromQL/LogQL rule groups per tenant;
-   evaluator pool with rule-group sharding; expose `pulse_rule_eval_seconds`.
-2. **Alertmanager-equivalent.** Routing tree (matchers → receivers),
-   grouping window, dedup, inhibition, **silences**, time-based mutes.
+1. ✅ **DONE — Rule engine** ([Rules.fs](src/edge/Rules.fs)).
+   Persisted PromQL/LogQL rule groups per tenant under
+   `<dataDir>/rules/<tenant>/<groupId>.json`. Each group has its own
+   `intervalMs`; rules carry `name`, `expr`, `cmp`, `threshold`, `forMs`,
+   `severity` (info/warning/critical/page), `labels`, `annotations`. The
+   evaluator runs a worker pool sized at `max(2, ProcessorCount/2)`,
+   shards groups by `hash(groupId) mod workerCount`, and re-evaluates
+   each group on its own cadence. PromQL rules walk metric series and
+   compare the last sample; LogQL rules count matches in the log ring
+   within `forMs`. Pending→Firing happens after `forMs` of sustained
+   breach; Resolved is emitted automatically when the breach clears.
+   Each rule evaluation is timed and recorded as
+   `pulse_rule_eval_seconds` so PulseBoard can monitor its own alerting
+   loop. REST: `GET/POST /api/rules`, `GET/PUT/DELETE /api/rules/<id>`,
+   `GET /api/alerts` (active fingerprints with state, value, labels).
+   The legacy `Engine` in [Alerts.fs](src/edge/Alerts.fs) and its
+   hard-coded `cpu-high` rule are gone — `seedIfEmpty` plants the same
+   rule into the new store on first boot so out-of-the-box behaviour is
+   preserved.
+
+2. ✅ **DONE — Alertmanager-equivalent** ([Routing.fs](src/edge/Routing.fs)).
+   Per-tenant config persisted as a single JSON document at
+   `<dataDir>/routing/<tenant>.json`. The shape mirrors Prometheus
+   Alertmanager: a recursive `route` tree (matchers with `=`/`!=`/`=~`/
+   `!~`, `groupBy`, `groupWaitMs`, `groupIntervalMs`,
+   `repeatIntervalMs`, `continue`, `muteTimeIds`, child `routes`); an
+   array of `receivers` (`webhook`, `slack`, `hmac_webhook`,
+   `pagerduty`, `opsgenie`, `teams`, `discord`); `silences` (matcher
+   set + `startsAt`/`endsAt` + `createdBy`/`comment`); `inhibitions`
+   (source matchers suppress target matchers when `equal` labels
+   match); and `muteTimes` (weekday bitmask + minute-of-day window in
+   UTC). The `Pipeline` is an `IAlertSink`: on each firing alert it
+   checks silence → mute → inhibition, walks the route tree (respecting
+   `continue`), then bookkeeps a per-`(receiver, groupKey)` group that
+   waits `groupWaitMs` before first send and `groupIntervalMs` between
+   follow-ups; identical fingerprint sets within `repeatIntervalMs` are
+   deduped. A 1-second timer flushes due groups by serialising
+   `{receiver, groupKey, ts, alerts:[...]}` envelopes onto the notify
+   queue. Counters: `pulse_alerts_routed_total`,
+   `pulse_alerts_silenced_total`, `pulse_alerts_muted_total`,
+   `pulse_alerts_inhibited_total`, `pulse_alerts_resolved_total`. REST:
+   `GET/PUT /api/alertmanager/config`, `GET/POST /api/silences`,
+   `DELETE /api/silences/<id>`. Existing `--webhook=` / `--slack=` URLs
+   are lifted into receivers in the seeded default config so single-
+   tenant operators keep the same out-of-the-box delivery.
+
 3. **Receivers.** Beyond today’s Slack/webhook: PagerDuty, Opsgenie,
    Microsoft Teams, Discord, email (SES/SendGrid), SMS (Twilio), Jira
    ticket, HMAC-signed webhooks (SHA-256 over body with per-receiver
-   secret).
+   secret). Receiver records and dispatch headers for `webhook`,
+   `slack`, `hmac_webhook` (`X-PulseBoard-Signature`), `pagerduty`
+   (`Authorization: Token`), and `opsgenie` (`Authorization: GenieKey`)
+   are wired in [NotifyQueue.fs](src/edge/NotifyQueue.fs#L1) — email
+   (SES/SendGrid), SMS (Twilio), and Jira still need driver code.
+
 4. **On-call schedules & escalation policies.** Rotations, overrides,
    handoffs, acknowledgement, re-notify.
-5. **Notify pipeline reliability.** Persistent outbound queue (Postgres
-   or NATS JetStream) with retry / backoff / dead-letter. Today’s
-   fire-and-forget `Notify.postJson` is replaced by enqueue-then-worker.
+
+5. ✅ **DONE — Notify pipeline reliability** ([NotifyQueue.fs](src/edge/NotifyQueue.fs)).
+   Persistent outbound queue at `<dataDir>/notify/queue.ndjson`
+   (append-only NDJSON journal with tombstone lines, compacted when
+   tombstones exceed 50% of journal lines) plus a sibling
+   `dead.ndjson`. Each `OutboundMessage` carries `id`, `tenantId`,
+   `receiverId`, `receiverType`, `url`, `secret`, `body`, `headers`,
+   `attempt`, `maxAttempts` (5), `enqueuedAt`, `nextRunAt`, `lastError`.
+   The store replays the journal on startup so in-flight messages
+   survive crashes. Two dispatch workers per process lease ready
+   messages (a per-store `HashSet<string> leased` prevents double-
+   lease during in-flight HTTP), POST with receiver-specific headers,
+   and on failure schedule a retry at `baseBackoffMs * 2^attempt +
+   rand(0, cap/4)` capped by `maxBackoffMs`; on `maxAttempts` the
+   message is moved to the dead-letter file. Self-metrics:
+   `pulse_notify_enqueued_total`, `pulse_notify_attempts_total`,
+   `pulse_notify_failures_total`. REST: `GET /api/notify/queue`,
+   `GET /api/notify/dlq`, `POST /api/notify/dlq/<id>/replay`,
+   `DELETE /api/notify/dlq/<id>`. The old fire-and-forget
+   `Notify.postJson` path is fully replaced — the `Pipeline` enqueues,
+   workers dispatch.
 
 ---
 
