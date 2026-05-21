@@ -498,7 +498,22 @@ let private updateQuotas (store : ITenantStore) (quotaStore : QuotaStore)
 
 /// Complete admin WebPart. Gating (`Admin` scope) is applied by the caller.
 let webPart (store : ITenantStore) (quotaStore : QuotaStore)
+            (metricBackend : PulseBoard.Storage.IMetricBackend)
             (log : IAuditLog) : WebPart =
+  let showCardinality (tenantId : string) : WebPart =
+    fun ctx -> async {
+      match store.TryGetTenant (TenantId tenantId) with
+      | None -> return! errJson 404 "tenant not found" ctx
+      | Some _ ->
+        let eff = quotaStore.Effective (TenantId tenantId)
+        let json =
+          sprintf """{"seriesCount":%d,"droppedSamples":%d,"cap":%d,"capOverridden":%b}"""
+            (metricBackend.SeriesCount tenantId)
+            (metricBackend.DroppedCardinality tenantId)
+            eff.cardinality
+            eff.cardinalityOverridden
+        return! jsonResp 200 json ctx
+    }
   choose [
     GET  >=> path "/api/admin/audit"        >=> auditTail log
     GET  >=> path "/api/admin/tenants"      >=> listTenants store
@@ -509,6 +524,7 @@ let webPart (store : ITenantStore) (quotaStore : QuotaStore)
     PATCH >=> pathScan "/api/admin/users/%s"           (updateUserRole store log)
     GET  >=> pathScan "/api/admin/tenants/%s/quotas"   (showQuotas store quotaStore)
     PUT  >=> pathScan "/api/admin/tenants/%s/quotas"   (updateQuotas store quotaStore log)
+    GET  >=> pathScan "/api/admin/tenants/%s/cardinality" showCardinality
     NOT_FOUND """{"error":"unknown admin endpoint"}"""
       >=> Writers.setMimeType "application/json"
   ]

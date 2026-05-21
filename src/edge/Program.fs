@@ -309,6 +309,23 @@ let main argv =
   let logStore    = LogStore(capacity = 4096)
   let hub         = Broadcaster()
 
+  // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
+  // seam is still `IStorageClient`; `InProcessStorageClient` now
+  // delegates to these. A future commit can swap any of them for a
+  // Mimir / Loki / Tempo HTTP client without touching receivers.
+  // Cardinality enforcement is wired here: when running multi-tenant
+  // we pass the `Limiter` into the metric backend; it calls
+  // `TryAdmitSeries` per sample and drops samples that would exceed
+  // the per-tenant cap.
+  let metricBackend : PulseBoard.Storage.IMetricBackend =
+    PulseBoard.Storage.EmbeddedMetricBackend(
+      metricStore,
+      (if multiTenant then Some limiter else None)) :> _
+  let logBackend : PulseBoard.Storage.ILogBackend =
+    PulseBoard.Storage.EmbeddedLogBackend(logStore) :> _
+  let traceBackend : PulseBoard.Storage.ITraceBackend =
+    PulseBoard.Storage.EmbeddedTraceBackend() :> _
+
   // Storage client: every receiver path (HTTP ingest, scrape, UDP/TCP
   // listeners) writes through this. In `all` and `storage` it's a thin
   // wrapper around the in-process MetricStore/LogStore/hub; in `edge` it
@@ -321,7 +338,8 @@ let main argv =
           storageEndpoint.Value, edgeSecret.Value)
       c :> _
     | _ ->
-      PulseBoard.Gateway.InProcessStorageClient(metricStore, hub, logStore) :> _
+      PulseBoard.Gateway.InProcessStorageClient(
+        metricBackend, logBackend, traceBackend, hub) :> _
 
   // On-disk segment store: 1 MiB per segment (~65k points per file).
   let segments = new PulseBoard.Segments.SegmentStore(dataDir)
@@ -460,7 +478,7 @@ let main argv =
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore
 
-  let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore auditLog
+  let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend auditLog
 
   // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
   // Tenant-defined scrape targets; background worker fans out HTTP GETs
@@ -602,7 +620,8 @@ let main argv =
     match edgeSecret, role with
     | Some secret, ("storage" | "all") ->
       let inproc =
-        PulseBoard.Gateway.InProcessStorageClient(metricStore, hub, logStore)
+        PulseBoard.Gateway.InProcessStorageClient(
+          metricBackend, logBackend, traceBackend, hub)
         :> PulseBoard.Gateway.IStorageClient
       PulseBoard.Gateway.internalWebPart inproc secret
     | _ -> fun _ -> async { return None }

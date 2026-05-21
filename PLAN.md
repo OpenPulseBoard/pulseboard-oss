@@ -117,12 +117,21 @@ downsampling, no cardinality control, no HA).
 We own: the edge, the control plane, the alert engine, the notify
 pipeline, the UI, billing.
 
-1. **Pluggable storage backend.** Define `IMetricBackend`, `ILogBackend`,
-   `ITraceBackend`. Current segment store becomes the `embedded` impl
-   (used in OSS edition + dev). Mimir/Loki/Tempo clients become the
-   `cloud` impl.
-2. **Cardinality control.** Reject/limit series whose label combinations
-   exceed per-tenant budget; emit `pulse_series_dropped_total`.
+1. **Pluggable storage backend.** ✅ DONE (embedded only). `Storage.fs`
+   defines `IMetricBackend` / `ILogBackend` / `ITraceBackend`; the
+   in-process `Embedded*Backend` impls wrap today's `MetricStore` /
+   `LogStore` / a per-tenant trace counter. `Gateway.InProcessStorageClient`
+   now delegates through these interfaces, so a Mimir / Loki / Tempo
+   client can be dropped in without touching any receiver. (Cloud
+   impls deferred to a follow-up commit.)
+2. **Cardinality control.** ✅ DONE. Receivers (Ingest / PromRemoteWrite /
+   Otlp / PromScrape / Listeners) already call `Limiter.TryAdmitSeries`
+   and surface `rejectedCardinality` to the caller. `EmbeddedMetricBackend`
+   now also enforces admission on the backend layer (defense-in-depth
+   for the edge→storage HTTP path) and tracks a per-tenant
+   `droppedSamples` counter, surfaced at
+   `GET /api/admin/tenants/<id>/cardinality` as
+   `{seriesCount, droppedSamples, cap, capOverridden}`.
 3. **Retention policies.** Per-tenant TTL per pillar; background
    compactor for the embedded backend; lifecycle rules for object-store
    tier.

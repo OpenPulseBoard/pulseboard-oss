@@ -17,6 +17,7 @@ open Suave.RequestErrors
 open Suave.ServerErrors
 open PulseBoard.TimeSeries
 open PulseBoard.Hub
+open PulseBoard.Storage
 
 // Edge / storage split (PLAN.md Phase 2 step 6).
 //
@@ -270,23 +271,30 @@ let private publishLog (hub : Broadcaster) (e : LogEntry) =
       (JsonSerializer.Serialize e.level) (JsonSerializer.Serialize e.message)
   hub.Publish json
 
-type InProcessStorageClient(store : MetricStore, hub : Broadcaster, logStore : LogStore) =
-  let mutable traceCount = 0L
-  member _.TraceCount = Interlocked.Read(&traceCount)
+type InProcessStorageClient(metrics : IMetricBackend,
+                            logs    : ILogBackend,
+                            traces  : ITraceBackend,
+                            hub     : Broadcaster) =
   interface IStorageClient with
-    member _.WriteMetricSamples(_, samples) = async {
+    member _.WriteMetricSamples(tid, samples) = async {
       for s in samples do
         let p : Point = { ts = s.tsMs; value = s.value }
-        store.Record(s.seriesName, p)
-        publishMetric hub s.seriesName p
+        match metrics.Record(tid, s.seriesName, p) with
+        | WriteOutcome.Accepted ->
+          publishMetric hub s.seriesName p
+        | WriteOutcome.DroppedCardinality _ ->
+          // Silent drop — receivers see the request as accepted, the
+          // tenant's drop counter is incremented on the backend, and
+          // the admin cardinality endpoint exposes the running total.
+          ()
     }
-    member _.WriteLogs(_, entries) = async {
+    member _.WriteLogs(tid, entries) = async {
       for e in entries do
-        logStore.Add e
+        logs.Add(tid, e)
         publishLog hub e
     }
-    member _.IncTraceCount(_, count) = async {
-      Interlocked.Add(&traceCount, int64 count) |> ignore
+    member _.IncTraceCount(tid, count) = async {
+      traces.IncCount(tid, count)
     }
 
 
