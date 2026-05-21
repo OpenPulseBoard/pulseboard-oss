@@ -1,0 +1,64 @@
+# PulseBoard front Caddyfile
+#
+# Sits in front of:
+#   * the apex pulseboard.cloud (the --site-only marketing host)
+#   * every <slug>.pulseboard.cloud (per-customer workspace on Fly)
+#
+# Caddy mints certificates on demand. Before issuing for a hostname it
+# asks our provisioner whether that slug is known (`/provision/ask`),
+# so attackers can't make Caddy hammer Let's Encrypt for random
+# subdomains. Once a cert is issued, the request is reverse-proxied to
+# whatever upstream the provisioner returns (`/provision/route`).
+#
+# Environment expected:
+#   PROVISIONER_URL  internal URL of the provisioner (e.g. http://provisioner.flycast:8080)
+#   SITE_URL         internal URL of the --site-only marketing instance
+#
+# Drop this in /etc/caddy/Caddyfile and `caddy reload`.
+
+{
+	# On-demand TLS — Caddy will ask before minting any cert.
+	on_demand_tls {
+		ask {$PROVISIONER_URL}/provision/ask
+	}
+	# Tune ACME contacts so Let's Encrypt has a recovery address.
+	email ops@pulseboard.cloud
+}
+
+# Apex — the marketing site.
+pulseboard.cloud, www.pulseboard.cloud {
+	encode zstd gzip
+	reverse_proxy {$SITE_URL} {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# Every workspace subdomain — Caddy looks up the upstream dynamically.
+*.pulseboard.cloud {
+	tls {
+		on_demand
+	}
+	encode zstd gzip
+
+	# WebSocket upgrade for the live dashboard hub (/ws).
+	@ws {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+
+	# Dynamic upstreams from the provisioner. Caddy re-queries on every
+	# request; cache it with a small TTL if traffic warrants.
+	reverse_proxy {
+		dynamic http {
+			url {$PROVISIONER_URL}/provision/route?domain={http.request.host}
+			cache_duration 30s
+			max_cached_destinations 1024
+		}
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		# WebSocket upgrade headers pass through automatically.
+	}
+}

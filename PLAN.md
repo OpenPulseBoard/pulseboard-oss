@@ -925,7 +925,7 @@ Pick 2-3 to over-invest in vs. competing flat.
 
 ---
 
-## Phase 9 — Hosted product / provisioner (planned, not built)
+## Phase 9 — Hosted product / provisioner
 
 User feedback after Phase 8 #6 surfaced a real conceptual gap: the
 same binary today is trying to be both the *public marketing site* at
@@ -941,40 +941,58 @@ The hosted shape we want:
 visitor → pulseboard.cloud (marketing only, no /app or /admin)
            │ POST /api/signup
            ▼
-        provisioner ──► allocates slug, DNS, key, workspace runtime
+        provisioner ──► allocates slug, spawns Fly Machine, bootstraps key
            │
            ▼
         https://acme-7f3a.pulseboard.cloud (workspace: /app + /admin + /ingest)
 ```
 
-Three pieces of work:
+Picked stack: **Fly Machines** (one app per customer, `pb-<slug>`) +
+**Caddy on-demand TLS** in front (`*.pulseboard.cloud` with an
+`ask` endpoint to the provisioner). See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §6 for the full picture.
 
-1. **`--site-only` mode** for the existing binary. Serves only the
-   marketing routes (`/`, `/docs`, `/pricing`, `/signup`, `/signin`)
-   and forwards `POST /api/signup` to a configurable provisioner URL.
-   Strips all workspace / data-plane routes. This is the smallest
-   change and unblocks deploying `pulseboard.cloud` separately from
-   any tenant runtime.
+Three pieces of work — first cut shipped:
 
-2. **Provisioner service.** Receives signup requests, allocates a
-   tenant slug + suffix (`acme-7f3a`), creates DNS, ensures a
-   workspace runtime exists for that slug, returns `{url, apiKey}`.
-   Stores `(slug, tenantId, workspaceUrl, createdAt)` in a central
-   Postgres. Open choices: orchestrator (Kubernetes / Fly Machines /
-   Nomad / systemd-with-control-plane), DNS strategy (wildcard cert +
-   API-driven A records vs. on-demand TLS), runtime topology
-   (process-per-tenant vs. shared multi-tenant edges with hostname
-   routing). All four scenarios are documented in
-   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §6.
+1. **`--site-only` mode** — DONE. `src/edge/SiteOnly.fs`. Serves only
+   marketing routes; `POST /api/signup` is proxied to
+   `--provisioner-url=…`. No tenant store, no quotas, no ingest /
+   query / admin routes.
 
-3. **Workspace bootstrap.** When the provisioner spawns / assigns a
-   workspace, seed its tenant store with the first key, owner email,
-   and Free-plan caps so the user lands in a working dashboard with
-   no manual setup.
+2. **Provisioner service** — DONE (first cut). `src/edge/Provisioner.fs`.
+   Run with `--mode=provisioner`. Endpoints:
+   - `POST /api/provision` — allocates slug, calls Fly Machines API,
+     bootstraps first key on the new workspace, returns
+     `{slug, url, apiKey, tenantId}`.
+   - `GET /provision/ask?domain=<host>` — 200/404 for Caddy on-demand TLS.
+   - `GET /provision/route?domain=<host>` — upstream lookup for Caddy
+     dynamic reverse_proxy.
 
-Deliberately punted until we pick an orchestrator: actual provisioner
-implementation, the DNS automation, billing/Stripe linkage to plan
-upgrades on hosted, and the multi-region / data-residency story.
+   `IFlyClient` has both a real `HttpFlyClient` (api.machines.dev/v1)
+   and a `DryRunFlyClient` that logs intent and returns synthetic
+   IDs, so the end-to-end flow is testable locally without Fly
+   credentials.
+
+3. **Workspace bootstrap** — first cut works (provisioner POSTs to the
+   new machine's own `/api/signup` to mint the first key). Hardening
+   TODO before production:
+   - Single-use bootstrap secret passed via Fly env, gating
+     `/api/signup` until the first key is issued.
+   - `bootstrapped=true` flag flipped after first call so subsequent
+     `/api/signup` requires operator action.
+
+Still to do:
+
+- **`infra/Caddyfile`** — DONE. Wildcard TLS with `ask` + dynamic
+  upstreams.
+- Postgres-backed `IWorkspaceRegistry` (in-memory today; restarting
+  the provisioner forgets allocations).
+- Workspace teardown (cancel-on-failed-payment, evict-on-inactive,
+  scale-to-zero behaviour).
+- Real Stripe linkage on signup (plan selection, payment method).
+- Multi-region: today every workspace lands in one Fly region
+  (`--fly-region=`); customer-chosen region needs marketing-side UI.
+- Hardening of the bootstrap call (item 3 above).
 
 ---
 

@@ -34,6 +34,62 @@ let main argv =
       | _ -> 8080
     | None -> 8080
 
+  // -- Phase 9 early dispatch: site-only and provisioner modes ------------
+  // Both are completely separate from the full multi-tenant edge below.
+  // They MUST run before we start allocating tenant stores / quotas /
+  // ingest state, because they don't need any of it.
+  let wwwrootEarly = resolveWwwRoot ()
+  let argValueEarly (prefix : string) =
+    argv
+    |> Array.tryFind (fun a -> a.StartsWith prefix)
+    |> Option.map (fun a -> a.Substring prefix.Length)
+  let envOrEarly (envName : string) (cli : string option) =
+    match cli with
+    | Some v -> Some v
+    | None ->
+      let v = Environment.GetEnvironmentVariable envName
+      if String.IsNullOrWhiteSpace v then None else Some v
+
+  if argv |> Array.contains "--site-only" then
+    let provUrl = envOrEarly "PULSE_PROVISIONER_URL" (argValueEarly "--provisioner-url=")
+    PulseBoard.SiteOnly.run port wwwrootEarly provUrl
+    exit 0
+
+  if argv |> Array.exists (fun a -> a = "--mode=provisioner") then
+    let rootDomain =
+      envOrEarly "PULSE_ROOT_DOMAIN" (argValueEarly "--root-domain=")
+      |> Option.defaultValue "pulseboard.cloud"
+    let flyToken = envOrEarly "FLY_API_TOKEN"  (argValueEarly "--fly-token=")
+    let flyOrg   = envOrEarly "FLY_ORG_SLUG"   (argValueEarly "--fly-org=")
+    let dryRun   = argv |> Array.contains "--dry-run"
+    let image    =
+      envOrEarly "PULSE_WORKSPACE_IMAGE" (argValueEarly "--workspace-image=")
+      |> Option.defaultValue "registry.fly.io/pulseboard:latest"
+    let region   =
+      envOrEarly "PULSE_FLY_REGION" (argValueEarly "--fly-region=")
+      |> Option.defaultValue "iad"
+    let fly : PulseBoard.Provisioner.IFlyClient =
+      if dryRun then PulseBoard.Provisioner.DryRunFlyClient() :> _
+      else
+        match flyToken, flyOrg with
+        | Some t, Some o -> new PulseBoard.Provisioner.HttpFlyClient(t, o) :> _
+        | _ ->
+          eprintfn "  [ERROR] --mode=provisioner without --dry-run requires FLY_API_TOKEN and FLY_ORG_SLUG (or --fly-token=/--fly-org=)"
+          exit 2
+    let cfg : PulseBoard.Provisioner.ProvisionerConfig =
+      { fly           = fly
+        dryRun        = dryRun
+        registry      = PulseBoard.Provisioner.InMemoryWorkspaceRegistry() :> PulseBoard.Provisioner.IWorkspaceRegistry
+        rootDomain    = rootDomain.ToLowerInvariant()
+        machineConfig =
+          { image     = image
+            region    = region
+            envExtra  = Map.empty
+            sizeCpus  = 1
+            sizeMemMb = 256 } }
+    PulseBoard.Provisioner.run port cfg
+    exit 0
+
   let dataDir =
     match argv |> Array.tryFind (fun a -> a.StartsWith "--data=") with
     | Some s -> s.Substring 7

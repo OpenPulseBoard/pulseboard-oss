@@ -75,18 +75,16 @@ PULSE_DATA_DIR=/var/lib/pulseboard \
 marketing site and the data plane share the same host. This is what we run in
 CI and the smoke tests.
 
-### 2.4 Hosted product (the target architecture)
+### 2.4 Hosted product (Fly Machines + Caddy)
 
-> **Status:** designed but not built. See `PLAN.md` Phase 9.
-
-Three logical tiers, each a deployment of the same binary or a thin extra
-service:
+Three logical tiers, all from the same binary. See §6 for the full
+details.
 
 | Tier | Binary | Hostname | What it does |
 | --- | --- | --- | --- |
-| Marketing | `pulseboard --site-only` *(flag not yet implemented)* | `pulseboard.cloud` | Serves only `/`, `/docs`, `/pricing`, `/signup`, `/signin`. Proxies `POST /api/signup` to the provisioner. |
-| Provisioner | new service | `provisioner.internal` | Allocates a subdomain, creates DNS, starts (or assigns) a workspace runtime, returns `{ url, apiKey }`. |
-| Workspace | `pulseboard --multi-tenant` (or single-tenant per pod) | `<slug>.pulseboard.cloud` | Real ingest + dashboard + admin for one (or many) tenants. |
+| Marketing | `pulseboard --site-only` | `pulseboard.cloud` | Serves only `/`, `/docs`, `/pricing`, `/signup`, `/signin`. Proxies `POST /api/signup` to the provisioner. |
+| Provisioner | `pulseboard --mode=provisioner` | internal (e.g. `provisioner.flycast`) | Allocates a subdomain, spawns a Fly Machine, bootstraps the first API key, answers Caddy's on-demand TLS questions. |
+| Workspace | `pulseboard --multi-tenant` (one Fly app per customer) | `<slug>.pulseboard.cloud` | Real ingest + dashboard + admin. |
 
 ---
 
@@ -182,34 +180,132 @@ docker run --rm -p 8080:8080 -v pulse-data:/data \
 
 ---
 
-## 6. Provisioning per-customer subdomains (planned)
+## 6. Provisioning per-customer subdomains
 
-This is the Phase 9 work. The intended flow:
+Implemented on **Fly Machines** + **Caddy on-demand TLS**. Three moving
+pieces, all from the same binary:
 
-1. Visitor signs up on `https://pulseboard.cloud/signup`.
-2. The marketing host proxies `POST /api/signup` to the provisioner.
-3. The provisioner:
-   - Allocates a slug (`acme-7f3a`) and registers DNS
-     (`acme-7f3a.pulseboard.cloud` → workspace pool ingress).
-   - Creates a tenant row in the central Postgres.
-   - Issues a first API key.
-   - Returns `{ url: "https://acme-7f3a.pulseboard.cloud", apiKey: "pk_…" }`.
-4. The marketing `signup.html` redirects the user to the returned `url/app`
-   with the key pre-stashed.
+```
+                  pulseboard.cloud (Caddy in front)
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+     pulseboard --site-only    pulseboard --mode=provisioner
+     (apex marketing host)     (slug → Fly Machine registry)
+              │                       │ POST Fly Machines API
+              │ POST /api/signup      ▼
+              └──── proxied ────►  spawns pb-<slug> Fly app
+                                  serving multi-tenant edge
+                                  on https://pb-<slug>.fly.dev
+```
 
-Open design choices (see `PLAN.md` Phase 9) we still need to commit to:
+### 6.1 Marketing host — `pulseboard --site-only`
 
-- **Workspace runtime:** dedicated process per tenant (one container per
-  customer) vs. shared multi-tenant edges with hostname routing vs. a
-  pool of workers picked by a router.
-- **Orchestrator:** Kubernetes, Fly Machines, Nomad, plain systemd + a
-  control plane daemon, or "all customers on one big multi-tenant
-  process and route by Bearer". Each has very different cost and
-  isolation properties.
-- **DNS:** wildcard cert + dynamic A records via the cloud DNS API, or
-  per-customer Caddy on-demand TLS.
-- **Storage:** shared Postgres with tenant column (cheap, what we have
-  today) vs. one Postgres per workspace (expensive, fully isolated).
+Serves only `/`, `/home`, `/docs`, `/pricing`, `/signup`, `/signin`. Has
+no tenant store, no quota state, no ingest or query routes. POST
+`/api/signup` is forwarded verbatim to `--provisioner-url=…`.
 
-The marketing site, the dashboard, and the data plane do **not** change in
-any of these scenarios — only the deployment shape around them does.
+```bash
+dotnet PulseBoard.dll --site-only \
+  --port=8080 \
+  --provisioner-url=http://provisioner.internal:8080
+# or: PULSE_PROVISIONER_URL=http://… dotnet PulseBoard.dll --site-only
+```
+
+If `--provisioner-url` is not set the static pages still work; signup
+attempts return HTTP 503 with a clear error.
+
+### 6.2 Provisioner — `pulseboard --mode=provisioner`
+
+Three endpoints:
+
+| Endpoint | Caller | Purpose |
+| --- | --- | --- |
+| `POST /api/provision` | marketing host | allocates slug, spawns Fly Machine, bootstraps first key, returns `{slug, url, apiKey, tenantId, apiKeyId}` |
+| `GET /provision/ask?domain=<host>` | Caddy on-demand TLS | 200 if slug is known, 404 otherwise (gates cert issuance) |
+| `GET /provision/route?domain=<host>` | Caddy dynamic upstreams | returns `{"upstream":"https://pb-<slug>.fly.dev"}` |
+
+Flags / env:
+
+| Flag | Env | Default |
+| --- | --- | --- |
+| `--root-domain=` | `PULSE_ROOT_DOMAIN` | `pulseboard.cloud` |
+| `--fly-token=` | `FLY_API_TOKEN` | *(required unless `--dry-run`)* |
+| `--fly-org=` | `FLY_ORG_SLUG` | *(required unless `--dry-run`)* |
+| `--fly-region=` | `PULSE_FLY_REGION` | `iad` |
+| `--workspace-image=` | `PULSE_WORKSPACE_IMAGE` | `registry.fly.io/pulseboard:latest` |
+| `--dry-run` | — | when set, logs intent and returns synthetic IDs without calling Fly. Useful for local smoke tests. |
+
+Run live:
+
+```bash
+FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard \
+  dotnet PulseBoard.dll --mode=provisioner --port=8080 \
+    --root-domain=pulseboard.cloud \
+    --workspace-image=registry.fly.io/pulseboard:latest
+```
+
+Run dry (no credentials needed, useful for testing the marketing flow):
+
+```bash
+dotnet PulseBoard.dll --mode=provisioner --dry-run --port=19001
+# In another shell:
+dotnet PulseBoard.dll --site-only --port=19002 \
+  --provisioner-url=http://127.0.0.1:19001
+curl -X POST http://127.0.0.1:19002/api/signup \
+  -H 'content-type: application/json' \
+  -d '{"slug":"acme","email":"alice@acme.co"}'
+# {"slug":"acme","url":"https://acme.pulseboard.cloud",
+#  "tenantId":"tenant_…","apiKey":"pk_…","apiKeyId":"key_…"}
+```
+
+The registry is in-memory in the first cut; restarting the provisioner
+forgets allocations. A Postgres-backed `IWorkspaceRegistry` is straightforward
+to add (interface is in `Provisioner.fs`); not in this slice.
+
+### 6.3 Caddy in front — on-demand TLS for `*.pulseboard.cloud`
+
+Use [`infra/Caddyfile`](../infra/Caddyfile) as the starting point. Key
+ideas:
+
+- `on_demand_tls { ask {$PROVISIONER_URL}/provision/ask }` makes Caddy
+  query the provisioner before minting a cert. Unknown subdomains
+  return 404 and Caddy declines — Let's Encrypt is never hammered for
+  random hostnames.
+- `reverse_proxy { dynamic http url {$PROVISIONER_URL}/provision/route?domain={http.request.host} }`
+  resolves the upstream lazily on every request (cached 30 s).
+- The apex (`pulseboard.cloud`) is a normal `reverse_proxy` to the
+  `--site-only` host. Two env vars wire it together:
+
+```bash
+PROVISIONER_URL=http://provisioner.flycast:8080 \
+SITE_URL=http://site.flycast:8080 \
+  caddy run --config /etc/caddy/Caddyfile
+```
+
+### 6.4 Workspace bootstrap — security note
+
+After the Fly Machine boots, the provisioner makes one `POST /api/signup`
+to it to mint the first key. There is a small window between machine
+boot and that POST during which someone else could race the call.
+Hardening to do **before** running this in production:
+
+1. Pass a single-use bootstrap secret to the new Machine via env, and
+   gate `/api/signup` behind `X-Bootstrap-Token: <secret>` until the
+   first key is issued.
+2. Flip a "bootstrapped=true" flag on the workspace so subsequent
+   `/api/signup` calls require operator action.
+
+Both are small additions in `Signup.fs` — punted to keep this slice
+focused on the provisioning plumbing.
+
+### 6.5 What still has to be designed
+
+- **Workspace teardown** (cancellation, scale-to-zero, evict-on-inactive).
+- **DNS automation** if you don't use Fly's automatic `<app>.fly.dev`
+  hostnames (e.g. you want every customer on a Route53 wildcard record
+  pointing at a single Caddy box).
+- **Postgres-backed registry** so the slug→app mapping survives a
+  provisioner restart.
+- **Bootstrap-secret hardening** described in 6.4.
+
