@@ -1015,13 +1015,24 @@ let main argv =
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       path "/ws"   >=> handShake (Hub.handler hub)
-      GET >=> path "/"      >=> Files.browseFile wwwroot "index.html"
-      GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
-      GET >=> path "/admin"      >=> Files.browseFile wwwroot "admin.html"
-      GET >=> path "/admin.html" >=> Files.browseFile wwwroot "admin.html"
-      GET >=> path "/pricing"     >=> Files.browseFile wwwroot "pricing.html"
+      GET >=> path "/"            >=> Files.browseFile wwwroot "home.html"
+      GET >=> path "/index.html"   >=> Files.browseFile wwwroot "home.html"
+      GET >=> path "/home"         >=> Files.browseFile wwwroot "home.html"
+      GET >=> path "/docs"         >=> Files.browseFile wwwroot "docs.html"
+      GET >=> path "/docs.html"    >=> Files.browseFile wwwroot "docs.html"
+      GET >=> path "/signup"       >=> Files.browseFile wwwroot "signup.html"
+      GET >=> path "/signup.html"  >=> Files.browseFile wwwroot "signup.html"
+      GET >=> path "/onboard"      >=> Files.browseFile wwwroot "signup.html"
+      GET >=> path "/signin"       >=> Files.browseFile wwwroot "signin.html"
+      GET >=> path "/signin.html"  >=> Files.browseFile wwwroot "signin.html"
+      GET >=> path "/app"          >=> Files.browseFile wwwroot "index.html"
+      GET >=> path "/app.html"     >=> Files.browseFile wwwroot "index.html"
+      GET >=> path "/dashboard"    >=> Files.browseFile wwwroot "index.html"
+      GET >=> path "/admin"        >=> Files.browseFile wwwroot "admin.html"
+      GET >=> path "/admin.html"   >=> Files.browseFile wwwroot "admin.html"
+      GET >=> path "/pricing"      >=> Files.browseFile wwwroot "pricing.html"
       GET >=> path "/pricing.html" >=> Files.browseFile wwwroot "pricing.html"
-      GET >=> path "/live"       >=> Files.browseFile wwwroot "live.html"
+      GET >=> path "/live"         >=> Files.browseFile wwwroot "live.html"
       GET >=> Files.browse wwwroot
       NOT_FOUND "Not found."
     ]
@@ -1103,6 +1114,13 @@ let main argv =
     printfn "  POST /api/pricing/estimate             (public, JSON usage map)"
     printfn "  GET  /pricing                          (public calculator UI)"
     printfn "  GET  /admin                            (Admin UI)"
+    printfn ""
+    printfn "Public website:"
+    printfn "  GET  /                                 (landing page)"
+    printfn "  GET  /docs                             (documentation)"
+    printfn "  GET  /signup                           (sign-up form)"
+    printfn "  GET  /signin                           (sign-in form)"
+    printfn "  GET  /app                              (dashboard SPA)"
   match oidcConfig with
   | Some cfg ->
     printfn "  OIDC SSO: issuer=%s  client=%s  tenant=%s  cookie.secure=%b"

@@ -894,6 +894,35 @@ Pick 2-3 to over-invest in vs. competing flat.
    should I pick?" recommendation column, and signed/cacheable
    `/api/pricing` so the public calculator can be served from a CDN.
 
+6. **Public product website.** ✅ **DONE.** The edge now ships a
+   complete public marketing site served from the same binary, with no
+   external dependencies. Four new static pages live under
+   [src/edge/wwwroot/](src/edge/wwwroot/): `home.html` (landing — hero,
+   three moat-aligned feature cards, 30-second ingest snippet, three-
+   plan pricing teaser, footer with full nav), `docs.html` (single-page
+   documentation with sticky table of contents covering Quickstart,
+   Auth, Ingest, OTLP/Prom/Loki, Query, Alerts, AI assist, Cost
+   transparency, Pricing, Admin/RBAC, Self-hosting, License),
+   `signup.html` (POSTs to `/api/signup`, then displays the one-time
+   API key + stashes it in `sessionStorage` under `pb.bearer` so the
+   dashboard picks it up automatically), and `signin.html` (paste-key
+   form that probes `/auth/me` to validate before redirecting to
+   `/admin`). The existing `pricing.html` was retrofitted with the
+   shared top-nav so all four pages share the same visual language.
+   Routes were rearranged in [src/edge/Program.fs](src/edge/Program.fs):
+   `/` now serves the marketing landing (previously the dashboard) and
+   the dashboard SPA moved to `/app` (with `/dashboard` and `/app.html`
+   aliases). The `wizardUrl` returned by `/api/signup`
+   (`/onboard?key=...&tenant=...`) now resolves to a real file
+   (signup.html serving as the onboarding success view). Smoke-tested
+   with all eight routes (`/`, `/docs`, `/signup`, `/signin`,
+   `/pricing`, `/app`, `/admin`, `/onboard`) returning HTTP 200.
+   Deliberately deferred: separate `examples.html` page (currently
+   inlined into the landing + docs); a `/changelog` page wired to git
+   tags; per-page Open Graph metadata for link previews; and a CDN
+   asset pipeline for `home.html`/`docs.html` so they can be served
+   independently of the edge.
+
 ---
 
 ## Relevant existing code (informs Phase 1-2 hand-off)

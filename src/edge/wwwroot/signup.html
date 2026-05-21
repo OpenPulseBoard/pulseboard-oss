@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PulseBoard — Sign up</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #1f242d; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #5ec8ff; --accent-2: #b388ff;
+    --ok: #5cd97a; --err: #f25f5c;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+                font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+                Roboto, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: #0a0d12; border: 1px solid var(--border); border-radius: 6px;
+        padding: .8rem 1rem; overflow-x: auto; font-size: 13px; }
+  header.nav {
+    display: flex; align-items: center; gap: 18px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+  }
+  header.nav .brand { font: 600 15px/1 ui-monospace, monospace;
+                       color: var(--accent); letter-spacing: 2px; }
+  header.nav nav { display: flex; gap: 4px; }
+  header.nav nav a { color: var(--muted); padding: 6px 12px; border-radius: 4px; }
+  header.nav nav a:hover { color: var(--fg); background: var(--panel-2); text-decoration: none; }
+  header.nav .grow { flex: 1; }
+  .wrap { max-width: 520px; margin: 60px auto; padding: 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: 8px; padding: 1.6rem 1.8rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  .lede { color: var(--muted); margin: 0 0 1.5rem; }
+  label { display: block; margin: .8rem 0 .25rem; font-size: 13px; color: var(--muted); }
+  input[type=text], input[type=email] {
+    width: 100%; padding: .55rem .7rem; background: #0a0d12;
+    color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
+    font: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    margin-top: 1.2rem; padding: .65rem 1.1rem; width: 100%;
+    background: var(--accent); color: #04121d; border: 0;
+    border-radius: 4px; font: 600 14px/1 inherit; cursor: pointer;
+  }
+  button:hover { background: #8ad8ff; }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+  .alt { margin-top: 1rem; text-align: center; color: var(--muted); font-size: 13px; }
+  .ok  { color: var(--ok); }
+  .err { color: var(--err); margin-top: 1rem; }
+  .key-display { background: #0a0d12; border: 1px solid var(--border);
+                 border-radius: 4px; padding: .6rem .8rem; font-size: 12px;
+                 word-break: break-all; user-select: all; margin: .4rem 0; }
+  .warn { color: var(--err); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <a href="/" class="brand">PULSEBOARD</a>
+  <nav>
+    <a href="/docs">Docs</a>
+    <a href="/pricing">Pricing</a>
+  </nav>
+  <span class="grow"></span>
+  <a href="/signin">Already have a key?</a>
+</header>
+
+<div class="wrap">
+
+<div class="card" id="formCard">
+  <h1>Create your tenant</h1>
+  <p class="lede">Free plan. No card. One API key, issued once.</p>
+
+  <form id="f">
+    <label for="slug">Workspace slug</label>
+    <input id="slug" name="slug" type="text" required minlength="2" maxlength="48"
+           autocomplete="organization" pattern="[a-z0-9][a-z0-9-]{1,46}[a-z0-9]"
+           placeholder="acme" />
+
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required
+           autocomplete="email" placeholder="you@acme.com" />
+
+    <button type="submit" id="submitBtn">Create tenant →</button>
+  </form>
+  <div class="err" id="err" style="display:none;"></div>
+
+  <div class="alt">
+    Have an API key? <a href="/signin">Sign in →</a>
+  </div>
+</div>
+
+<div class="card" id="successCard" style="display:none;">
+  <h1 class="ok">Tenant created ✓</h1>
+  <p class="lede">Save this key now — it will <strong>never</strong> be shown again.</p>
+
+  <label>Tenant ID</label>
+  <div class="key-display" id="outTid"></div>
+
+  <label>API key (Bearer)</label>
+  <div class="key-display" id="outKey"></div>
+
+  <p class="warn">⚠ Plaintext key is shown once and cannot be recovered. Store it in a secret manager.</p>
+
+  <button id="continueBtn">Continue to dashboard →</button>
+
+  <div class="alt">
+    Or: <a href="/docs#quickstart">read the quickstart</a>
+  </div>
+</div>
+
+</div>
+
+<script>
+// Pre-fill slug/email from query (?slug=&email=) — useful for marketing links.
+(function () {
+  const qp = new URLSearchParams(location.search);
+  for (const k of ['slug','email']) {
+    const v = qp.get(k); if (v) document.getElementById(k).value = v;
+  }
+})();
+
+const form = document.getElementById('f');
+const errEl = document.getElementById('err');
+const btn   = document.getElementById('submitBtn');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errEl.style.display = 'none';
+  btn.disabled = true; btn.textContent = 'Creating…';
+  const body = {
+    slug:  document.getElementById('slug').value.trim().toLowerCase(),
+    email: document.getElementById('email').value.trim(),
+  };
+  try {
+    const r = await fetch('/api/signup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { throw new Error(j.error || ('signup failed: HTTP ' + r.status)); }
+    document.getElementById('outTid').textContent = j.tenantId;
+    document.getElementById('outKey').textContent = j.apiKey;
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('successCard').style.display = 'block';
+    // Stash the key for the dashboard.
+    sessionStorage.setItem('pb.bearer', j.apiKey);
+    sessionStorage.setItem('pb.tenantId', j.tenantId);
+    document.getElementById('continueBtn').onclick = () => {
+      location.href = '/admin';
+    };
+  } catch (e) {
+    errEl.textContent = e.message || String(e);
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Create tenant →';
+  }
+});
+</script>
+
+</body>
+</html>
