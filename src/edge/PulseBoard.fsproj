@@ -27,6 +27,7 @@
     <Compile Include="PromRemoteWrite.fs" />
     <Compile Include="Otlp.fs" />
     <Compile Include="LokiPush.fs" />
+    <Compile Include="PromScrape.fs" />
     <Compile Include="Query.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />

@@ -409,6 +409,30 @@ let main argv =
 
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore auditLog
 
+  // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
+  // Tenant-defined scrape targets; background worker fans out HTTP GETs
+  // and writes through the same MetricStore as remote_write.
+  let scrapeRepo : PulseBoard.PromScrape.IScrapeRepo =
+    PulseBoard.PromScrape.InMemoryScrapeRepo() :> _
+  let scrapeHttp =
+    let h = new System.Net.Http.HttpClient()
+    h.Timeout <- TimeSpan.FromSeconds 10.0
+    h
+  let scraper =
+    if multiTenant then
+      let deps : PulseBoard.PromScrape.ScrapeDeps =
+        { repo       = scrapeRepo
+          store      = metricStore
+          hub        = hub
+          quotas     = ingestQuotas
+          httpClient = scrapeHttp }
+      let s = new PulseBoard.PromScrape.Scraper(deps)
+      s.Start()
+      Some s
+    else None
+  let scrapeAdminInner =
+    PulseBoard.PromScrape.adminWebPart scrapeRepo tenantStore auditLog
+
   // Build OIDC routes + session-resolving middleware (only if configured).
   let oidcRoutes, resolveSession =
     match oidcConfig with
@@ -470,13 +494,17 @@ let main argv =
   let lokiPush : WebPart =
     POST >=> path "/loki/api/v1/push" >=> protectIngest lokiPushInner
 
+  // Scrape admin endpoints share the admin scope gate; prepend them in
+  // the choose so they win before Admin.webPart's catch-all NOT_FOUND.
+  let adminAll = choose [ scrapeAdminInner; adminInner ]
+
   let admin : WebPart =
     if multiTenant then
       pathStarts "/api/admin/" >=>
         resolveSession (
           PulseBoard.Auth.resolveApiKey tenantStore
             (PulseBoard.Rbac.requireScope auditLog
-               "admin" PulseBoard.Tenancy.Scope.Admin adminInner))
+               "admin" PulseBoard.Tenancy.Scope.Admin adminAll))
     else
       // No admin surface in single-tenant mode — fall through to NOT_FOUND.
       fun _ -> async { return None }
@@ -558,6 +586,10 @@ let main argv =
     printfn "  PATCH /api/admin/users/<id>           (Admin scope, JSON {role})"
     printfn "  GET  /api/admin/tenants/<id>/quotas   (Admin scope)"
     printfn "  PUT  /api/admin/tenants/<id>/quotas   (Admin scope, JSON per-kind overrides)"
+    printfn "  GET  /api/admin/tenants/<id>/scrape-targets  (Admin scope)"
+    printfn "  POST /api/admin/tenants/<id>/scrape-targets  (Admin scope, JSON {url,intervalSec?,labels?,bearerToken?})"
+    printfn "  GET  /api/admin/scrape-targets/<id>          (Admin scope)"
+    printfn "  DELETE /api/admin/scrape-targets/<id>        (Admin scope)"
     printfn "  GET  /admin                            (Admin UI)"
   match oidcConfig with
   | Some cfg ->
