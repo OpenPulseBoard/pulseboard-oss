@@ -222,7 +222,93 @@ pipeline, the UI, billing.
    selector (5m / 15m / 1h / 6h), Cmd/Ctrl-Enter to run, results render
    as uPlot chart or log list depending on result shape. Live-tail
    beyond static range still uses the legacy [`/live`](src/edge/wwwroot/live.html) WS view.
-4. **Service map / RUM stubs** once traces land.
+4. **Service map / RUM stubs** ✅ DONE.
+   *Spans.* [src/edge/Spans.fs](src/edge/Spans.fs) introduces a first-class
+   `Span` model (32-char hex `traceId`, 16-char hex `spanId`,
+   `parentSpanId`, `service`, `operation`, `kind`, `startMs`/`endMs`,
+   OTLP status, attribute map) and an `InMemorySpanStore` — a
+   per-tenant bounded ring (default 10 000 spans, oldest dropped in
+   10 % bulk evictions to amortise) that snapshots under a per-tenant
+   lock so reads never block ingest. We pointedly do *not* introduce a
+   new disk format here: production deployments still send raw OTLP to
+   Tempo via the existing `--tempo-url=` passthrough; this store is a
+   hot cache that powers the UI between restarts. The store also
+   exports `PruneOlderThan` so the existing retention compactor can
+   evict on the same schedule as metrics/logs.
+   *OTLP decoder.* [src/edge/Otlp.fs](src/edge/Otlp.fs) gains a real
+   span decoder (`decodeSpans`) that walks the `ExportTraceServiceRequest`
+   protobuf tree (`ResourceSpans` → `ScopeSpans` → `Span`), hex-encodes
+   the 16-byte `traceId` / 8-byte `spanId` / `parentSpanId`, lifts
+   `service.name` from resource attributes (default `"unknown"`),
+   converts `fixed64` nanosecond timestamps to milliseconds, and
+   merges resource + span attributes into the span's attribute map.
+   The `traces` handler keeps its existing two duties — increment
+   `IStorageClient.IncTraceCount` for billing and (optionally) forward
+   the raw protobuf to Tempo — and now also calls
+   `ISpanStore.Ingest` so the UI sees the same data the upstream does.
+   A `try/with` falls back to the legacy span counter if structured
+   decoding ever fails, so billing keeps working on a partially
+   corrupt payload.
+   *Service map aggregation.* [src/edge/Spans.fs](src/edge/Spans.fs)
+   builds the map at query time from a span snapshot: index spans by
+   `(traceId, spanId)`, walk each span, accumulate per-service latency
+   samples + error counts (nodes), and follow each `parentSpanId` to a
+   parent span — when parent and child live in different services we
+   credit an edge `parent.service → child.service` with the child's
+   duration and error flag. Per-node and per-edge percentiles (p50 /
+   p95 / p99) are computed by sorting the duration array and indexing
+   — O(n log n) on a 10k ring is trivial. Spans without a resolvable
+   parent or with a same-service parent never contribute to edges, so
+   internal helper spans don't pollute the graph.
+   *REST surface.* [src/edge/TraceApi.fs](src/edge/TraceApi.fs) mirrors
+   `Dashboards.fs`'s `withTenant` + `Utf8JsonWriter` pattern and
+   exposes three routes under the existing `/api/` auth gate:
+   `GET /api/traces?sinceMs=&windowSec=&limit=` returns recent
+   `TraceSummary` records sorted by `startMs` desc (default last hour,
+   max 1000); `GET /api/traces/<traceId>` returns `{summary, spans[]}`
+   sorted by `startMs` (404 when the store has no spans for that id);
+   `GET /api/servicemap?sinceMs=&windowSec=` returns
+   `{nodes[], edges[], sinceMs, generatedMs}` derived from the same
+   snapshot logic. All three routes inherit the Query quota and audit
+   gate.
+   *RUM beacon.* [src/edge/Rum.fs](src/edge/Rum.fs) exposes
+   `POST /rum/v1/events` in single-tenant mode and
+   `POST /rum/v1/<tenantId>/events` in multi-tenant mode (deliberately
+   unauthenticated — browsers can't safely carry server-side API
+   keys; this is a stub, a real deployment would validate against a
+   published-client-key registry). Bodies are JSON
+   `{sessionId, url, userAgent, service?, events:[...]}` (a bare array
+   body is also accepted). Each event is translated into the
+   primitives PulseBoard already stores: `web_vital` → a metric named
+   `rum_<name>_ms` (or `rum_cls` for the unitless CLS score),
+   `page_load` → `rum_page_load_ms`, `error`/`exception` → a log line
+   (`service=rum/<tenantOrLabel>`, `level=error`, message + optional
+   stack) plus a `rum_errors_total` counter, `custom` →
+   `rum_custom_<sanitised_name>`. Because everything lands in
+   `MetricStore` and `LogStore`, dashboards / alerts / Prometheus
+   query proxy / retention all just work without any further
+   plumbing. CORS preflight is handled (`Access-Control-Allow-Origin:
+   *`) so dev pages can post beacons from any origin, and bodies
+   over 64 KiB return 413.
+   *SPA.* [src/edge/wwwroot/index.html](src/edge/wwwroot/index.html)
+   gains two new tabs alongside Dashboards + Explore: **Traces**
+   (range-pickered table of trace summaries — click a row to open a
+   modal waterfall sorted by span start, each span rendered as a
+   horizontal bar coloured by a stable per-service hue, with hover
+   tooltips and a top-of-modal summary line), and **Service Map**
+   (SVG with services laid out on a circle, edges drawn as arrows
+   whose stroke width scales with call volume and whose hue scales
+   with error rate green→red, with hover tooltips showing p50/p95/p99
+   per node and edge). Both tabs share the same range-picker UX as
+   the rest of the SPA and are wired into the existing hash router
+   (`#/traces`, `#/map`).
+   *Wiring.* [src/edge/Program.fs](src/edge/Program.fs) constructs
+   the singleton `InMemorySpanStore` early enough to thread into both
+   `Otlp.traces` and `TraceApi.webPart`, and mounts `Rum.webPart`
+   outside the query auth gate (alongside `/ingest/*` and
+   `/v1/{metrics,logs,traces}`) so beacons reach it without an API
+   key. Startup banner now lists the span store capacity, the RUM
+   beacon URL, and the three new query routes.
 
 ---
 

@@ -681,6 +681,22 @@ let main argv =
   printfn "  Dashboards: file-backed at %s"
     (Path.Combine(dataDir, "dashboards"))
 
+  // -- Spans / service map / RUM (PLAN.md Phase 4 step 4) ----------------
+  // In-process ring of recent spans per tenant. Real persistence still
+  // happens via the Tempo passthrough (`--tempo-url=`); this store
+  // powers the SPA's Traces + Service Map tabs without depending on
+  // an external trace backend.
+  let spanStoreCapacity = 10_000
+  let spanStore : PulseBoard.Spans.ISpanStore =
+    PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
+  let traceApiInner = PulseBoard.TraceApi.webPart multiTenant spanStore
+  let rumInner      = PulseBoard.Rum.webPart      multiTenant metricStore logStore
+  printfn "  Spans: in-memory ring (capacity=%d per tenant)" spanStoreCapacity
+  printfn "  RUM: %s"
+    (if multiTenant
+     then "POST /rum/v1/<tenantId>/events (unauthenticated stub)"
+     else "POST /rum/v1/events (single-tenant)")
+
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 
   // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
@@ -774,7 +790,7 @@ let main argv =
   // we want per-signal protect wrappers for clean audit lines.
   let otlpMetricsInner = PulseBoard.Otlp.metrics storage ingestQuotas
   let otlpLogsInner    = PulseBoard.Otlp.logs    storage ingestQuotas
-  let otlpTracesInner  = PulseBoard.Otlp.traces  storage rawTraceBackend
+  let otlpTracesInner  = PulseBoard.Otlp.traces  storage rawTraceBackend (Some spanStore)
   let otlp : WebPart =
     POST >=> choose [
       path "/v1/metrics" >=> protectIngest otlpMetricsInner
@@ -803,7 +819,7 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
-    let combinedInner = choose [ queryApiInner; dashboardsInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -837,6 +853,7 @@ let main argv =
       promRemoteWrite   // must precede `query` because /api/v1/write also matches /api/
       otlp              // /v1/* doesn't overlap /api/, but keep grouped with the other ingest receivers
       lokiPush          // /loki/api/v1/push — same
+      rumInner          // /rum/v1/* — unauthenticated beacon stub (Phase 4 #4)
       admin     // must precede `query` because /api/admin/* also matches /api/
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
@@ -882,11 +899,18 @@ let main argv =
   printfn "  POST /api/prom/push    (alias of /api/v1/write)"
   printfn "  POST /v1/metrics       (OTLP/HTTP metrics, protobuf)"
   printfn "  POST /v1/logs          (OTLP/HTTP logs, protobuf)"
-  printfn "  POST /v1/traces        (OTLP/HTTP traces, protobuf; counted only until Phase 3)"
+  printfn "  POST /v1/traces        (OTLP/HTTP traces, protobuf; spans stored in-memory, optional Tempo passthrough)"
   printfn "  POST /loki/api/v1/push (Grafana Loki; JSON or snappy-protobuf)"
+  if multiTenant then
+    printfn "  POST /rum/v1/<tenantId>/events  (RUM beacon, unauthenticated stub)"
+  else
+    printfn "  POST /rum/v1/events    (RUM beacon, single-tenant)"
   printfn "  GET  /api/metrics      (list)"
   printfn "  GET  /api/metrics/<n>?sinceMs=...   (series)"
   printfn "  GET  /api/logs?tail=N"
+  printfn "  GET  /api/traces[?sinceMs=...&limit=N]  (recent trace summaries)"
+  printfn "  GET  /api/traces/<traceId>              (full span list)"
+  printfn "  GET  /api/servicemap[?sinceMs=...]      (derived service graph)"
   printfn "  GET  /api/prom/api/v1/{query,query_range,labels,label/<n>/values,series}"
   printfn "  GET  /api/loki/api/v1/{query_range,labels,label/<n>/values}"
   printfn "  GET  /api/dashboards | POST /api/dashboards | GET/PUT/DELETE /api/dashboards/<id>"

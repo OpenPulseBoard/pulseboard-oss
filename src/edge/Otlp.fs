@@ -254,8 +254,141 @@ let private decodeExportLogsRequest (input : CodedInputStream) : ResourceLogsRec
     | _ -> input.SkipLastField()
   arr.ToArray()
 
-// ---------- Trace span counting ----------
+// ---------- Trace span decoding ----------
 
+let private hex (bs : ByteString) : string =
+  let bytes = bs.ToByteArray()
+  let sb = StringBuilder(bytes.Length * 2)
+  for b in bytes do sb.AppendFormat("{0:x2}", b) |> ignore
+  sb.ToString()
+
+let private decodeStatus (bytes : ByteString) : int =
+  let input = new CodedInputStream(bytes.ToByteArray())
+  let mutable code = 0
+  while not input.IsAtEnd do
+    let tag = input.ReadTag()
+    match fieldOf tag with
+    | 3 -> code <- input.ReadEnum()
+    | _ -> input.SkipLastField()
+  code
+
+type private SpanRec =
+  { traceId  : string
+    spanId   : string
+    parentId : string
+    name     : string
+    kind     : int
+    startNs  : uint64
+    endNs    : uint64
+    status   : int
+    attrs    : Attr[] }
+
+let private decodeSpan (bytes : ByteString) : SpanRec =
+  let input = new CodedInputStream(bytes.ToByteArray())
+  let mutable traceId = ""
+  let mutable spanId  = ""
+  let mutable parent  = ""
+  let mutable name    = ""
+  let mutable kind    = 0
+  let mutable startNs = 0UL
+  let mutable endNs   = 0UL
+  let mutable status  = 0
+  let attrs = ResizeArray<Attr>()
+  while not input.IsAtEnd do
+    let tag = input.ReadTag()
+    match fieldOf tag with
+    | 1  -> traceId <- hex (input.ReadBytes())
+    | 2  -> spanId  <- hex (input.ReadBytes())
+    | 4  -> parent  <- hex (input.ReadBytes())
+    | 5  -> name    <- input.ReadString()
+    | 6  -> kind    <- input.ReadEnum()
+    | 7  -> startNs <- input.ReadFixed64()
+    | 8  -> endNs   <- input.ReadFixed64()
+    | 9  -> attrs.Add(decodeKeyValue (input.ReadBytes()))
+    | 15 -> status  <- decodeStatus (input.ReadBytes())
+    | _  -> input.SkipLastField()
+  { traceId = traceId; spanId = spanId; parentId = parent
+    name = name; kind = kind; startNs = startNs; endNs = endNs
+    status = status; attrs = attrs.ToArray() }
+
+type private ScopeSpansRec = { spans : SpanRec[] }
+
+let private decodeScopeSpans (bytes : ByteString) : ScopeSpansRec =
+  let input = new CodedInputStream(bytes.ToByteArray())
+  let spans = ResizeArray<SpanRec>()
+  while not input.IsAtEnd do
+    let tag = input.ReadTag()
+    match fieldOf tag with
+    | 2 -> spans.Add(decodeSpan (input.ReadBytes()))
+    | _ -> input.SkipLastField()
+  { spans = spans.ToArray() }
+
+type private ResourceSpansRec = { resource : Attr[]; scopes : ScopeSpansRec[] }
+
+let private decodeResourceSpans (bytes : ByteString) : ResourceSpansRec =
+  let input = new CodedInputStream(bytes.ToByteArray())
+  let mutable res : Attr[] = [||]
+  let scopes = ResizeArray<ScopeSpansRec>()
+  while not input.IsAtEnd do
+    let tag = input.ReadTag()
+    match fieldOf tag with
+    | 1 -> res <- decodeResource (input.ReadBytes())
+    | 2 -> scopes.Add(decodeScopeSpans (input.ReadBytes()))
+    | _ -> input.SkipLastField()
+  { resource = res; scopes = scopes.ToArray() }
+
+let private decodeExportTraceRequest (input : CodedInputStream) : ResourceSpansRec[] =
+  let arr = ResizeArray<ResourceSpansRec>()
+  while not input.IsAtEnd do
+    let tag = input.ReadTag()
+    match fieldOf tag with
+    | 1 -> arr.Add(decodeResourceSpans (input.ReadBytes()))
+    | _ -> input.SkipLastField()
+  arr.ToArray()
+
+/// Decode an OTLP `ExportTraceServiceRequest` into the public Span
+/// model used by `PulseBoard.Spans`. Resource-level attrs are merged
+/// into each span's attribute map; `service.name` is promoted to the
+/// span's first-class `service` field (default "unknown" when absent).
+/// Returns both the structured spans and the raw span count (so the
+/// existing billing path stays a single decode pass).
+let decodeSpans (raw : byte[]) : PulseBoard.Spans.Span[] * int =
+  use ms = new MemoryStream(raw)
+  let input = new CodedInputStream(ms)
+  let resources = decodeExportTraceRequest input
+  let out = ResizeArray<PulseBoard.Spans.Span>()
+  let mutable count = 0
+  for rs in resources do
+    let resAttrs =
+      rs.resource
+      |> Array.map (fun a -> a.key, valueText a.value)
+      |> Map.ofArray
+    let service =
+      resAttrs
+      |> Map.tryFind "service.name"
+      |> Option.defaultValue "unknown"
+    for sc in rs.scopes do
+      for s in sc.spans do
+        count <- count + 1
+        let attrs =
+          let m = Map.ofArray (s.attrs |> Array.map (fun a -> a.key, valueText a.value))
+          // Resource attrs win when both define the same key — they're
+          // the more stable identity.
+          Map.fold (fun acc k v -> Map.add k v acc) m resAttrs
+        out.Add(
+          { traceId      = s.traceId
+            spanId       = s.spanId
+            parentSpanId = s.parentId
+            service      = service
+            operation    = s.name
+            kind         = PulseBoard.Spans.kindOfInt s.kind
+            startMs      = int64 (s.startNs / 1_000_000UL)
+            endMs        = int64 (s.endNs   / 1_000_000UL)
+            statusCode   = s.status
+            attributes   = attrs })
+  out.ToArray(), count
+
+// Backwards-compatible counter used by the original `traces` handler.
 let private countSpansScope (bytes : ByteString) : int =
   let input = new CodedInputStream(bytes.ToByteArray())
   let mutable n = 0
@@ -474,28 +607,38 @@ let logs (storage : IStorageClient)
              (JsonSerializer.Serialize ex.Message)) ctx
   }
 
-/// POST /v1/traces — accepted, counted, and (optionally) forwarded.
-/// The count always flows through `IStorageClient.IncTraceCount` so
-/// the storage tier sees the activity. When `rawTrace` is supplied
-/// (e.g. `TempoTraceBackend` wired in Program.fs), the unmodified
-/// OTLP/protobuf body is also handed to it for upstream upload — this
-/// preserves full span fidelity without re-encoding.
+/// POST /v1/traces — accepted, counted, persisted into the in-memory
+/// span store (for /api/traces + /api/servicemap), and optionally
+/// forwarded to Tempo via `rawTrace`. The count always flows through
+/// `IStorageClient.IncTraceCount` for billing.
 let traces (storage : IStorageClient)
-           (rawTrace : PulseBoard.CloudBackends.IRawTraceBackend option) : WebPart =
+           (rawTrace : PulseBoard.CloudBackends.IRawTraceBackend option)
+           (spanStore : PulseBoard.Spans.ISpanStore option) : WebPart =
   fun ctx -> async {
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
-      use ms = new MemoryStream(raw)
-      let input = new CodedInputStream(ms)
-      let n = countSpans input
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      // Single decode pass that produces both structured spans and a
+      // raw count. If decode fails we still want to record the count
+      // (best-effort), so fall back to the legacy counter.
+      let spans, n =
+        try decodeSpans raw
+        with _ ->
+          use ms = new MemoryStream(raw)
+          let input = new CodedInputStream(ms)
+          [||], countSpans input
       do! storage.IncTraceCount(tid, n)
+      match spanStore with
+      | Some store when spans.Length > 0 ->
+        let tidVal = match tenantId with Some t -> t | None -> TenantId "__local__"
+        store.Ingest(tidVal, spans)
+      | _ -> ()
       match rawTrace with
       | Some rt ->
         try rt.IngestOtlpProtobuf(tid, raw) with _ -> ()

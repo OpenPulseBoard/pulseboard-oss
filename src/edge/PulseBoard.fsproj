@@ -30,6 +30,7 @@
     <Compile Include="Gateway.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />
+    <Compile Include="Spans.fs" />
     <Compile Include="Otlp.fs" />
     <Compile Include="LokiPush.fs" />
     <Compile Include="PromScrape.fs" />
@@ -38,6 +39,8 @@
     <Compile Include="Query.fs" />
     <Compile Include="QueryApi.fs" />
     <Compile Include="Dashboards.fs" />
+    <Compile Include="TraceApi.fs" />
+    <Compile Include="Rum.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">

@@ -146,8 +146,7 @@
                      display: flex; gap: 8px; }
 
     /* --- Explore view --- */
-    .explore { display: flex; flex-direction: column; height: calc(100vh - 49px); }
-    .explore .controls {
+    .explore { display: flex; flex-direction: column; height: calc(100vh - 49px); }    .explore .controls {
       display: flex; gap: 8px; align-items: stretch; padding: 10px 14px;
       background: var(--panel); border-bottom: 1px solid var(--border);
     }
@@ -155,6 +154,53 @@
     .explore .result { flex: 1; overflow: auto; padding: 10px 14px; }
     .explore .result .uplot { background: var(--panel); border-radius: 6px; padding: 8px; }
     .explore .meta { color: var(--muted); font-size: 11px; margin: 4px 0 8px; }
+
+    /* --- Traces + Service Map views (Phase 4 #4) --- */
+    .traces, .smap { display: flex; flex-direction: column; height: calc(100vh - 49px); }
+    .traces .controls, .smap .controls {
+      display: flex; gap: 8px; padding: 8px 14px;
+      border-bottom: 1px solid var(--border); background: var(--panel);
+      align-items: center;
+    }
+    .traces .body, .smap .body { flex: 1; overflow: auto; padding: 10px 14px; }
+    .traces table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .traces th, .traces td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--grid); }
+    .traces tr:hover td { background: var(--panel-2); cursor: pointer; }
+    .traces .errcol { color: #ff7a7a; }
+    .waterfall { padding: 8px 0; }
+    .waterfall .row { display: flex; align-items: center; gap: 8px; height: 22px; }
+    .waterfall .row .lbl { width: 320px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-size: 11px; color: var(--fg); }
+    .waterfall .row .bar-track { flex: 1; position: relative; height: 14px;
+      background: var(--bg); border-radius: 2px; }
+    .waterfall .row .bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+    .waterfall .row .bar.err { background: #c44 !important; }
+    .waterfall .row .dur { width: 80px; text-align: right; font-size: 11px; color: var(--muted); }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100;
+      display: none; align-items: center; justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      width: min(1100px, 95vw); max-height: 88vh; overflow: auto;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .modal header { padding: 10px 14px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; }
+    .modal header h2 { margin: 0; font-size: 13px; }
+    .modal .body { padding: 12px 14px; }
+    .smap svg { background: var(--panel); border-radius: 6px; width: 100%; height: 100%; }
+    .smap .node circle { fill: var(--panel-2); stroke: #6ad; stroke-width: 2px; cursor: pointer; }
+    .smap .node circle.err { stroke: #f55; }
+    .smap .node text { fill: var(--fg); font-size: 11px; text-anchor: middle; pointer-events: none; }
+    .smap .edge line { stroke: #5a8; stroke-opacity: 0.7; }
+    .smap .edge text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+    .smap .tooltip {
+      position: absolute; background: var(--panel-2); border: 1px solid var(--border);
+      padding: 6px 10px; border-radius: 4px; font-size: 11px; pointer-events: none;
+      display: none; white-space: pre;
+    }
 
     .badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
              background: var(--panel-3); font-size: 10px; color: var(--muted); }
@@ -172,6 +218,8 @@
   <nav>
     <a href="#/dashboards" id="tab-dashboards" class="active">Dashboards</a>
     <a href="#/explore"    id="tab-explore">Explore</a>
+    <a href="#/traces"     id="tab-traces">Traces</a>
+    <a href="#/map"        id="tab-map">Service Map</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
@@ -232,6 +280,64 @@
   <div class="result">
     <div class="meta" id="explore-meta">Run a query to see results.</div>
     <div id="explore-out"></div>
+  </div>
+</div>
+
+<!-- Traces view (Phase 4 #4) -->
+<div id="view-traces" class="traces hidden">
+  <div class="controls">
+    <label class="status">Range</label>
+    <select id="traces-range">
+      <option value="300">5 min</option>
+      <option value="900">15 min</option>
+      <option value="3600" selected>1 hour</option>
+      <option value="21600">6 hours</option>
+      <option value="86400">24 hours</option>
+      <option value="0">All</option>
+    </select>
+    <button id="traces-refresh">⟳</button>
+    <span class="meta" id="traces-meta"></span>
+  </div>
+  <div class="body">
+    <table>
+      <thead><tr>
+        <th>Trace ID</th><th>Root service</th><th>Operation</th>
+        <th>Duration</th><th>Spans</th><th>Errors</th><th>Services</th><th>Age</th>
+      </tr></thead>
+      <tbody id="traces-rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Service Map view (Phase 4 #4) -->
+<div id="view-map" class="smap hidden">
+  <div class="controls">
+    <label class="status">Range</label>
+    <select id="map-range">
+      <option value="300">5 min</option>
+      <option value="900">15 min</option>
+      <option value="3600" selected>1 hour</option>
+      <option value="21600">6 hours</option>
+      <option value="86400">24 hours</option>
+      <option value="0">All</option>
+    </select>
+    <button id="map-refresh">⟳</button>
+    <span class="meta" id="map-meta"></span>
+  </div>
+  <div class="body" style="position: relative;">
+    <svg id="map-svg" viewBox="0 0 900 600" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="tooltip" id="map-tip"></div>
+  </div>
+</div>
+
+<!-- Trace waterfall modal -->
+<div class="modal-backdrop" id="trace-modal">
+  <div class="modal">
+    <header>
+      <h2 id="trace-modal-title">Trace</h2>
+      <button id="trace-modal-close">×</button>
+    </header>
+    <div class="body" id="trace-modal-body"></div>
   </div>
 </div>
 
@@ -312,8 +418,14 @@ const state = {
 function showView(name) {
   $("view-dashboards").classList.toggle("hidden", name !== "dashboards");
   $("view-explore").classList.toggle("hidden",    name !== "explore");
+  $("view-traces").classList.toggle("hidden",     name !== "traces");
+  $("view-map").classList.toggle("hidden",        name !== "map");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
+  $("tab-traces").classList.toggle("active",     name === "traces");
+  $("tab-map").classList.toggle("active",        name === "map");
+  if (name === "traces") loadTraces();
+  if (name === "map")    loadServiceMap();
 }
 
 function uuid() {
@@ -896,8 +1008,10 @@ function connectWs() {
 // =====================================================================
 function router() {
   const h = location.hash || "#/dashboards";
-  if (h.startsWith("#/explore")) showView("explore");
-  else showView("dashboards");
+  if (h.startsWith("#/explore"))      showView("explore");
+  else if (h.startsWith("#/traces"))  showView("traces");
+  else if (h.startsWith("#/map"))     showView("map");
+  else                                showView("dashboards");
 }
 
 $("dash-picker").addEventListener("change", (e) => openDashboard(e.target.value));
@@ -955,6 +1069,236 @@ $("explore-run").addEventListener("click", runExplore);
 $("explore-expr").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runExplore();
 });
+
+// =====================================================================
+// Traces tab — list summaries + waterfall modal (Phase 4 #4)
+// =====================================================================
+function sinceMsFrom(rangeSec) {
+  if (!rangeSec || rangeSec === "0") return 1;            // "All" → epoch+1
+  return Date.now() - (+rangeSec) * 1000;
+}
+function fmtAge(ms) {
+  const d = Date.now() - ms;
+  if (d < 60_000)         return Math.floor(d/1000) + "s ago";
+  if (d < 3_600_000)      return Math.floor(d/60_000) + "m ago";
+  if (d < 86_400_000)     return Math.floor(d/3_600_000) + "h ago";
+  return Math.floor(d/86_400_000) + "d ago";
+}
+function fmtDur(ms) {
+  if (ms < 1)     return ms.toFixed(2) + "ms";
+  if (ms < 1000)  return ms.toFixed(1) + "ms";
+  return (ms/1000).toFixed(2) + "s";
+}
+// Deterministic colour per service name — keeps the same bar colour
+// stable across refreshes so the eye can track it.
+function svcColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h*31 + name.charCodeAt(i)) | 0;
+  const hue = ((h % 360) + 360) % 360;
+  return `hsl(${hue}, 55%, 55%)`;
+}
+
+async function loadTraces() {
+  const since = sinceMsFrom($("traces-range").value);
+  $("traces-meta").textContent = "loading…";
+  try {
+    const r = await fetch(`/api/traces?sinceMs=${since}&limit=200`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const traces = await r.json();
+    renderTraces(traces);
+    $("traces-meta").textContent = `${traces.length} trace${traces.length===1?"":"s"}`;
+  } catch (e) {
+    $("traces-meta").textContent = "error: " + e.message;
+  }
+}
+function renderTraces(traces) {
+  const tbody = $("traces-rows");
+  tbody.innerHTML = "";
+  for (const t of traces) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><code>${t.traceId.substring(0,16)}…</code></td>
+      <td>${escapeHtml(t.rootService)}</td>
+      <td>${escapeHtml(t.rootOperation)}</td>
+      <td>${fmtDur(t.durationMs)}</td>
+      <td>${t.spanCount}</td>
+      <td class="${t.errorCount>0?"errcol":""}">${t.errorCount}</td>
+      <td>${t.services.map(escapeHtml).join(", ")}</td>
+      <td>${fmtAge(t.startMs)}</td>`;
+    tr.addEventListener("click", () => openTrace(t.traceId));
+    tbody.appendChild(tr);
+  }
+  if (traces.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;">No traces in window.</td></tr>`;
+  }
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
+}
+
+async function openTrace(traceId) {
+  $("trace-modal-title").textContent = "Trace " + traceId;
+  $("trace-modal-body").innerHTML = "<div class='meta'>loading…</div>";
+  $("trace-modal").classList.add("open");
+  try {
+    const r = await fetch("/api/traces/" + encodeURIComponent(traceId));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    renderWaterfall(data);
+  } catch (e) {
+    $("trace-modal-body").innerHTML = "<div class='meta'>error: " + escapeHtml(e.message) + "</div>";
+  }
+}
+function renderWaterfall(data) {
+  const spans = data.spans.slice().sort((a, b) => a.startMs - b.startMs);
+  if (spans.length === 0) {
+    $("trace-modal-body").innerHTML = "<div class='meta'>no spans</div>";
+    return;
+  }
+  const t0 = Math.min(...spans.map(s => s.startMs));
+  const t1 = Math.max(...spans.map(s => s.endMs));
+  const span = Math.max(1, t1 - t0);
+  const rows = spans.map(s => {
+    const leftPct  = ((s.startMs - t0) / span) * 100;
+    const widthPct = Math.max(0.4, ((s.endMs - s.startMs) / span) * 100);
+    const colour = svcColor(s.service);
+    const lbl = `${s.service} · ${s.operation}`;
+    return `
+      <div class="row" title="${escapeHtml(lbl)} — ${fmtDur(s.durationMs)} (status=${s.statusCode})">
+        <div class="lbl">${escapeHtml(lbl)}</div>
+        <div class="bar-track">
+          <div class="bar ${s.error?"err":""}"
+               style="left:${leftPct}%;width:${widthPct}%;background:${colour};"></div>
+        </div>
+        <div class="dur">${fmtDur(s.durationMs)}</div>
+      </div>`;
+  }).join("");
+  const summary = data.summary;
+  $("trace-modal-body").innerHTML = `
+    <div class="meta">
+      ${escapeHtml(summary.rootService)} · ${escapeHtml(summary.rootOperation)}
+      — ${fmtDur(summary.durationMs)} total, ${summary.spanCount} spans,
+      ${summary.errorCount} error${summary.errorCount===1?"":"s"},
+      services: ${summary.services.map(escapeHtml).join(", ")}
+    </div>
+    <div class="waterfall">${rows}</div>`;
+}
+
+$("traces-refresh").addEventListener("click", loadTraces);
+$("traces-range").addEventListener("change", loadTraces);
+$("trace-modal-close").addEventListener("click", () => $("trace-modal").classList.remove("open"));
+$("trace-modal").addEventListener("click", (e) => {
+  if (e.target === $("trace-modal")) $("trace-modal").classList.remove("open");
+});
+
+// =====================================================================
+// Service Map tab — SVG with nodes on a circle (Phase 4 #4)
+// =====================================================================
+async function loadServiceMap() {
+  const since = sinceMsFrom($("map-range").value);
+  $("map-meta").textContent = "loading…";
+  try {
+    const r = await fetch(`/api/servicemap?sinceMs=${since}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const m = await r.json();
+    renderServiceMap(m);
+    $("map-meta").textContent =
+      `${m.nodes.length} service${m.nodes.length===1?"":"s"}, ${m.edges.length} edge${m.edges.length===1?"":"s"}`;
+  } catch (e) {
+    $("map-meta").textContent = "error: " + e.message;
+  }
+}
+function renderServiceMap(m) {
+  const svg = $("map-svg");
+  svg.innerHTML = "";
+  const tip = $("map-tip");
+  tip.style.display = "none";
+  if (m.nodes.length === 0) {
+    svg.innerHTML = `<text x="450" y="300" fill="#888" text-anchor="middle"
+      font-size="14">No spans in window.</text>`;
+    return;
+  }
+  // Lay nodes out on a circle.
+  const cx = 450, cy = 300;
+  const r = Math.min(220, 80 + 25 * m.nodes.length);
+  const pos = {};
+  m.nodes.forEach((n, i) => {
+    const a = (i / m.nodes.length) * Math.PI * 2 - Math.PI/2;
+    pos[n.service] = { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+  });
+
+  // Edges first so circles draw on top.
+  const maxCalls = Math.max(1, ...m.edges.map(e => e.callCount));
+  for (const e of m.edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const errRate = e.callCount === 0 ? 0 : e.errorCount / e.callCount;
+    const hue = (1 - errRate) * 120;   // 120=green, 0=red
+    const width = 1 + 4 * (e.callCount / maxCalls);
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "edge");
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", a.x); line.setAttribute("y1", a.y);
+    line.setAttribute("x2", b.x); line.setAttribute("y2", b.y);
+    line.setAttribute("stroke", `hsl(${hue},65%,55%)`);
+    line.setAttribute("stroke-width", width);
+    // Arrowhead via a triangle 14px from target.
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx/len, uy = dy/len;
+    const tx = b.x - ux * 38, ty = b.y - uy * 38;
+    const px = -uy, py = ux;
+    const tri = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    tri.setAttribute("points",
+      `${tx+ux*8},${ty+uy*8} ${tx+px*5},${ty+py*5} ${tx-px*5},${ty-py*5}`);
+    tri.setAttribute("fill", `hsl(${hue},65%,55%)`);
+    g.appendChild(line); g.appendChild(tri);
+    const tt =
+`${e.from} → ${e.to}
+calls: ${e.callCount}   errors: ${e.errorCount}
+p50: ${fmtDur(e.p50Ms)}   p95: ${fmtDur(e.p95Ms)}   p99: ${fmtDur(e.p99Ms)}`;
+    g.addEventListener("mousemove", ev => showMapTip(ev, tt));
+    g.addEventListener("mouseleave", () => tip.style.display = "none");
+    svg.appendChild(g);
+  }
+
+  // Nodes.
+  for (const n of m.nodes) {
+    const p = pos[n.service];
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "node");
+    g.setAttribute("transform", `translate(${p.x},${p.y})`);
+    const errRate = n.spanCount === 0 ? 0 : n.errorCount / n.spanCount;
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("r", "28");
+    if (errRate > 0.05) circle.setAttribute("class", "err");
+    const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    txt.setAttribute("dy", "4");
+    txt.textContent = n.service.length > 12 ? n.service.substring(0,11) + "…" : n.service;
+    g.appendChild(circle); g.appendChild(txt);
+    const tt =
+`${n.service}
+spans: ${n.spanCount}   errors: ${n.errorCount}
+p50: ${fmtDur(n.p50Ms)}   p95: ${fmtDur(n.p95Ms)}   p99: ${fmtDur(n.p99Ms)}`;
+    g.addEventListener("mousemove", ev => showMapTip(ev, tt));
+    g.addEventListener("mouseleave", () => tip.style.display = "none");
+    svg.appendChild(g);
+  }
+}
+function showMapTip(ev, text) {
+  const tip = $("map-tip");
+  tip.textContent = text;
+  tip.style.display = "block";
+  const body = $("view-map").querySelector(".body");
+  const rect = body.getBoundingClientRect();
+  tip.style.left = (ev.clientX - rect.left + 12) + "px";
+  tip.style.top  = (ev.clientY - rect.top  + 12) + "px";
+}
+
+$("map-refresh").addEventListener("click", loadServiceMap);
+$("map-range").addEventListener("change", loadServiceMap);
 
 window.addEventListener("hashchange", router);
 router();
