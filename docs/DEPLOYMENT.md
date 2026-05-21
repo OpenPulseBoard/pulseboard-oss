@@ -234,6 +234,7 @@ Flags / env:
 | `--fly-org=` | `FLY_ORG_SLUG` | *(required unless `--dry-run`)* |
 | `--fly-region=` | `PULSE_FLY_REGION` | `iad` |
 | `--workspace-image=` | `PULSE_WORKSPACE_IMAGE` | `registry.fly.io/pulseboard:latest` |
+| `--postgres=` | `PULSE_POSTGRES` | when set, slug→workspace registry persists in table `pb_workspaces` (schema auto-created). Without it the registry is in-memory and a provisioner restart forgets every allocation. Recommended for any non-dev deploy. |
 | `--dry-run` | — | when set, logs intent and returns synthetic IDs without calling Fly. Useful for local smoke tests. |
 
 Run live:

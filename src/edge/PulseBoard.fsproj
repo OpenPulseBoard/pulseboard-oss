@@ -55,6 +55,7 @@
     <Compile Include="Admin.fs" />
     <Compile Include="Signup.fs" />
     <Compile Include="Provisioner.fs" />
+    <Compile Include="PgWorkspaceRegistry.fs" />
     <Compile Include="SiteOnly.fs" />
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">

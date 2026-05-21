@@ -76,10 +76,25 @@ let main argv =
         | _ ->
           eprintfn "  [ERROR] --mode=provisioner without --dry-run requires FLY_API_TOKEN and FLY_ORG_SLUG (or --fly-token=/--fly-org=)"
           exit 2
+    let provPgConn =
+      envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
+    let provRegistry : PulseBoard.Provisioner.IWorkspaceRegistry =
+      match provPgConn with
+      | Some cs ->
+        try
+          PulseBoard.PgWorkspaceRegistry.ensureSchema cs
+          printfn "  Registry:    Postgres (schema ensured)"
+          PulseBoard.PgWorkspaceRegistry.PgWorkspaceRegistry(cs) :> _
+        with ex ->
+          eprintfn "  [ERROR] failed to initialise Postgres workspace registry: %s" ex.Message
+          exit 2
+      | None ->
+        printfn "  Registry:    in-memory (ephemeral — pass --postgres=... to persist)"
+        PulseBoard.Provisioner.InMemoryWorkspaceRegistry() :> _
     let cfg : PulseBoard.Provisioner.ProvisionerConfig =
       { fly           = fly
         dryRun        = dryRun
-        registry      = PulseBoard.Provisioner.InMemoryWorkspaceRegistry() :> PulseBoard.Provisioner.IWorkspaceRegistry
+        registry      = provRegistry
         rootDomain    = rootDomain.ToLowerInvariant()
         machineConfig =
           { image     = image

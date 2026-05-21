@@ -985,8 +985,12 @@ Still to do:
 
 - **`infra/Caddyfile`** — DONE. Wildcard TLS with `ask` + dynamic
   upstreams.
-- Postgres-backed `IWorkspaceRegistry` (in-memory today; restarting
-  the provisioner forgets allocations).
+- **Postgres-backed `IWorkspaceRegistry`** — DONE. `src/edge/PgWorkspaceRegistry.fs`
+  (table `pb_workspaces`, upsert on Insert, `SELECT … FOR UPDATE` inside a
+  transaction on Update). Selected via `--postgres=` / `PULSE_POSTGRES`;
+  falls back to in-memory with a banner warning. Smoke-tested: allocate
+  slug, kill provisioner, restart, `/provision/ask` still 200 and
+  `/provision/route` returns the same upstream.
 - Workspace teardown (cancel-on-failed-payment, evict-on-inactive,
   scale-to-zero behaviour).
 - Real Stripe linkage on signup (plan selection, payment method).
