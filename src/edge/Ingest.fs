@@ -89,7 +89,8 @@ let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
 /// in-process client writes straight to MetricStore/Hub; in
 /// `--role=edge` it POSTs protobuf to the storage tier.
 let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
-            (meter : PulseBoard.Billing.IBillingMeter option) : WebPart =
+            (meter : PulseBoard.Billing.IBillingMeter option)
+            (costs : PulseBoard.Costs.ICostTracker option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -131,6 +132,21 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
       | Some m, Some tenant when accepted > 0 ->
         let bytes = int64 (Encoding.UTF8.GetByteCount body)
         m.Record (tenant, PulseBoard.Billing.IngestBytes, bytes)
+      | _ -> ()
+      // Phase 8 #1 — per-series cost attribution. We bucket the request
+      // bytes proportionally across the distinct series in the batch so
+      // the cardinality explorer can rank "this series is costing $X".
+      match costs, tenantId with
+      | Some c, Some tenant when accepted > 0 ->
+        let totalBytes = int64 (Encoding.UTF8.GetByteCount body)
+        let perSample  = if accepted > 0 then totalBytes / int64 accepted else 0L
+        // Aggregate by name first so we record one cell per series.
+        let groups = System.Collections.Generic.Dictionary<string, int>()
+        for s in samples do
+          let prev = match groups.TryGetValue s.seriesName with true, v -> v | _ -> 0
+          groups.[s.seriesName] <- prev + 1
+        for KeyValue(name, n) in groups do
+          c.RecordSamples (tenant, name, n, perSample * int64 n)
       | _ -> ()
       let body =
         if rejected > 0 then
@@ -208,8 +224,9 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
 
 let webPart (storage : IStorageClient) (quotas : IngestQuotas option)
             (secrets : PulseBoard.Secrets.ISecretsStore option)
-            (meter   : PulseBoard.Billing.IBillingMeter option) : WebPart =
+            (meter   : PulseBoard.Billing.IBillingMeter option)
+            (costs   : PulseBoard.Costs.ICostTracker option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter
+    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter costs
     POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets meter
   ]

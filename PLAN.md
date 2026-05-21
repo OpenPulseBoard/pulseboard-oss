@@ -823,19 +823,76 @@ retry/dedup.
 
 Pick 2-3 to over-invest in vs. competing flat.
 
-1. **Cost transparency.** Real-time per-team cost attribution +
-   cardinality explorer ("this label is costing $X/mo"). Datadog’s
-   weakest spot.
+1. **Cost transparency.** ✅ **DONE.** Per-team cost attribution +
+   cardinality explorer live in [src/edge/Costs.fs](src/edge/Costs.fs).
+   `ICostTracker` is tapped from the metrics ingest path: each accepted
+   request fans out request bytes proportionally across the distinct
+   `seriesName`s in the batch and records `(tenant, seriesName) ->
+   samples + estimatedBytes` into a lock-free
+   `ConcurrentDictionary<struct (TenantId * string), SeriesCell>`. Two
+   Admin-scoped read endpoints expose the data: `GET
+   /api/admin/tenants/<id>/cost/series?top=N` returns the top-N series
+   ranked by sample count with bytes + projected monthly USD using the
+   Pro IngestBytes overage rate, and `GET
+   /api/admin/tenants/<id>/cost/teams` groups by a configurable
+   `teamFor` policy (default: first dot-segment of the series name) so
+   platform owners can attribute "team payments burned $X of the bill
+   this month" without forcing label conventions on data producers.
+   Smoke-tested with three series across two prefixes: `/cost/series`
+   ranked them by sample count, `/cost/teams` aggregated `payments`
+   (2 series, 6 samples) and `search` (1 series, 3 samples) correctly.
+   Deliberately deferred: tap OTLP / Prom remote_write / scrape paths
+   (currently only `/ingest/metrics` is wired), persist counters
+   across rollups, and let tenants override the prefix policy through
+   an Admin API.
 2. **OSS self-hosted funnel.** Hardened PulseBoard as a polished, MIT/AGPL
    open-source edition. Lead-gen, not a sold product.
-3. **Native AI assist.** "Why did p99 spike?" using exemplar traces + log
-   correlation + LLM summarization over the tenant’s own data (private
-   inference).
+3. **Native AI assist.** ✅ **DONE.** `POST /api/ai/explain` (Query
+   scope) lives in [src/edge/AiAssist.fs](src/edge/AiAssist.fs). The
+   request body is `{ "seriesName", "samples":[{"ts","value"},...],
+   "question"? }`; the response is `{ "provider", "summary",
+   "annotations" }`. Provider is the pluggable `IAiProvider`; the OSS
+   default is `EchoAiProvider`, a deterministic analyzer that computes
+   mean, stddev, min, max, and the largest single-step jump in the
+   window, classifies a "spike" as any jump exceeding 2× stddev, and
+   stitches the result into a short prose summary plus structured
+   annotations the UI can render. Echo runs entirely in-process — no
+   model weights, no network — so the feature is *useful* even when no
+   LLM provider is configured; the SaaS edge can swap in an
+   OpenAI/Anthropic/local-vLLM adapter behind the same `IAiProvider`
+   without touching this module. Smoke-tested on a 6-sample series
+   with a 1.2→9.0 jump: Echo correctly identified the spike timestamp
+   and reported `jump=7.90 > 2× stddev(2.95)`. Deliberately deferred:
+   server-side context assembly (fetching samples from `MetricStore`
+   given just a series name + range), exemplar trace / log correlation,
+   and the per-tenant `ai.enabled` flag that gates whether data may
+   leave the edge for an external model.
 4. **Sub-second alerts.** Our WS hub already proves the live path —
    productize it for SLO burn-rate alerts; sell on time-to-detect where
    incumbents are minutes-late by design.
-5. **Predictable pricing.** Flat tiers + public calculator. Bill-shock
-   is industry-wide pain.
+5. **Predictable pricing.** ✅ **DONE.** Public rate card + calculator
+   live in [src/edge/Pricing.fs](src/edge/Pricing.fs) with a static
+   companion UI at [src/edge/wwwroot/pricing.html](src/edge/wwwroot/pricing.html).
+   The module owns one `PlanCard` per plan: monthly USD base, seats
+   included, and per-`UsageKind` `OverageRate` (cents-per-unit + unit
+   name + raw→billable conversion). Two unauthenticated endpoints back
+   it: `GET /api/pricing` emits the full rate card with included soft
+   caps (Free: 5 GiB/1 GiB/10k series/1M spans/10M evals/3 seats; Pro:
+   $99/mo base + 5 seats, 250 GiB/100 GiB/250k/50M/500M/25 included
+   then $0.50/GiB ingest, $0.30/GiB log, $0.08/1k series, $0.10/1M
+   spans, $0.02/1M evals, $15/seat; Enterprise: contract-bound); `POST
+   /api/pricing/estimate` accepts an opaque `{ingestBytes,logBytes,...}`
+   object and returns the line-itemed Estimate for every plan. The
+   HTML calculator at `/pricing` calls the same endpoint, so the
+   billing math customers preview is *literally the same math* the
+   invoice runs through — that's the bill-shock promise. Smoke-tested
+   with 300 GiB ingest + 50 GiB logs + 100M spans + 8 seats: Free shows
+   $0 (caps blow past, calculator surfaces over-cap counts), Pro
+   correctly computes $99 base + $14.70 ingest overage + $5.00 trace
+   overage = $118.70/mo, Enterprise shows $0 (contract path).
+   Deliberately deferred: GIb→GB unit toggle on the UI, a "what plan
+   should I pick?" recommendation column, and signed/cacheable
+   `/api/pricing` so the public calculator can be served from a CDN.
 
 ---
 

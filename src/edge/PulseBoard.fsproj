@@ -17,6 +17,9 @@
     <Compile Include="Quotas.fs" />
     <Compile Include="Plans.fs" />
     <Compile Include="Billing.fs" />
+    <Compile Include="Pricing.fs" />
+    <Compile Include="Costs.fs" />
+    <Compile Include="AiAssist.fs" />
     <Compile Include="PgTenantStore.fs" />
     <Compile Include="PgQuotaOverrides.fs" />
     <Compile Include="PgAuditLog.fs" />
@@ -59,6 +62,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/live.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/pricing.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/uPlot.iife.min.js">

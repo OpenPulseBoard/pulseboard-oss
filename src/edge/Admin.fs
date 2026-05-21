@@ -851,3 +851,76 @@ let billingWebPart (store     : ITenantStore)
                 >=> billingFlush store meter providers log
   ]
 
+// -- Phase 8 #1 / #3 / #5 — cost transparency, AI assist, pricing ---------
+
+let private parseTopN (ctx : HttpContext) : int =
+  match ctx.request.queryParam "top" with
+  | Choice1Of2 s ->
+    match Int32.TryParse s with
+    | true, n when n > 0 && n <= 1000 -> n
+    | _ -> 20
+  | _ -> 20
+
+let private costSeries (tracker : PulseBoard.Costs.ICostTracker)
+                       (tenantId : string) : WebPart =
+  fun ctx -> async {
+    let top  = parseTopN ctx
+    let rows = tracker.TopSeries (TenantId tenantId, top)
+    return! jsonResp 200 (PulseBoard.Costs.topSeriesJson tenantId rows) ctx
+  }
+
+let private costTeams (tracker : PulseBoard.Costs.ICostTracker)
+                      (tenantId : string) : WebPart =
+  fun ctx -> async {
+    let rows =
+      tracker.TeamBreakdown (TenantId tenantId, PulseBoard.Costs.defaultTeamFor)
+    return! jsonResp 200 (PulseBoard.Costs.teamBreakdownJson tenantId rows) ctx
+  }
+
+/// Admin-scoped: per-tenant cost transparency endpoints.
+let costsWebPart (tracker : PulseBoard.Costs.ICostTracker) : WebPart =
+  choose [
+    GET >=> pathScan "/api/admin/tenants/%s/cost/series"
+              (costSeries tracker)
+    GET >=> pathScan "/api/admin/tenants/%s/cost/teams"
+              (costTeams tracker)
+  ]
+
+/// Query-scoped: `POST /api/ai/explain`. Body:
+///   `{ "seriesName": "...", "samples": [{"ts":..,"value":..}], "question":"..?"}`
+let aiExplainWebPart (provider : PulseBoard.AiAssist.IAiProvider)
+                     (log : IAuditLog) : WebPart =
+  POST >=> path "/api/ai/explain" >=> (fun ctx -> async {
+    try
+      let body = readBody ctx.request
+      let tenant =
+        PulseBoard.Rbac.tryGetTenant ctx
+        |> Option.map (fun t -> t.tenant.id)
+      let req = PulseBoard.AiAssist.parseContext tenant body
+      let! res = provider.Explain req
+      auditEvent log ctx "ai.explain" Allow
+        (Some (sprintf "series=%s samples=%d provider=%s"
+                  req.seriesName req.samples.Length res.provider))
+      return! jsonResp 200 (PulseBoard.AiAssist.resultJson res) ctx
+    with ex ->
+      auditEvent log ctx "ai.explain" Error (Some ex.Message)
+      return! errJson 400 ("invalid body: " + ex.Message) ctx
+  })
+
+/// Public (unauthenticated) pricing surface — rate card + calculator.
+let pricingWebPart () : WebPart =
+  choose [
+    GET >=> path "/api/pricing" >=> (fun ctx -> async {
+      return! jsonResp 200 (PulseBoard.Pricing.rateCardJson ()) ctx
+    })
+    POST >=> path "/api/pricing/estimate" >=> (fun ctx -> async {
+      try
+        let body = readBody ctx.request
+        let usage = PulseBoard.Pricing.parseUsageInput body
+        let results = PulseBoard.Pricing.estimateAll usage
+        return! jsonResp 200 (PulseBoard.Pricing.estimateJson results) ctx
+      with ex ->
+        return! errJson 400 ("invalid body: " + ex.Message) ctx
+    })
+  ]
+

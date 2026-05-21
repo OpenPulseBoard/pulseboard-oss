@@ -725,8 +725,11 @@ let main argv =
   // below once the full admin pipeline is composed.
   let billingMeter : PulseBoard.Billing.IBillingMeter =
     PulseBoard.Billing.InMemoryBillingMeter() :> _
+  // Phase 8 #1 — per-series cost tracker tapped from /ingest/metrics.
+  let costTracker : PulseBoard.Costs.ICostTracker =
+    PulseBoard.Costs.InMemoryCostTracker() :> _
   let ingestInner =
-    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter)
+    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker)
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore
 
@@ -934,7 +937,13 @@ let main argv =
     PulseBoard.Admin.billingWebPart
       tenantStore billingMeter billingProviders auditLog
 
-  let adminAll = choose [ scrapeAdminInner; listenerAdminInner; billingAdminInner; adminInner ]
+  // Phase 8 #1 — cost transparency admin endpoints.
+  let costsAdminInner = PulseBoard.Admin.costsWebPart costTracker
+  // Phase 8 #3 — AI assist provider (deterministic Echo by default).
+  let aiProvider : PulseBoard.AiAssist.IAiProvider =
+    PulseBoard.AiAssist.EchoAiProvider() :> _
+
+  let adminAll = choose [ scrapeAdminInner; listenerAdminInner; billingAdminInner; costsAdminInner; adminInner ]
 
   let admin : WebPart =
     if multiTenant then
@@ -960,7 +969,8 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; queryInner ]
+    let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; aiExplainInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -1001,6 +1011,7 @@ let main argv =
       rumInner          // /rum/v1/* — unauthenticated beacon stub (Phase 4 #4)
       admin     // must precede `query` because /api/admin/* also matches /api/
       secretsAdmin   // /api/secrets/* — also Admin-scoped, sibling of admin
+      PulseBoard.Admin.pricingWebPart ()   // Phase 8 #5 — public rate card + calculator
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       path "/ws"   >=> handShake (Hub.handler hub)
@@ -1008,6 +1019,8 @@ let main argv =
       GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/admin"      >=> Files.browseFile wwwroot "admin.html"
       GET >=> path "/admin.html" >=> Files.browseFile wwwroot "admin.html"
+      GET >=> path "/pricing"     >=> Files.browseFile wwwroot "pricing.html"
+      GET >=> path "/pricing.html" >=> Files.browseFile wwwroot "pricing.html"
       GET >=> path "/live"       >=> Files.browseFile wwwroot "live.html"
       GET >=> Files.browse wwwroot
       NOT_FOUND "Not found."
@@ -1083,6 +1096,12 @@ let main argv =
     printfn "  POST /api/admin/billing/flush                (Admin scope)"
     printfn "  POST /api/signup                       (unauthenticated, JSON {slug,email})"
     printfn "  GET  /api/wizard/snippets?lang=&apiKey=&host=  (unauthenticated)"
+    printfn "  GET  /api/admin/tenants/<id>/cost/series?top=N  (Admin scope)"
+    printfn "  GET  /api/admin/tenants/<id>/cost/teams         (Admin scope)"
+    printfn "  POST /api/ai/explain                   (Query scope, JSON {seriesName,samples,question?})"
+    printfn "  GET  /api/pricing                      (public rate card)"
+    printfn "  POST /api/pricing/estimate             (public, JSON usage map)"
+    printfn "  GET  /pricing                          (public calculator UI)"
     printfn "  GET  /admin                            (Admin UI)"
   match oidcConfig with
   | Some cfg ->
