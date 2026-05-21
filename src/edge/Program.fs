@@ -415,6 +415,8 @@ let main argv =
       path "/ws"   >=> handShake (Hub.handler hub)
       GET >=> path "/"      >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/index.html" >=> Files.browseFile wwwroot "index.html"
+      GET >=> path "/admin"      >=> Files.browseFile wwwroot "admin.html"
+      GET >=> path "/admin.html" >=> Files.browseFile wwwroot "admin.html"
       GET >=> Files.browse wwwroot
       NOT_FOUND "Not found."
     ]
@@ -460,6 +462,7 @@ let main argv =
     printfn "  PATCH /api/admin/users/<id>           (Admin scope, JSON {role})"
     printfn "  GET  /api/admin/tenants/<id>/quotas   (Admin scope)"
     printfn "  PUT  /api/admin/tenants/<id>/quotas   (Admin scope, JSON per-kind overrides)"
+    printfn "  GET  /admin                            (Admin UI)"
   match oidcConfig with
   | Some cfg ->
     printfn "  OIDC SSO: issuer=%s  client=%s  tenant=%s  cookie.secure=%b"

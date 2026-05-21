@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PulseBoard · Admin</title>
+  <style>
+    :root {
+      --bg:#0f1115; --panel:#171a21; --panel-2:#1f242d;
+      --fg:#e6e6e6; --muted:#8a93a1; --accent:#5ec8ff;
+      --ok:#5cd97a; --warn:#f0c452; --err:#f25f5c; --grid:#232833;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+           background:var(--bg); color:var(--fg); }
+    header { padding:10px 16px; background:var(--panel); border-bottom:1px solid #000;
+             display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+    header h1 { font-size:14px; margin:0; letter-spacing:1px; color:var(--accent); }
+    header a { color:var(--accent); text-decoration:none; }
+    header a:hover { text-decoration:underline; }
+    header .who { color:var(--muted); margin-left:auto; }
+    nav.tabs { padding:0 16px; background:var(--panel); border-bottom:1px solid var(--grid);
+               display:flex; gap:0; }
+    nav.tabs button { background:none; color:var(--muted); border:0; padding:10px 14px;
+                      cursor:pointer; font:inherit; letter-spacing:1px; text-transform:uppercase;
+                      border-bottom:2px solid transparent; }
+    nav.tabs button.active { color:var(--accent); border-bottom-color:var(--accent); }
+    main { padding:14px; }
+    section.tab { display:none; }
+    section.tab.active { display:block; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+    .panel { background:var(--panel); border:1px solid #000; border-radius:6px;
+             padding:10px 12px; flex:1 1 320px; min-width:300px; }
+    .panel h2 { margin:0 0 8px 0; font-size:12px; color:var(--muted);
+                text-transform:uppercase; letter-spacing:1px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { text-align:left; padding:6px 8px; border-bottom:1px dashed var(--grid);
+             vertical-align:top; }
+    th { color:var(--muted); font-weight:normal; text-transform:uppercase;
+         letter-spacing:1px; font-size:11px; }
+    tr.selectable { cursor:pointer; }
+    tr.selectable:hover td { background:var(--panel-2); }
+    tr.selected td { background:rgba(94,200,255,0.10); }
+    input, select, textarea {
+      background:var(--panel-2); color:var(--fg); border:1px solid var(--grid);
+      padding:6px 8px; border-radius:4px; font:inherit;
+    }
+    input[type=number] { width:90px; }
+    button.primary, button.danger, button.ghost {
+      background:var(--panel-2); color:var(--fg); border:1px solid var(--grid);
+      padding:6px 10px; border-radius:4px; cursor:pointer; font:inherit;
+    }
+    button.primary { border-color:var(--accent); color:var(--accent); }
+    button.danger  { border-color:var(--err);    color:var(--err); }
+    button:disabled { opacity:0.4; cursor:not-allowed; }
+    .form-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+    .form-row label { color:var(--muted); min-width:96px; }
+    code, .mono { font-family:inherit; color:var(--accent); word-break:break-all; }
+    .pill { display:inline-block; padding:1px 6px; border-radius:8px; font-size:11px;
+            background:var(--panel-2); color:var(--muted); margin-right:4px; }
+    .pill.role-admin   { color:var(--err); }
+    .pill.role-editor  { color:var(--warn); }
+    .pill.role-viewer  { color:var(--ok); }
+    .pill.role-billing { color:var(--accent); }
+    .toast {
+      position:fixed; right:16px; bottom:16px; max-width:420px;
+      background:var(--panel); border:1px solid var(--grid); border-left:3px solid var(--accent);
+      padding:10px 14px; border-radius:4px; opacity:0; transform:translateY(8px);
+      transition:opacity 0.2s, transform 0.2s; pointer-events:none; z-index:50;
+    }
+    .toast.show { opacity:1; transform:translateY(0); pointer-events:auto; }
+    .toast.err { border-left-color:var(--err); }
+    .toast.ok  { border-left-color:var(--ok); }
+    pre { background:var(--panel-2); padding:8px 10px; border-radius:4px;
+          overflow:auto; max-height:240px; white-space:pre-wrap; word-break:break-all; }
+    .muted { color:var(--muted); }
+    .gone { display:none !important; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>PULSEBOARD · ADMIN</h1>
+  <a href="/">&larr; dashboard</a>
+  <span class="who" id="whoami">checking session…</span>
+  <button class="ghost" id="signOut" style="display:none;">Sign out</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="tenants" class="active">Tenants</button>
+  <button data-tab="keys">API Keys</button>
+  <button data-tab="users">Users</button>
+  <button data-tab="quotas">Quotas</button>
+  <button data-tab="audit">Audit</button>
+</nav>
+
+<main>
+  <!-- Sign-in screen (shown when /auth/me 401s and no bearer token is set) -->
+  <section id="auth" class="tab">
+    <div class="panel" style="max-width:520px;">
+      <h2>Sign in</h2>
+      <p class="muted">No active session.</p>
+      <div class="form-row">
+        <a href="/auth/login?returnTo=/admin.html"><button class="primary">Continue with OIDC&nbsp;SSO</button></a>
+      </div>
+      <p class="muted">Or paste an admin-scope API key (stored only in this tab):</p>
+      <div class="form-row">
+        <input id="bearerIn" placeholder="pk_..." style="flex:1; min-width:280px;" />
+        <button class="primary" id="bearerSet">Use key</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tenants -->
+  <section id="tab-tenants" class="tab active">
+    <div class="row">
+      <div class="panel" style="flex:2 1 480px;">
+        <h2>Tenants</h2>
+        <table id="tenantTable"><thead>
+          <tr><th>Slug</th><th>ID</th><th>Created</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <div class="panel" style="flex:1 1 280px;">
+        <h2>Create tenant</h2>
+        <div class="form-row">
+          <label>Slug</label>
+          <input id="newSlug" placeholder="acme" />
+          <button class="primary" id="newTenantBtn">Create</button>
+        </div>
+        <p class="muted">Slugs are lowercase, no spaces. Existing slugs return the existing tenant.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- API Keys -->
+  <section id="tab-keys" class="tab">
+    <div class="row">
+      <div class="panel" style="flex:2 1 520px;">
+        <h2>API keys <span class="muted" id="keysFor"></span></h2>
+        <table id="keysTable"><thead>
+          <tr><th>Label</th><th>Role</th><th>Scopes</th><th>Last used</th><th>Created</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <div class="panel" style="flex:1 1 280px;">
+        <h2>Issue key</h2>
+        <div class="form-row">
+          <label>Label</label>
+          <input id="keyLabel" placeholder="prod-ingest" />
+        </div>
+        <div class="form-row">
+          <label>Role</label>
+          <select id="keyRole">
+            <option value="viewer">viewer</option>
+            <option value="editor" selected>editor</option>
+            <option value="admin">admin</option>
+            <option value="billing">billing</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Scopes</label>
+          <label><input type="checkbox" class="keyScope" value="ingest" checked> ingest</label>
+          <label><input type="checkbox" class="keyScope" value="query"  checked> query</label>
+          <label><input type="checkbox" class="keyScope" value="admin"> admin</label>
+        </div>
+        <div class="form-row">
+          <button class="primary" id="issueKeyBtn" disabled>Issue (select a tenant)</button>
+        </div>
+        <div id="issuedKey" class="gone">
+          <h2 style="margin-top:14px;">New key &mdash; shown once</h2>
+          <pre id="issuedKeyPlain"></pre>
+          <p class="muted">Copy now. PulseBoard only stores the hash.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Users -->
+  <section id="tab-users" class="tab">
+    <div class="panel">
+      <h2>Users <span class="muted" id="usersFor"></span></h2>
+      <table id="usersTable"><thead>
+        <tr><th>Email</th><th>Subject</th><th>Issuer</th><th>Role</th><th>Last login</th><th></th></tr>
+      </thead><tbody></tbody></table>
+      <p class="muted">Users appear here after they sign in via OIDC. Edit the role to grant/revoke access.</p>
+    </div>
+  </section>
+
+  <!-- Quotas -->
+  <section id="tab-quotas" class="tab">
+    <div class="panel">
+      <h2>Quotas <span class="muted" id="quotasFor"></span></h2>
+      <p class="muted">Empty fields fall back to the process defaults. Set "cardinality" to 0 to mean unlimited.</p>
+      <table>
+        <thead><tr>
+          <th>Kind</th><th>Capacity (burst)</th><th>Refill / sec</th><th>Override?</th>
+        </tr></thead>
+        <tbody id="quotaRows"></tbody>
+      </table>
+      <div class="form-row" style="margin-top:10px;">
+        <label>Cardinality cap</label>
+        <input type="number" id="qCardinality" min="0" />
+        <span class="muted" id="qCardinalityState"></span>
+      </div>
+      <div class="form-row">
+        <button class="primary" id="quotaSaveBtn" disabled>Save changes</button>
+        <button class="ghost"   id="quotaResetBtn" disabled>Clear all overrides</button>
+        <span class="muted" id="quotaHint">Select a tenant from the Tenants tab.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Audit -->
+  <section id="tab-audit" class="tab">
+    <div class="panel">
+      <h2>Audit log <span class="muted">most recent first</span></h2>
+      <div class="form-row">
+        <label>Tail</label>
+        <input type="number" id="auditTail" value="100" min="1" max="1000" />
+        <button class="primary" id="auditRefresh">Refresh</button>
+      </div>
+      <table id="auditTable"><thead>
+        <tr><th>When</th><th>Tenant</th><th>Action</th><th>Outcome</th><th>Resource</th><th>Details</th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// -- shared state ---------------------------------------------------------
+const state = {
+  bearer:  sessionStorage.getItem('pb.bearer') || null,
+  me:      null,             // /auth/me response, when SSO is used
+  tenants: [],
+  selectedTenant: null,      // tenant object
+};
+
+const $ = (id) => document.getElementById(id);
+
+function toast(msg, kind = 'ok') {
+  const el = $('toast');
+  el.className = 'toast show ' + kind;
+  el.textContent = msg;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { el.className = 'toast'; }, 3500);
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function fmtTs(s) {
+  if (!s) return '—';
+  try {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    return d.toISOString().replace('T', ' ').replace(/\..+/, '');
+  } catch { return s; }
+}
+
+// -- transport ------------------------------------------------------------
+// Cookie-based session (OIDC) is sent automatically; for API-key fallback
+// we attach the Bearer header. 401 → bounce back to the sign-in panel.
+async function api(method, url, body) {
+  const headers = { 'Accept': 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (state.bearer)       headers['Authorization'] = 'Bearer ' + state.bearer;
+  const res = await fetch(url, {
+    method, headers,
+    credentials: 'same-origin',
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (res.status === 401) { showAuth(); throw new Error('unauthorised'); }
+  const text = await res.text();
+  let json = null;
+  if (text) { try { json = JSON.parse(text); } catch { /* not json */ } }
+  if (!res.ok) {
+    const msg = (json && json.error) ? json.error : (text || res.statusText);
+    throw new Error(msg);
+  }
+  return json;
+}
+
+// -- auth screen ----------------------------------------------------------
+function showAuth() {
+  document.querySelectorAll('main > section.tab').forEach(s => s.classList.remove('active'));
+  $('auth').classList.add('active');
+  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+}
+
+async function checkSession() {
+  // If a bearer was pasted earlier, accept it without touching /auth/me
+  // (legacy/non-OIDC deployments don't expose /auth/me).
+  try {
+    const me = await api('GET', '/auth/me');
+    state.me = me;
+    $('whoami').textContent = `${me.slug} · ${me.role} · via ${me.via}`;
+    $('signOut').style.display = '';
+    return true;
+  } catch (e) {
+    if (state.bearer) {
+      // Probe an admin endpoint to verify the key has admin scope.
+      try {
+        await api('GET', '/api/admin/tenants');
+        $('whoami').textContent = `api-key · ${state.bearer.slice(0, 12)}…`;
+        $('signOut').style.display = '';
+        return true;
+      } catch { /* fall through */ }
+    }
+    showAuth();
+    return false;
+  }
+}
+
+$('signOut').addEventListener('click', () => {
+  state.bearer = null; sessionStorage.removeItem('pb.bearer');
+  // OIDC logout is a redirect; for bearer-only sessions just reload.
+  if (state.me) location.href = '/auth/logout?returnTo=/admin.html';
+  else          location.reload();
+});
+
+$('bearerSet').addEventListener('click', async () => {
+  const v = $('bearerIn').value.trim();
+  if (!v) return;
+  state.bearer = v; sessionStorage.setItem('pb.bearer', v);
+  if (await checkSession()) { selectTab('tenants'); await loadTenants(); }
+});
+
+// -- tabs -----------------------------------------------------------------
+function selectTab(name) {
+  document.querySelectorAll('nav.tabs button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('main > section.tab').forEach(s => s.classList.remove('active'));
+  $('tab-' + name).classList.add('active');
+  if (name === 'keys'   && state.selectedTenant) loadKeys();
+  if (name === 'users'  && state.selectedTenant) loadUsers();
+  if (name === 'quotas' && state.selectedTenant) loadQuotas();
+  if (name === 'audit')  loadAudit();
+}
+document.querySelectorAll('nav.tabs button').forEach(b =>
+  b.addEventListener('click', () => selectTab(b.dataset.tab)));
+
+// -- tenants --------------------------------------------------------------
+async function loadTenants() {
+  state.tenants = await api('GET', '/api/admin/tenants');
+  const tb = $('tenantTable').querySelector('tbody');
+  tb.innerHTML = '';
+  for (const t of state.tenants) {
+    const tr = document.createElement('tr');
+    tr.className = 'selectable';
+    if (state.selectedTenant && state.selectedTenant.id === t.id)
+      tr.classList.add('selected');
+    tr.innerHTML =
+      `<td><code>${escapeHtml(t.slug)}</code></td>` +
+      `<td class="mono">${escapeHtml(t.id)}</td>` +
+      `<td class="muted">${fmtTs(t.createdAt)}</td>`;
+    tr.addEventListener('click', () => selectTenant(t));
+    tb.appendChild(tr);
+  }
+  if (!state.selectedTenant && state.tenants.length > 0)
+    selectTenant(state.tenants[0]);
+}
+
+function selectTenant(t) {
+  state.selectedTenant = t;
+  document.querySelectorAll('#tenantTable tbody tr').forEach((tr, i) =>
+    tr.classList.toggle('selected', state.tenants[i] && state.tenants[i].id === t.id));
+  $('keysFor').textContent   = '· ' + t.slug;
+  $('usersFor').textContent  = '· ' + t.slug;
+  $('quotasFor').textContent = '· ' + t.slug;
+  $('issueKeyBtn').disabled = false;
+  $('issueKeyBtn').textContent = 'Issue';
+  $('quotaSaveBtn').disabled = false;
+  $('quotaResetBtn').disabled = false;
+  $('quotaHint').textContent = '';
+  // Refresh whichever sub-tab is currently visible.
+  const active = document.querySelector('nav.tabs button.active');
+  if (active) selectTab(active.dataset.tab);
+}
+
+$('newTenantBtn').addEventListener('click', async () => {
+  const slug = $('newSlug').value.trim().toLowerCase();
+  if (!slug) return;
+  try {
+    const t = await api('POST', '/api/admin/tenants', { slug });
+    $('newSlug').value = '';
+    toast(`tenant '${t.slug}' ready`);
+    await loadTenants();
+    selectTenant(state.tenants.find(x => x.id === t.id) || t);
+  } catch (e) { toast('create failed: ' + e.message, 'err'); }
+});
+
+// -- api keys -------------------------------------------------------------
+async function loadKeys() {
+  const tid = state.selectedTenant.id;
+  const keys = await api('GET', `/api/admin/tenants/${encodeURIComponent(tid)}/api-keys`);
+  const tb = $('keysTable').querySelector('tbody');
+  tb.innerHTML = '';
+  if (keys.length === 0) {
+    tb.innerHTML = '<tr><td colspan=5 class="muted">No keys yet.</td></tr>';
+    return;
+  }
+  for (const k of keys) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${escapeHtml(k.label)}</td>` +
+      `<td><span class="pill role-${k.role}">${k.role}</span></td>` +
+      `<td>${k.scopes.map(s => `<span class="pill">${s}</span>`).join('')}</td>` +
+      `<td class="muted">${fmtTs(k.lastUsedAt)}</td>` +
+      `<td class="muted">${fmtTs(k.createdAt)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+$('issueKeyBtn').addEventListener('click', async () => {
+  if (!state.selectedTenant) return;
+  const tid = state.selectedTenant.id;
+  const label = $('keyLabel').value.trim() || 'unnamed';
+  const role  = $('keyRole').value;
+  const scopes =
+    Array.from(document.querySelectorAll('.keyScope:checked')).map(c => c.value);
+  try {
+    const r = await api('POST',
+      `/api/admin/tenants/${encodeURIComponent(tid)}/api-keys`,
+      { label, role, scopes });
+    $('issuedKey').classList.remove('gone');
+    $('issuedKeyPlain').textContent = r.plaintext;
+    $('keyLabel').value = '';
+    toast(`issued ${r.id}`);
+    await loadKeys();
+  } catch (e) { toast('issue failed: ' + e.message, 'err'); }
+});
+
+// -- users ----------------------------------------------------------------
+async function loadUsers() {
+  const tid = state.selectedTenant.id;
+  const users = await api('GET', `/api/admin/tenants/${encodeURIComponent(tid)}/users`);
+  const tb = $('usersTable').querySelector('tbody');
+  tb.innerHTML = '';
+  if (users.length === 0) {
+    tb.innerHTML = '<tr><td colspan=6 class="muted">No users yet. Users appear after their first OIDC sign-in.</td></tr>';
+    return;
+  }
+  for (const u of users) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${escapeHtml(u.email || '—')}</td>` +
+      `<td class="mono">${escapeHtml(u.subject)}</td>` +
+      `<td class="muted">${escapeHtml(u.issuer)}</td>` +
+      `<td>
+         <select data-uid="${escapeHtml(u.id)}" class="userRole">
+           ${['viewer','editor','admin','billing']
+              .map(r => `<option value="${r}"${r === u.role ? ' selected' : ''}>${r}</option>`)
+              .join('')}
+         </select>
+       </td>` +
+      `<td class="muted">${fmtTs(u.lastLoginAt)}</td>` +
+      `<td><button class="primary saveUser" data-uid="${escapeHtml(u.id)}">Save</button></td>`;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll('.saveUser').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      const uid = btn.dataset.uid;
+      const sel = tb.querySelector(`select.userRole[data-uid="${uid}"]`);
+      try {
+        await api('PATCH', `/api/admin/users/${encodeURIComponent(uid)}`,
+          { role: sel.value });
+        toast('role updated');
+      } catch (e) { toast('update failed: ' + e.message, 'err'); }
+    }));
+}
+
+// -- quotas ---------------------------------------------------------------
+const QUOTA_KINDS = ['ingest', 'query', 'alertEval', 'logBytes'];
+let currentQuotas = null;
+
+async function loadQuotas() {
+  const tid = state.selectedTenant.id;
+  currentQuotas = await api('GET', `/api/admin/tenants/${encodeURIComponent(tid)}/quotas`);
+  const tb = $('quotaRows');
+  tb.innerHTML = '';
+  for (const k of QUOTA_KINDS) {
+    const l = currentQuotas.rates[k] || { capacity: 0, refillPerSec: 0 };
+    const overridden = currentQuotas.rateOverrides.includes(k);
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td><code>${k}</code></td>` +
+      `<td><input type="number" step="any" min="0" data-kind="${k}" data-field="capacity"     value="${l.capacity}"></td>` +
+      `<td><input type="number" step="any" min="0" data-kind="${k}" data-field="refillPerSec" value="${l.refillPerSec}"></td>` +
+      `<td>${overridden
+              ? `<span class="pill role-editor">override</span>
+                 <button class="ghost clearKind" data-kind="${k}">clear</button>`
+              : '<span class="muted">default</span>'}</td>`;
+    tb.appendChild(tr);
+  }
+  $('qCardinality').value = currentQuotas.cardinality;
+  $('qCardinalityState').textContent =
+    currentQuotas.cardinalityOverridden ? 'override active (0 = unlimited)' : 'default';
+  tb.querySelectorAll('.clearKind').forEach(b =>
+    b.addEventListener('click', async () => {
+      try {
+        await api('PUT',
+          `/api/admin/tenants/${encodeURIComponent(state.selectedTenant.id)}/quotas`,
+          { [b.dataset.kind]: null });
+        toast(`cleared ${b.dataset.kind}`);
+        await loadQuotas();
+      } catch (e) { toast('clear failed: ' + e.message, 'err'); }
+    }));
+}
+
+$('quotaSaveBtn').addEventListener('click', async () => {
+  if (!state.selectedTenant) return;
+  // Send only the rows whose capacity/refill differ from the loaded values
+  // (so unchanged defaults stay default rather than getting promoted to
+  // overrides on every Save).
+  const payload = {};
+  for (const k of QUOTA_KINDS) {
+    const cap  = parseFloat(document.querySelector(`input[data-kind="${k}"][data-field=capacity]`).value);
+    const rate = parseFloat(document.querySelector(`input[data-kind="${k}"][data-field=refillPerSec]`).value);
+    const cur  = currentQuotas.rates[k] || { capacity: 0, refillPerSec: 0 };
+    if (cap !== cur.capacity || rate !== cur.refillPerSec)
+      payload[k] = { capacity: cap, refillPerSec: rate };
+  }
+  const card = parseInt($('qCardinality').value, 10);
+  if (Number.isFinite(card) && card !== currentQuotas.cardinality)
+    payload.cardinality = card;
+  if (Object.keys(payload).length === 0) { toast('no changes'); return; }
+  try {
+    await api('PUT',
+      `/api/admin/tenants/${encodeURIComponent(state.selectedTenant.id)}/quotas`,
+      payload);
+    toast('quotas saved');
+    await loadQuotas();
+  } catch (e) { toast('save failed: ' + e.message, 'err'); }
+});
+
+$('quotaResetBtn').addEventListener('click', async () => {
+  if (!state.selectedTenant) return;
+  if (!confirm('Clear all quota overrides for ' + state.selectedTenant.slug + '?')) return;
+  const payload = { cardinality: null };
+  for (const k of QUOTA_KINDS) payload[k] = null;
+  try {
+    await api('PUT',
+      `/api/admin/tenants/${encodeURIComponent(state.selectedTenant.id)}/quotas`,
+      payload);
+    toast('overrides cleared');
+    await loadQuotas();
+  } catch (e) { toast('clear failed: ' + e.message, 'err'); }
+});
+
+// -- audit ----------------------------------------------------------------
+async function loadAudit() {
+  const tail = Math.max(1, Math.min(1000, parseInt($('auditTail').value, 10) || 100));
+  try {
+    const events = await api('GET', `/api/admin/audit?tail=${tail}`);
+    const tb = $('auditTable').querySelector('tbody');
+    tb.innerHTML = '';
+    for (const e of events.slice().reverse()) {
+      const tr = document.createElement('tr');
+      const out = (e.outcome || '').toLowerCase();
+      const colour =
+        out === 'allow' ? 'role-viewer' :
+        out === 'deny'  ? 'role-admin'  :
+        out === 'error' ? 'role-editor' : '';
+      tr.innerHTML =
+        `<td class="muted">${fmtTs(e.ts)}</td>` +
+        `<td class="mono">${escapeHtml(e.tenant || '—')}</td>` +
+        `<td>${escapeHtml(e.action)}</td>` +
+        `<td><span class="pill ${colour}">${escapeHtml(e.outcome)}</span></td>` +
+        `<td class="muted">${escapeHtml(e.resource)}</td>` +
+        `<td class="muted">${escapeHtml(e.details || '')}</td>`;
+      tb.appendChild(tr);
+    }
+  } catch (e) { toast('audit load failed: ' + e.message, 'err'); }
+}
+$('auditRefresh').addEventListener('click', loadAudit);
+
+// -- bootstrap ------------------------------------------------------------
+(async () => {
+  if (await checkSession()) {
+    selectTab('tenants');
+    await loadTenants();
+  }
+})();
+</script>
+</body>
+</html>
