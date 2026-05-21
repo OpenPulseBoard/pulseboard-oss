@@ -433,6 +433,27 @@ let main argv =
   let scrapeAdminInner =
     PulseBoard.PromScrape.adminWebPart scrapeRepo tenantStore auditLog
 
+  // -- StatsD UDP + Carbon plaintext TCP (PLAN.md Phase 2 step 5) ----------
+  // Each listener owns one port; traffic is attributed to the owning
+  // tenant. Repo is in-memory; lifecycle wraps actual socket binds.
+  let listenerRepo : PulseBoard.Listeners.IListenerRepo =
+    PulseBoard.Listeners.InMemoryListenerRepo() :> _
+  let listenerManager : PulseBoard.Listeners.Manager option =
+    if multiTenant then
+      let deps : PulseBoard.Listeners.ListenerDeps =
+        { repo = listenerRepo
+          store = metricStore
+          hub = hub
+          quotas = ingestQuotas }
+      let m = new PulseBoard.Listeners.Manager(deps)
+      m.StartAll()  // no-op now (in-memory repo is empty); future Pg repo wins
+      Some m
+    else None
+  let listenerAdminInner : WebPart =
+    match listenerManager with
+    | Some m -> PulseBoard.Listeners.adminWebPart m tenantStore auditLog
+    | None   -> fun _ -> async { return None }
+
   // Build OIDC routes + session-resolving middleware (only if configured).
   let oidcRoutes, resolveSession =
     match oidcConfig with
@@ -496,7 +517,7 @@ let main argv =
 
   // Scrape admin endpoints share the admin scope gate; prepend them in
   // the choose so they win before Admin.webPart's catch-all NOT_FOUND.
-  let adminAll = choose [ scrapeAdminInner; adminInner ]
+  let adminAll = choose [ scrapeAdminInner; listenerAdminInner; adminInner ]
 
   let admin : WebPart =
     if multiTenant then
@@ -590,6 +611,10 @@ let main argv =
     printfn "  POST /api/admin/tenants/<id>/scrape-targets  (Admin scope, JSON {url,intervalSec?,labels?,bearerToken?})"
     printfn "  GET  /api/admin/scrape-targets/<id>          (Admin scope)"
     printfn "  DELETE /api/admin/scrape-targets/<id>        (Admin scope)"
+    printfn "  GET  /api/admin/tenants/<id>/listeners       (Admin scope)"
+    printfn "  POST /api/admin/tenants/<id>/listeners       (Admin scope, JSON {protocol,port,bindAddr?})"
+    printfn "  GET  /api/admin/listeners/<id>               (Admin scope)"
+    printfn "  DELETE /api/admin/listeners/<id>             (Admin scope)"
     printfn "  GET  /admin                            (Admin UI)"
   match oidcConfig with
   | Some cfg ->
