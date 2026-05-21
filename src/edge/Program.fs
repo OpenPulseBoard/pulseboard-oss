@@ -453,6 +453,41 @@ let main argv =
     else None
   let _ = retentionCompactor   // keep alive for process lifetime
 
+  // -- Downsampling rollups (PLAN.md Phase 3 step 4) -------------------
+  // Background job re-aggregates the embedded MetricStore into
+  // 1m / 5m / 1h buckets so wide-window queries don't have to scan
+  // raw points. Skipped when metrics are in cloud mode (Mimir does
+  // this via its own recording rules / blocks compactor).
+  let rollupsEnabled =
+    match envOr "PULSE_ROLLUPS_ENABLED" (argValue "--rollups-enabled=") with
+    | Some v ->
+      match v.Trim().ToLowerInvariant() with
+      | "0" | "false" | "no" | "off" -> false
+      | _ -> true
+    | None -> true
+  let rollupInterval =
+    parseTtlMs "PULSE_ROLLUPS_INTERVAL_MS" "--rollups-interval-ms="
+    |> Option.map int
+    |> Option.defaultValue 30_000
+  let rollupStore, rollupWorker =
+    if rollupsEnabled && mimirUrl.IsNone then
+      let rs = PulseBoard.Rollups.RollupStore(maxBucketsPerSeries = 10_000)
+      let w =
+        new PulseBoard.Rollups.RollupWorker(
+          metricStore, rs,
+          PulseBoard.Rollups.allResolutions,
+          rollupInterval)
+      w.Start()
+      printfn "  Rollups: enabled (1m/5m/1h, recompute every %dms)" rollupInterval
+      Some rs, Some w
+    else
+      if rollupsEnabled && mimirUrl.IsSome then
+        printfn "  Rollups: skipped (Mimir backend handles downsampling)"
+      else
+        printfn "  Rollups: disabled"
+      None, None
+  let _ = rollupWorker         // keep alive for process lifetime
+
   // Storage client: every receiver path (HTTP ingest, scrape, UDP/TCP
   // listeners) writes through this. In `all` and `storage` it's a thin
   // wrapper around the in-process MetricStore/LogStore/hub; in `edge` it
@@ -603,7 +638,7 @@ let main argv =
   let ingestInner =
     PulseBoard.Ingest.webPart storage ingestQuotas
   let queryInner =
-    PulseBoard.Query.webPart  metricStore logStore
+    PulseBoard.Query.webPart  metricStore logStore rollupStore
 
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 

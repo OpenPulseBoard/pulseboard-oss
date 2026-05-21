@@ -34,6 +34,7 @@
     <Compile Include="LokiPush.fs" />
     <Compile Include="PromScrape.fs" />
     <Compile Include="Listeners.fs" />
+    <Compile Include="Rollups.fs" />
     <Compile Include="Query.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Program.fs" />

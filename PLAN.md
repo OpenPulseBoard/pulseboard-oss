@@ -153,8 +153,27 @@ pipeline, the UI, billing.
    overrides (numbers set, `null` clears, missing fields untouched).
    Object-store lifecycle rules are out of scope until we ship cold
    tiering.
-4. **Downsampling rollups** (1m / 5m / 1h). Background job; query layer
-   auto-picks resolution. (Largely free with Mimir.)
+4. ✅ **Downsampling rollups** (1m / 5m / 1h). New
+   [`Rollups.fs`](src/edge/Rollups.fs) module:
+   `Resolution` enumerates the three bucket widths; `Bucket` carries
+   `{ts; count; min; max; sum}` so any of avg/min/max/sum/count can be
+   served without keeping raw points; `RollupStore` holds a thread-safe
+   per-`(metric, resolution)` bucket array capped at
+   `maxBucketsPerSeries=10_000`; `RollupWorker` runs an async loop that
+   every `--rollups-interval-ms=` (default 30000ms) snapshots every
+   metric in `MetricStore`, re-aggregates into each resolution, and
+   wholesale-replaces the bucket arrays (idempotent, partial buckets
+   correct). [`Query.fs`](src/edge/Query.fs) extended:
+   `GET /api/metrics/<name>?sinceMs=…&step=<ms|auto|raw>&agg=avg|min|max|sum|count`;
+   when `step` is `auto` (default) the resolution is picked from the
+   window length — `<1h`: raw, `<12h`: 1m, `<7d`: 5m, `≥7d`: 1h.
+   [`Program.fs`](src/edge/Program.fs) wires
+   `--rollups-enabled=` / `--rollups-interval-ms=` + `PULSE_ROLLUPS_*`
+   envs and only constructs the worker when metrics are still embedded
+   (skipped when `--mimir-url=` is set, since Mimir handles its own
+   recording rules / blocks compactor). Smoke: 10 raw points produced
+   a 1m bucket with `avg=0.46 max=0.9 count=10`; a 24h window auto-
+   selected 5m resolution; unknown `step=` falls back to raw.
 
 ---
 
