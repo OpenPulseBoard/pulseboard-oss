@@ -14,6 +14,7 @@
     <Compile Include="Tenancy.fs" />
     <Compile Include="Audit.fs" />
     <Compile Include="Quotas.fs" />
+    <Compile Include="PgTenantStore.fs" />
     <Compile Include="Rbac.fs" />
     <Compile Include="Session.fs" />
     <Compile Include="Oidc.fs" />
@@ -29,6 +30,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.18.0" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
     <PackageReference Include="Suave" Version="3.4.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.18.0" />
   </ItemGroup>

@@ -61,7 +61,28 @@ let main argv =
     |> Option.map   (fun a -> a.Substring 14)
 
   let tenantStore : PulseBoard.Tenancy.ITenantStore =
-    PulseBoard.Tenancy.InMemoryTenantStore() :> _
+    // Postgres-backed store when --postgres=<connstr> (or PULSE_POSTGRES) is
+    // provided; otherwise the in-memory store (data vaporizes on restart).
+    // Schema is applied idempotently at startup.
+    let pgConn =
+      match argv |> Array.tryFind (fun a -> a.StartsWith "--postgres=") with
+      | Some s -> Some (s.Substring 11)
+      | None ->
+        let v = Environment.GetEnvironmentVariable "PULSE_POSTGRES"
+        if String.IsNullOrWhiteSpace v then None else Some v
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgTenantStore.ensureSchema cs
+        printfn "  TenantStore: Postgres (schema ensured)"
+        PulseBoard.PgTenantStore.PgTenantStore(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres tenant store: %s" ex.Message
+        exit 2
+    | None ->
+      if multiTenant then
+        printfn "  TenantStore: in-memory (ephemeral — pass --postgres=... to persist)"
+      PulseBoard.Tenancy.InMemoryTenantStore() :> _
   let auditLog : PulseBoard.Audit.IAuditLog =
     PulseBoard.Audit.InMemoryAuditLog(1024) :> _
 
