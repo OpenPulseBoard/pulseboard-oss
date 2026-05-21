@@ -41,6 +41,7 @@
     <Compile Include="NotifyQueue.fs" />
     <Compile Include="Rules.fs" />
     <Compile Include="Routing.fs" />
+    <Compile Include="OnCall.fs" />
     <Compile Include="Dashboards.fs" />
     <Compile Include="TraceApi.fs" />
     <Compile Include="Rum.fs" />

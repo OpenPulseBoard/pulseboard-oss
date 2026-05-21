@@ -588,6 +588,14 @@ let main argv =
   let alertingPipeline =
     PulseBoard.Routing.Pipeline(routingStore, notifyQueue, metricStore)
 
+  // On-call schedules + escalation policies + acks (PLAN.md Phase 5 #4).
+  let onCallCatalog : PulseBoard.OnCall.ICatalogStore =
+    PulseBoard.OnCall.FileCatalogStore(Path.Combine(dataDir, "oncall")) :> _
+  let onCallAcks    : PulseBoard.OnCall.IAckStore =
+    PulseBoard.OnCall.FileAckStore(Path.Combine(dataDir, "acks")) :> _
+  let escalator     = PulseBoard.OnCall.Escalator(onCallCatalog, onCallAcks)
+  alertingPipeline.SetEscalator(escalator :> PulseBoard.Routing.IEscalator)
+
   let alertSink =
     { new PulseBoard.Rules.IAlertSink with
         member _.OnAlert a =
@@ -616,11 +624,15 @@ let main argv =
   let rulesInner       = PulseBoard.Rules.webPart       multiTenant ruleStore ruleEvaluator
   let routingInner     = PulseBoard.Routing.webPart     multiTenant routingStore
   let notifyQueueInner = PulseBoard.NotifyQueue.webPart multiTenant notifyQueue
+  let onCallInner      = PulseBoard.OnCall.webPart      multiTenant onCallCatalog onCallAcks
 
   printfn "  Alerting: rule store under %s; routing under %s; queue under %s"
     (Path.Combine(dataDir, "rules"))
     (Path.Combine(dataDir, "routing"))
     (Path.Combine(dataDir, "notify"))
+  printfn "  OnCall:   catalog under %s; acks under %s"
+    (Path.Combine(dataDir, "oncall"))
+    (Path.Combine(dataDir, "acks"))
 
   // -- Nightly audit-log S3 export (PLAN.md Phase 1 step 4) ----------------
   // Opt-in: requires both Postgres (durable audit source) and --audit-s3-bucket.
@@ -878,7 +890,7 @@ let main argv =
       fun _ -> async { return None }
 
   let query : WebPart =
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (

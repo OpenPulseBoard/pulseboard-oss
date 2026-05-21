@@ -364,17 +364,61 @@ retry/dedup.
    are lifted into receivers in the seeded default config so single-
    tenant operators keep the same out-of-the-box delivery.
 
-3. **Receivers.** Beyond today’s Slack/webhook: PagerDuty, Opsgenie,
-   Microsoft Teams, Discord, email (SES/SendGrid), SMS (Twilio), Jira
-   ticket, HMAC-signed webhooks (SHA-256 over body with per-receiver
-   secret). Receiver records and dispatch headers for `webhook`,
-   `slack`, `hmac_webhook` (`X-PulseBoard-Signature`), `pagerduty`
-   (`Authorization: Token`), and `opsgenie` (`Authorization: GenieKey`)
-   are wired in [NotifyQueue.fs](src/edge/NotifyQueue.fs#L1) — email
-   (SES/SendGrid), SMS (Twilio), and Jira still need driver code.
+3. ✅ **DONE — Receivers** ([NotifyQueue.fs](src/edge/NotifyQueue.fs)).
+   The dispatcher now does per-receiver HTTP shaping in a single
+   `shapeRequest` helper, so each `OutboundMessage` carries an `extra`
+   string→string map alongside the JSON envelope and the transport
+   layer reshapes URL, body, content-type, and auth headers based on
+   `receiverType`:
+   - `webhook` / `slack` / `teams` / `discord` — JSON envelope as-is.
+   - `hmac_webhook` — `X-PulseBoard-Signature: sha256=<hex>` over the
+     UTF-8 body using the receiver secret.
+   - `pagerduty` — `Authorization: Token token=<key>` (Events API v2
+     compatible; `routing_key` lives in the envelope).
+   - `opsgenie` — `Authorization: GenieKey <key>`.
+   - `sendgrid` — rebuilds the body as SendGrid v3 mail JSON using
+     `extra.from` / `extra.to` and a human-readable subject + plain-
+     text summary rendered from the envelope; `Authorization: Bearer
+     <secret>`; defaults to `https://api.sendgrid.com/v3/mail/send`.
+   - `twilio` — form-encoded `From`/`To`/`Body` (summary capped at
+     1500 chars), HTTP Basic auth with `extra.account_sid : <secret>`;
+     defaults to `/2010-04-01/Accounts/<sid>/Messages.json`.
+   - `jira` — POSTs an Atlassian Document Format issue to
+     `<url>/rest/api/3/issue` using `extra.project` / `extra.issueType`
+     and HTTP Basic auth with `extra.user : <secret>`.
+   - `ses` — SES Query API form body (Source/Destination/Subject/Body)
+     for use behind an IAM-authenticated proxy that attaches SigV4.
+   Operator-supplied per-receiver headers always win, so a receiver
+   can layer custom headers on top of any of the shapings above.
 
-4. **On-call schedules & escalation policies.** Rotations, overrides,
-   handoffs, acknowledgement, re-notify.
+4. ✅ **DONE — On-call schedules & escalation policies**
+   ([OnCall.fs](src/edge/OnCall.fs)). A per-tenant catalog of `users`,
+   `schedules`, and `policies` is persisted as a single JSON document
+   under `<dataDir>/oncall/<tenant>.json` via `FileCatalogStore`; an
+   append-only ack journal lives at `<dataDir>/acks/<tenant>.ndjson`
+   via `FileAckStore` with an in-memory `HashSet` of acked fingerprints
+   for O(1) suppression lookups. Schedules are made of round-robin
+   `Rotation`s (members, periodMs, startAt) plus point-in-time
+   `ScheduleOverride`s (overrides win when active). Escalation
+   policies declare an ordered list of `EscalationStep { delayMs;
+   targets }` where each `Target` is one of `TgtReceiver`,
+   `TgtUser`, or `TgtSchedule` — user and schedule targets resolve
+   to the user's declared `receiverIds`, with schedule targets first
+   resolving to whoever is on call right now via `whoIsOnCall`.
+   `Route` gained a `policyId : string option` field: when a routed
+   group has a policy set, the `Pipeline.flushDue` loop bypasses the
+   normal `groupWait`/`groupInterval` cadence and instead walks the
+   policy's steps — step `k` fires once `now - anchor >= step.delayMs`
+   (anchor = `firstSeenAt` for step 0, otherwise the previous step's
+   send time), enqueueing one envelope per receiver returned by
+   `Escalator.ResolveStep`. An ack on any fingerprint in the group
+   halts further escalation until the alert resolves and a fresh
+   outbreak begins. Pipeline gained a `SetEscalator(IEscalator)` hook
+   so the `Routing` module stays free of any on-call dependency; the
+   adapter lives in `OnCall.Escalator`. Self-metrics:
+   `pulse_escalation_step_total`, `pulse_alerts_acked_total`. REST:
+   `GET/PUT /api/oncall/catalog`, `GET /api/oncall/whoison/<scheduleId>`,
+   `POST /api/alerts/<fp>/ack`, `GET /api/alerts/<fp>/acks`.
 
 5. ✅ **DONE — Notify pipeline reliability** ([NotifyQueue.fs](src/edge/NotifyQueue.fs)).
    Persistent outbound queue at `<dataDir>/notify/queue.ndjson`

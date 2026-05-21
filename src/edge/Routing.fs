@@ -108,6 +108,7 @@ type Route =
   { id              : string
     matchers        : Matcher[]
     receiverId      : string option
+    policyId        : string option   // Escalation policy (PLAN Phase 5 #4)
     groupBy         : string[]
     groupWaitMs     : int64
     groupIntervalMs : int64
@@ -193,6 +194,7 @@ let rec private writeRoute (w : Utf8JsonWriter) (r : Route) =
   w.WriteString("id", r.id)
   writeMatchers w "matchers" r.matchers
   (match r.receiverId with Some rid -> w.WriteString("receiverId", rid) | None -> ())
+  (match r.policyId   with Some pid -> w.WriteString("policyId",   pid) | None -> ())
   writeStringArray w "groupBy" r.groupBy
   w.WriteNumber("groupWaitMs",      r.groupWaitMs)
   w.WriteNumber("groupIntervalMs",  r.groupIntervalMs)
@@ -351,6 +353,7 @@ let rec private parseRoute (el : JsonElement) : Route =
   { id = readStr el "id" |> Option.defaultWith (fun () -> Guid.NewGuid().ToString "N")
     matchers         = parseMatchers el "matchers"
     receiverId       = readStr el "receiverId"
+    policyId         = readStr el "policyId"
     groupBy          = readStringArr el "groupBy"
     groupWaitMs      = readInt64 el "groupWaitMs"      30_000L
     groupIntervalMs  = readInt64 el "groupIntervalMs"  300_000L
@@ -408,7 +411,7 @@ let parseConfig (body : string) : Result<Config, string> =
       | true, v -> parseRoute v
       | _ ->
         // Default empty root: matches everything, no receiver, no children.
-        { id = "root"; matchers = [||]; receiverId = None
+        { id = "root"; matchers = [||]; receiverId = None; policyId = None
           groupBy = [| "alertname" |]
           groupWaitMs = 30_000L; groupIntervalMs = 300_000L
           repeatIntervalMs = 3_600_000L
@@ -476,7 +479,7 @@ let private sanitize (s : string) =
 
 let private defaultConfig () : Config =
   { route =
-      { id = "root"; matchers = [||]; receiverId = None
+      { id = "root"; matchers = [||]; receiverId = None; policyId = None
         groupBy = [| "alertname"; "service" |]
         groupWaitMs = 30_000L; groupIntervalMs = 300_000L
         repeatIntervalMs = 3_600_000L
@@ -587,12 +590,31 @@ let private collectMatchingRoutes (root : Route) (labels : Map<string,string>)
 let private resolveReceiver (path : Route list) : string option =
   path |> List.tryPick (fun r -> r.receiverId)
 
+let private resolvePolicy (path : Route list) : string option =
+  path |> List.tryPick (fun r -> r.policyId)
+
+/// Hook supplied by the on-call layer (`OnCall.fs`). Pipeline uses it,
+/// when present, to drive multi-step escalation in place of the normal
+/// group-wait/group-interval cadence.
+type IEscalator =
+  /// Number of steps defined by the policy (0 if unknown).
+  abstract StepCount  : tenantId:TenantId * policyId:string -> int
+  /// Returns `(delayMs, receiverIds)` for the given step. `delayMs` is
+  /// the time to wait before *this* step fires, measured from the
+  /// previous step's send time (or from group firstSeen for step 0).
+  abstract ResolveStep : tenantId:TenantId * policyId:string * stepIndex:int -> (int64 * string[]) option
+  /// True if any fingerprint in the set has been acknowledged.
+  abstract IsAcked    : tenantId:TenantId * fingerprints:Set<string> -> bool
+
 [<NoComparison>]
 type private GroupState =
-  { mutable firstSeenAt : int64
-    mutable lastSentAt  : int64
-    mutable fingerprints: Set<string>
-    mutable lastSentSet : Set<string> }
+  { mutable firstSeenAt    : int64
+    mutable lastSentAt     : int64
+    mutable fingerprints   : Set<string>
+    mutable lastSentSet    : Set<string>
+    mutable policyId       : string option
+    mutable escalationStep : int    // -1 = no step fired yet
+    mutable stepStartedAt  : int64 }
 
 [<NoComparison>]
 type private TenantGroups =
@@ -625,6 +647,8 @@ type Pipeline(configStore : IConfigStore,
   let firing = ConcurrentDictionary<string, ConcurrentDictionary<string, AlertInstance>>()
   // periodic flush timer state
   let flushSync = obj()
+  // on-call/escalation hook, wired post-construction by Program.fs
+  let mutable escalator : IEscalator option = None
 
   let tenantBucket (TenantId t) =
     let key = t
@@ -660,7 +684,8 @@ type Pipeline(configStore : IConfigStore,
   /// Flush groups whose `groupWait` since first-seen has elapsed (initial
   /// notification) or whose `groupInterval` since last-send has elapsed
   /// (follow-up). Repeated identical fingerprint sets within
-  /// `repeatIntervalMs` are deduped.
+  /// `repeatIntervalMs` are deduped. Groups bound to an escalation
+  /// policy bypass this cadence and step through the policy instead.
   let flushDue (now : int64) =
     lock flushSync (fun () ->
       for kvT in perTenant do
@@ -671,10 +696,38 @@ type Pipeline(configStore : IConfigStore,
           |> Array.map (fun r -> r.id, r)
           |> Map.ofArray
         let bucket = firingBucket tid
+        let enqueueFor (recv : Receiver) (state : GroupState) (groupId : string)
+                       (alerts : AlertInstance[]) =
+          let body = envelope recv groupId alerts
+          let msg : OutboundMessage =
+            { id = Guid.NewGuid().ToString("N")
+              tenantId = tid
+              receiverId = recv.id
+              receiverType = recv.type_
+              url = recv.url |> Option.defaultValue ""
+              secret = recv.secret
+              body = body
+              headers = Map.empty
+              extra = recv.extra
+              attempt = 0
+              maxAttempts = 5
+              enqueuedAt = now
+              nextRunAt = now
+              lastError = None }
+          queue.Enqueue msg
+          state.lastSentAt <- now
+          state.lastSentSet <- state.fingerprints
+          selfMetrics.Record(
+            "pulse_notify_enqueued_total",
+            { ts = now; value = 1.0 })
         for kvG in kvT.Value.groups do
           let gkey  = kvG.Key
           let state = kvG.Value
-          if state.fingerprints.Count = 0 then () else
+          if state.fingerprints.Count = 0 then
+            // Group drained — reset escalation so a fresh outbreak starts over.
+            state.escalationStep <- -1
+            state.stepStartedAt  <- 0L
+          else
           // Resolve receiver: gkey starts with "<recvId>|<group>".
           let pipe = gkey.IndexOf '|'
           if pipe < 0 then () else
@@ -683,7 +736,6 @@ type Pipeline(configStore : IConfigStore,
           match Map.tryFind recvId recvById with
           | None -> ()
           | Some recv ->
-            // Look up active alerts whose fingerprint is in this group.
             let alerts =
               state.fingerprints
               |> Seq.choose (fun fp ->
@@ -691,48 +743,60 @@ type Pipeline(configStore : IConfigStore,
                 | true, a -> Some a | _ -> None)
               |> Seq.toArray
             if alerts.Length = 0 then () else
-            // Inherit timing from the deepest matching route that has a
-            // receiver — we pick the root for simplicity here; the
-            // pipeline's `OnAlert` already enforces per-route grouping
-            // by computing `groupKey` against the matched route's
-            // groupBy, so just respect the root timings as defaults
-            // when no leaf-route metadata is reachable from this call.
-            let route = cfg.route
-            let waitOk =
-              now - state.firstSeenAt >= route.groupWaitMs
-              && state.lastSentAt = 0L
-            let followOk =
-              state.lastSentAt > 0L
-              && now - state.lastSentAt >= route.groupIntervalMs
-            if waitOk || followOk then
-              let fps = state.fingerprints
-              let identical = fps = state.lastSentSet
-              let withinRepeat =
+            // Acked? Suppress further sends (escalation halts; routine
+            // group flush would also be noisy).
+            let acked =
+              match escalator, state.policyId with
+              | Some esc, Some _ -> esc.IsAcked(tid, state.fingerprints)
+              | _ -> false
+            if acked then
+              selfMetrics.Record(
+                "pulse_alerts_acked_total", { ts = now; value = 1.0 })
+            elif state.policyId.IsSome && escalator.IsSome then
+              let pid = state.policyId.Value
+              let esc = escalator.Value
+              let steps = esc.StepCount(tid, pid)
+              if steps <= 0 then () else
+              let nextIdx = state.escalationStep + 1
+              if nextIdx >= steps then () else
+              match esc.ResolveStep(tid, pid, nextIdx) with
+              | None -> ()
+              | Some (delayMs, receiverIds) ->
+                let anchor =
+                  if state.escalationStep < 0 then state.firstSeenAt
+                  else state.stepStartedAt
+                if now - anchor < delayMs then () else
+                let mutable any = false
+                for rid in receiverIds do
+                  match Map.tryFind rid recvById with
+                  | Some r ->
+                    enqueueFor r state groupId alerts
+                    any <- true
+                  | None -> ()
+                if any then
+                  state.escalationStep <- nextIdx
+                  state.stepStartedAt  <- now
+                  selfMetrics.Record(
+                    "pulse_escalation_step_total",
+                    { ts = now; value = float (nextIdx + 1) })
+            else
+              // Standard Alertmanager-style cadence.
+              let route = cfg.route
+              let waitOk =
+                now - state.firstSeenAt >= route.groupWaitMs
+                && state.lastSentAt = 0L
+              let followOk =
                 state.lastSentAt > 0L
-                && now - state.lastSentAt < route.repeatIntervalMs
-              if identical && withinRepeat then ()
-              else
-                let body = envelope recv groupId alerts
-                let msg : OutboundMessage =
-                  { id = Guid.NewGuid().ToString("N")
-                    tenantId = tid
-                    receiverId = recv.id
-                    receiverType = recv.type_
-                    url = recv.url |> Option.defaultValue ""
-                    secret = recv.secret
-                    body = body
-                    headers = Map.empty
-                    attempt = 0
-                    maxAttempts = 5
-                    enqueuedAt = now
-                    nextRunAt = now
-                    lastError = None }
-                queue.Enqueue msg
-                state.lastSentAt <- now
-                state.lastSentSet <- fps
-                selfMetrics.Record(
-                  "pulse_notify_enqueued_total",
-                  { ts = now; value = 1.0 }))
+                && now - state.lastSentAt >= route.groupIntervalMs
+              if waitOk || followOk then
+                let fps = state.fingerprints
+                let identical = fps = state.lastSentSet
+                let withinRepeat =
+                  state.lastSentAt > 0L
+                  && now - state.lastSentAt < route.repeatIntervalMs
+                if identical && withinRepeat then ()
+                else
+                  enqueueFor recv state groupId alerts)
 
   let flushTimer =
     new Timer((fun _ -> try flushDue (nowMs ()) with _ -> ()),
@@ -782,6 +846,7 @@ type Pipeline(configStore : IConfigStore,
         match resolveReceiver path with
         | None -> ()
         | Some recvId ->
+          let policyId = resolvePolicy path
           // Inherit groupBy from the deepest route in `path` that
           // declares one; otherwise the root.
           let groupBy =
@@ -794,11 +859,20 @@ type Pipeline(configStore : IConfigStore,
           let st =
             tg.groups.GetOrAdd(gkey, fun _ ->
               { firstSeenAt = now; lastSentAt = 0L
-                fingerprints = Set.empty; lastSentSet = Set.empty })
-          if st.fingerprints.Count = 0 then st.firstSeenAt <- now
+                fingerprints = Set.empty; lastSentSet = Set.empty
+                policyId = policyId; escalationStep = -1; stepStartedAt = 0L })
+          if st.fingerprints.Count = 0 then
+            st.firstSeenAt <- now
+            st.escalationStep <- -1
+            st.stepStartedAt  <- 0L
+          // Allow late policy attachment if a later route revision adds one.
+          if st.policyId.IsNone && policyId.IsSome then st.policyId <- policyId
           st.fingerprints <- st.fingerprints.Add a.fingerprint
           selfMetrics.Record(
             "pulse_alerts_routed_total", { ts = now; value = 1.0 })
+
+  member _.SetEscalator(esc : IEscalator) =
+    escalator <- Some esc
 
   member _.Stop() = flushTimer.Dispose()
 

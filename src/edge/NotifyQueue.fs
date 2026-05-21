@@ -49,6 +49,7 @@ type OutboundMessage =
     secret       : string option      // HMAC secret / integration key
     body         : string             // JSON envelope
     headers      : Map<string,string>
+    extra        : Map<string,string> // receiver-specific config (e.g. from/to addresses)
     attempt      : int
     maxAttempts  : int
     enqueuedAt   : int64
@@ -89,6 +90,10 @@ let private writeMsg (w : Utf8JsonWriter) (m : OutboundMessage) =
   w.WritePropertyName "headers"
   w.WriteStartObject()
   for KeyValue(k, v) in m.headers do w.WriteString(k, v)
+  w.WriteEndObject()
+  w.WritePropertyName "extra"
+  w.WriteStartObject()
+  for KeyValue(k, v) in m.extra do w.WriteString(k, v)
   w.WriteEndObject()
   w.WriteNumber("attempt",     m.attempt)
   w.WriteNumber("maxAttempts", m.maxAttempts)
@@ -131,6 +136,17 @@ let private readHeaders (el : JsonElement) : Map<string,string> =
     |> Map.ofSeq
   | _ -> Map.empty
 
+let private readExtra (el : JsonElement) : Map<string,string> =
+  match el.TryGetProperty "extra" with
+  | true, v when v.ValueKind = JsonValueKind.Object ->
+    v.EnumerateObject()
+    |> Seq.choose (fun p ->
+      if p.Value.ValueKind = JsonValueKind.String
+      then Some (p.Name, p.Value.GetString())
+      else None)
+    |> Map.ofSeq
+  | _ -> Map.empty
+
 let parseMsg (line : string) : OutboundMessage option =
   try
     use doc = JsonDocument.Parse line
@@ -147,6 +163,7 @@ let parseMsg (line : string) : OutboundMessage option =
         secret = readStr r "secret"
         body = body
         headers = readHeaders r
+        extra = readExtra r
         attempt = int (readNum r "attempt" 0L)
         maxAttempts = int (readNum r "maxAttempts" 5L)
         enqueuedAt = readNum r "enqueuedAt" 0L
@@ -412,37 +429,195 @@ let private hmacHex (secret : string) (body : string) : string =
   for b in bytes do sb.AppendFormat("{0:x2}", int b) |> ignore
   sb.ToString()
 
+/// Extract a brief human-readable summary from the routing envelope so
+/// receivers that don't accept arbitrary JSON (email/SMS/Jira) can show
+/// something legible.
+let private renderSummary (envelopeBody : string) : string * string =
+  // Returns (subject, plaintextBody).
+  try
+    use doc = JsonDocument.Parse envelopeBody
+    let r = doc.RootElement
+    let receiver =
+      match r.TryGetProperty "receiver" with
+      | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+      | _ -> ""
+    let alerts =
+      match r.TryGetProperty "alerts" with
+      | true, v when v.ValueKind = JsonValueKind.Array ->
+        v.EnumerateArray() |> Seq.toArray
+      | _ -> [||]
+    if alerts.Length = 0 then ("PulseBoard alert", envelopeBody)
+    else
+      let a = alerts.[0]
+      let getStr (name : string) =
+        match a.TryGetProperty name with
+        | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+        | _ -> ""
+      let ruleName = getStr "ruleName"
+      let severity = getStr "severity"
+      let state    = getStr "state"
+      let firing   = alerts.Length
+      let sb = StringBuilder()
+      sb.AppendFormat("[{0}] {1} ({2}) — {3} alert(s)\n",
+        severity.ToUpperInvariant(), ruleName, state, firing) |> ignore
+      sb.AppendFormat("Receiver: {0}\n\n", receiver) |> ignore
+      for ai in alerts do
+        let n = match ai.TryGetProperty "ruleName" with
+                | true, v -> v.GetString() | _ -> "?"
+        let vl = match ai.TryGetProperty "value" with
+                 | true, v ->
+                   let mutable f = 0.0
+                   if v.TryGetDouble &f then f else 0.0
+                 | _ -> 0.0
+        let lblStr =
+          match ai.TryGetProperty "labels" with
+          | true, v when v.ValueKind = JsonValueKind.Object ->
+            v.EnumerateObject()
+            |> Seq.map (fun p -> p.Name + "=" + (try p.Value.GetString() with _ -> ""))
+            |> String.concat ", "
+          | _ -> ""
+        sb.AppendFormat("• {0} value={1} [{2}]\n", n, vl, lblStr) |> ignore
+      let subject =
+        sprintf "[%s] %s (%d alert%s)"
+          (severity.ToUpperInvariant()) ruleName firing
+          (if firing = 1 then "" else "s")
+      subject, sb.ToString()
+  with _ ->
+    ("PulseBoard alert", envelopeBody)
+
+let private jsonEscape (s : string) : string =
+  JsonSerializer.Serialize s
+
+/// Build the HTTP request for a given message: chooses URL, body,
+/// content-type, and any receiver-specific headers.
+let private shapeRequest (m : OutboundMessage) : HttpRequestMessage =
+  let req = new HttpRequestMessage()
+  req.Method <- HttpMethod.Post
+  let setUrl (u : string) = req.RequestUri <- Uri u
+  match m.receiverType with
+  | "sendgrid" ->
+    // SendGrid v3: POST https://api.sendgrid.com/v3/mail/send
+    let subject, plain = renderSummary m.body
+    let fromAddr =
+      m.extra |> Map.tryFind "from"
+      |> Option.defaultValue "alerts@pulseboard.local"
+    let toAddr =
+      m.extra |> Map.tryFind "to" |> Option.defaultValue ""
+    let body =
+      sprintf """{"personalizations":[{"to":[{"email":%s}]}],"from":{"email":%s},"subject":%s,"content":[{"type":"text/plain","value":%s}]}"""
+        (jsonEscape toAddr) (jsonEscape fromAddr)
+        (jsonEscape subject) (jsonEscape plain)
+    let url =
+      if String.IsNullOrEmpty m.url
+      then "https://api.sendgrid.com/v3/mail/send"
+      else m.url
+    setUrl url
+    req.Content <- new StringContent(body, Encoding.UTF8, "application/json")
+    match m.secret with
+    | Some k ->
+      req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + k) |> ignore
+    | None -> ()
+  | "twilio" ->
+    // POST https://api.twilio.com/2010-04-01/Accounts/<sid>/Messages.json
+    let _, plain = renderSummary m.body
+    let sid   = m.extra |> Map.tryFind "account_sid" |> Option.defaultValue ""
+    let fromN = m.extra |> Map.tryFind "from" |> Option.defaultValue ""
+    let toN   = m.extra |> Map.tryFind "to"   |> Option.defaultValue ""
+    let body  =
+      // Twilio caps SMS at 1600 chars; keep summary short.
+      let txt = if plain.Length > 1500 then plain.Substring(0, 1500) else plain
+      let enc s = Uri.EscapeDataString (s : string)
+      sprintf "From=%s&To=%s&Body=%s" (enc fromN) (enc toN) (enc txt)
+    let url =
+      if String.IsNullOrEmpty m.url
+      then sprintf "https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json" sid
+      else m.url
+    setUrl url
+    req.Content <- new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded")
+    match m.secret with
+    | Some token when sid <> "" ->
+      let cred = sid + ":" + token
+      let b64  = Convert.ToBase64String(Encoding.UTF8.GetBytes cred)
+      req.Headers.TryAddWithoutValidation("Authorization", "Basic " + b64) |> ignore
+    | _ -> ()
+  | "jira" ->
+    // POST <baseUrl>/rest/api/3/issue (URL pre-baked to include path)
+    let subject, plain = renderSummary m.body
+    let project = m.extra |> Map.tryFind "project"  |> Option.defaultValue ""
+    let issueT  = m.extra |> Map.tryFind "issueType" |> Option.defaultValue "Task"
+    let user    = m.extra |> Map.tryFind "user"      |> Option.defaultValue ""
+    let body =
+      sprintf """{"fields":{"project":{"key":%s},"summary":%s,"issuetype":{"name":%s},"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":%s}]}]}}}"""
+        (jsonEscape project) (jsonEscape subject)
+        (jsonEscape issueT)  (jsonEscape plain)
+    setUrl m.url
+    req.Content <- new StringContent(body, Encoding.UTF8, "application/json")
+    match m.secret with
+    | Some token when user <> "" ->
+      let cred = user + ":" + token
+      let b64  = Convert.ToBase64String(Encoding.UTF8.GetBytes cred)
+      req.Headers.TryAddWithoutValidation("Authorization", "Basic " + b64) |> ignore
+    | _ -> ()
+  | "ses" ->
+    // Minimal AWS SES Query API call (region-aware). Requires SigV4 in
+    // production; the lite path here uses the Email API host but lets
+    // the operator front it with an IAM-authenticated proxy (so the
+    // proxy attaches the signature). Body is x-www-form-urlencoded.
+    let subject, plain = renderSummary m.body
+    let fromAddr = m.extra |> Map.tryFind "from" |> Option.defaultValue ""
+    let toAddr   = m.extra |> Map.tryFind "to"   |> Option.defaultValue ""
+    let enc s = Uri.EscapeDataString (s : string)
+    let body =
+      sprintf "Action=SendEmail&Source=%s&Destination.ToAddresses.member.1=%s&Message.Subject.Data=%s&Message.Body.Text.Data=%s"
+        (enc fromAddr) (enc toAddr) (enc subject) (enc plain)
+    setUrl m.url
+    req.Content <- new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded")
+    match m.secret with
+    | Some k ->
+      // Allow a pre-shared token on a proxy.
+      req.Headers.TryAddWithoutValidation("Authorization", k) |> ignore
+    | None -> ()
+  | "hmac_webhook" ->
+    setUrl m.url
+    req.Content <- new StringContent(m.body, Encoding.UTF8, "application/json")
+    match m.secret with
+    | Some s ->
+      let sig_ = hmacHex s m.body
+      req.Headers.TryAddWithoutValidation("X-PulseBoard-Signature", "sha256=" + sig_) |> ignore
+    | None -> ()
+  | "pagerduty" ->
+    setUrl m.url
+    req.Content <- new StringContent(m.body, Encoding.UTF8, "application/json")
+    match m.secret with
+    | Some key ->
+      req.Headers.TryAddWithoutValidation("Authorization", "Token token=" + key) |> ignore
+    | None -> ()
+  | "opsgenie" ->
+    setUrl m.url
+    req.Content <- new StringContent(m.body, Encoding.UTF8, "application/json")
+    match m.secret with
+    | Some key ->
+      req.Headers.TryAddWithoutValidation("Authorization", "GenieKey " + key) |> ignore
+    | None -> ()
+  | _ ->
+    // discord / slack / teams / webhook — JSON envelope as-is.
+    setUrl m.url
+    req.Content <- new StringContent(m.body, Encoding.UTF8, "application/json")
+  // Caller-supplied headers always win.
+  for KeyValue(k, v) in m.headers do
+    try req.Headers.TryAddWithoutValidation(k, v) |> ignore with _ -> ()
+  req
+
 /// Dispatch one message. Returns `Ok ()` on 2xx, `Error msg` otherwise.
-/// Each receiver type formats the HTTP request a bit differently. The
-/// envelope body is shaped by the routing pipeline (`Routing.fs`); this
-/// layer only owns the transport.
+/// Receiver-specific HTTP shaping lives in `shapeRequest`; this layer
+/// only owns the transport (timeout, status handling, error capture).
 let dispatch (m : OutboundMessage) : Task<Result<unit, string>> =
   task {
     try
-      if m.url = "" then
+      if m.url = "" && m.receiverType <> "sendgrid" && m.receiverType <> "twilio" then
         return Result.Error "no url"
       else
-        use req = new HttpRequestMessage(HttpMethod.Post, m.url)
-        let mediaType =
-          match m.receiverType with
-          | "discord" | "slack" | "teams" -> "application/json"
-          | _ -> "application/json"
-        req.Content <- new StringContent(m.body, Encoding.UTF8, mediaType)
-        for KeyValue(k, v) in m.headers do
-          try req.Headers.TryAddWithoutValidation(k, v) |> ignore with _ -> ()
-        match m.receiverType, m.secret with
-        | "hmac_webhook", Some s ->
-          let sig_ = hmacHex s m.body
-          req.Headers.TryAddWithoutValidation("X-PulseBoard-Signature", "sha256=" + sig_) |> ignore
-        | "pagerduty", Some key ->
-          // Events API v2 uses `routing_key` in the body; if the caller
-          // already baked it into the envelope, leave the body alone. For
-          // safety we always attach an `Authorization: Token` header too —
-          // PagerDuty Events API ignores it but custom proxies use it.
-          req.Headers.TryAddWithoutValidation("Authorization", "Token token=" + key) |> ignore
-        | "opsgenie", Some key ->
-          req.Headers.TryAddWithoutValidation("Authorization", "GenieKey " + key) |> ignore
-        | _ -> ()
+        use req = shapeRequest m
         let! resp = http.SendAsync(req)
         if int resp.StatusCode >= 200 && int resp.StatusCode < 300 then
           return Result.Ok ()
