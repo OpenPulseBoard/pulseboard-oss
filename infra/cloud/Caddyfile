@@ -38,12 +38,18 @@ pulseboard.cloud, www.pulseboard.cloud {
 # Every workspace subdomain — upstream is derived from the slug.
 #
 # Workspace apps are deterministically named `pb-<slug>` and reachable on
-# Fly's internal DNS at `pb-<slug>.internal:8080`. So for
-# `foo.pulseboard.cloud` the upstream is `pb-foo.internal:8080`, computed
+# Fly's private DNS at `pb-<slug>.flycast:8080`. So for
+# `foo.pulseboard.cloud` the upstream is `pb-foo.flycast:8080`, computed
 # via Caddy's {labels.N} placeholder (labels are right-to-left:
 # labels.0=cloud, labels.1=pulseboard, labels.2=<slug>). This avoids
 # pulling in the third-party `dynamic http` upstreams module — stock
 # Caddy only ships `srv`, `a`, and `multi` providers.
+#
+# We use `.flycast` (not `.internal`) so workspaces auto-start on the
+# first request after they've been stopped for idle, and so Fly's proxy
+# applies the app's concurrency limits & health checks. `.internal`
+# would dial the VM directly and fail with connection-refused on any
+# stopped machine.
 #
 # On-demand TLS still calls /provision/ask before minting a cert, so an
 # attacker can't trick Caddy into hammering Let's Encrypt for random
@@ -57,7 +63,7 @@ pulseboard.cloud, www.pulseboard.cloud {
 
 	# Caddy refuses placeholders in an upstream that includes a scheme,
 	# so we drop the `http://` prefix (plain HTTP is the default transport).
-	reverse_proxy pb-{labels.2}.internal:8080 {
+	reverse_proxy pb-{labels.2}.flycast:8080 {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
