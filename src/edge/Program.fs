@@ -1116,12 +1116,23 @@ let main argv =
       NOT_FOUND "Not found."
     ]
 
+  // Bind address: default to loopback so the OSS demo isn't exposed to
+  // the LAN by accident. Containers (Fly, K8s) override via PULSE_BIND_ADDR=0.0.0.0
+  // — set in the Dockerfile so every role binds publicly inside the VM.
+  let bindAddr =
+    match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
+    | null | "" -> IPAddress.Loopback
+    | s ->
+      try IPAddress.Parse(s.Trim())
+      with _ ->
+        eprintfn "  [WARN] PULSE_BIND_ADDR=%s is not a valid IP; falling back to 127.0.0.1" s
+        IPAddress.Loopback
   let config =
     { defaultConfig with
-        bindings   = [ HttpBinding.create HTTP IPAddress.Loopback (uint16 port) ]
+        bindings   = [ HttpBinding.create HTTP bindAddr (uint16 port) ]
         homeFolder = Some wwwroot }
 
-  printfn "PulseBoard listening on http://127.0.0.1:%d" port
+  printfn "PulseBoard listening on http://%O:%d" bindAddr port
   if multiTenant then
     printfn "  Mode: multi-tenant. /ingest/* requires scope=ingest, /api/* requires scope=query, /api/admin/* requires scope=admin."
     printfn "  Quotas: ingest=%g rps (burst %g), query=%g rps (burst %g) per tenant."

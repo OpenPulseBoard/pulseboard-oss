@@ -329,10 +329,18 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
 
 /// Run a standalone provisioner service. Returns once the server exits.
 let run (port : int) (cfg : ProvisionerConfig) : unit =
+  let bindAddr =
+    match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
+    | null | "" -> IPAddress.Loopback
+    | s ->
+      try IPAddress.Parse(s.Trim())
+      with _ ->
+        eprintfn "  [WARN] PULSE_BIND_ADDR=%s is not a valid IP; falling back to 127.0.0.1" s
+        IPAddress.Loopback
   let config =
     { defaultConfig with
-        bindings = [ HttpBinding.create HTTP IPAddress.Loopback (uint16 port) ] }
-  printfn "PulseBoard (provisioner) listening on http://127.0.0.1:%d" port
+        bindings = [ HttpBinding.create HTTP bindAddr (uint16 port) ] }
+  printfn "PulseBoard (provisioner) listening on http://%O:%d" bindAddr port
   printfn "  Root domain: %s" cfg.rootDomain
   printfn "  Fly client:  %s" (if cfg.dryRun then "dry-run (no API calls)" else "live (api.machines.dev)")
   printfn "  Image:       %s (region %s)" cfg.machineConfig.image cfg.machineConfig.region

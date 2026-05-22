@@ -85,11 +85,19 @@ let webPart (wwwroot : string) (provisionerUrl : string option) : WebPart =
 
 /// Run a standalone site-only server. Returns once the server exits.
 let run (port : int) (wwwroot : string) (provisionerUrl : string option) : unit =
+  let bindAddr =
+    match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
+    | null | "" -> IPAddress.Loopback
+    | s ->
+      try IPAddress.Parse(s.Trim())
+      with _ ->
+        eprintfn "  [WARN] PULSE_BIND_ADDR=%s is not a valid IP; falling back to 127.0.0.1" s
+        IPAddress.Loopback
   let config =
     { defaultConfig with
-        bindings   = [ HttpBinding.create HTTP IPAddress.Loopback (uint16 port) ]
+        bindings   = [ HttpBinding.create HTTP bindAddr (uint16 port) ]
         homeFolder = Some wwwroot }
-  printfn "PulseBoard (site-only) listening on http://127.0.0.1:%d" port
+  printfn "PulseBoard (site-only) listening on http://%O:%d" bindAddr port
   match provisionerUrl with
   | Some u -> printfn "  Provisioner: %s (signup is proxied)" u
   | None   -> printfn "  Provisioner: <unset> (signup returns 503)"
