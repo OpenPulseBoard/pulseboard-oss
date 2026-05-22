@@ -1,0 +1,71 @@
+# fly.toml — pulseboard --mode=provisioner (control plane)
+#
+# Allocates per-customer slugs, spawns Fly Machines via the Fly API,
+# and answers Caddy's on-demand TLS questions (/provision/ask,
+# /provision/route). Backed by Postgres so slug→workspace mappings
+# survive restarts.
+#
+# Reached only from pulseboard-caddy + pulseboard-site over flycast.
+# Holds production Fly API credentials — keep flycast-only, never
+# allocate a public IP.
+#
+# Required secrets (fly secrets set …):
+#   FLY_API_TOKEN     = fo1_…                       # org-scoped, can create apps + machines
+#   FLY_ORG_SLUG      = pulseboard
+#   PULSE_POSTGRES    = Host=pulseboard-pg.flycast;Database=pulse;Username=pulse;Password=…
+#
+# Optional:
+#   PULSE_ROOT_DOMAIN      (default pulseboard.cloud)
+#   PULSE_FLY_REGION       (default iad)
+#   PULSE_WORKSPACE_IMAGE  (default registry.fly.io/pulseboard:latest)
+#
+# Deploy:
+#   fly apps create pulseboard-provisioner
+#   fly postgres create --name pulseboard-pg --region iad   # or use external PG
+#   fly postgres attach pulseboard-pg -a pulseboard-provisioner
+#   fly secrets set -a pulseboard-provisioner \
+#       FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard
+#   fly deploy -a pulseboard-provisioner --config provisioner.toml
+
+app            = "pulseboard-provisioner"
+primary_region = "iad"
+
+[build]
+  image = "registry.fly.io/pulseboard:latest"
+
+[processes]
+  app = "dotnet PulseBoard.dll --mode=provisioner --port=8080"
+
+[env]
+  PULSE_ROOT_DOMAIN     = "pulseboard.cloud"
+  PULSE_FLY_REGION      = "iad"
+  PULSE_WORKSPACE_IMAGE = "registry.fly.io/pulseboard:latest"
+  DOTNET_GCHeapCount    = "1"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = false
+  auto_stop_machines   = "off"          # Caddy queries /provision/ask on every cert mint
+  auto_start_machines  = true
+  min_machines_running = 1
+  processes            = ["app"]
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 100
+    hard_limit = 150
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "get"
+    path         = "/healthz"
+    protocol     = "http"
+    timeout      = "5s"
+
+# No public ports — flycast-only.
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 1
+  memory_mb = 512

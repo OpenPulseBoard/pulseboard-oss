@@ -1,0 +1,84 @@
+# fly.toml — per-customer workspace TEMPLATE
+#
+# This file is the shape the provisioner clones for each new
+# customer. The provisioner does NOT run `fly deploy` with this file
+# directly — it calls the Fly Machines API. The toml is canonical
+# documentation of the machine config plus a template you can use
+# manually with `fly launch --copy-config --name pb-<slug>` while
+# iterating.
+#
+# One Fly app per customer, named `pb-<slug>`. Each app gets:
+#   - the multi-tenant edge binary (one process serves all of that
+#     customer's API keys; we keep the --multi-tenant flag so quotas,
+#     RBAC and the admin surface light up exactly as in self-host)
+#   - a 10 GiB volume mounted at /data (PULSE_DATA_DIR)
+#   - a private Postgres attachment for tenant/key/audit storage
+#   - no public IP; reachable only via Fly's automatic
+#     pb-<slug>.fly.dev hostname, which Caddy proxies to from
+#     <slug>.pulseboard.cloud
+#
+# Required env per workspace (set by the provisioner at machine
+# create time, NOT in this file):
+#   PULSE_DATA_DIR  = /data
+#   PULSE_POSTGRES  = Host=…;Database=pulse_<slug>;Username=…;Password=…
+#   PULSE_EDGE_SECRET = <random 32-byte hex>     # HMAC for /_internal/v1/*
+#   PULSE_BOOTSTRAP_TOKEN = <single-use>          # gates first /api/signup
+#
+# Optional (set by operator after handoff to customer):
+#   PULSE_OIDC_AUTHORITY, PULSE_OIDC_CLIENT_ID, PULSE_OIDC_CLIENT_SECRET
+#   PULSE_NOTIFY_SMTP_HOST, PULSE_NOTIFY_SMTP_USER, PULSE_NOTIFY_SMTP_PASS
+#
+# Manual deploy (for debugging / canary slug):
+#   fly apps create pb-canary --org pulseboard
+#   fly volumes create pulse_data --size 10 --region iad -a pb-canary
+#   fly secrets set -a pb-canary \
+#       PULSE_EDGE_SECRET=$(openssl rand -hex 32) \
+#       PULSE_BOOTSTRAP_TOKEN=$(openssl rand -hex 16) \
+#       PULSE_POSTGRES="Host=…"
+#   fly deploy -a pb-canary --config workspace.toml
+
+app            = "pb-TEMPLATE"        # provisioner replaces with pb-<slug>
+primary_region = "iad"
+
+[build]
+  image = "registry.fly.io/pulseboard:latest"
+
+[processes]
+  app = "dotnet PulseBoard.dll --multi-tenant --port=8080"
+
+[env]
+  PULSE_DATA_DIR     = "/data"
+  DOTNET_GCHeapCount = "1"
+
+[mounts]
+  source      = "pulse_data"
+  destination = "/data"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = false      # Caddy terminates TLS at the front
+  auto_stop_machines   = "stop"     # idle workspaces scale to zero
+  auto_start_machines  = true
+  min_machines_running = 0          # cold-start on first request via Caddy
+  processes            = ["app"]
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 200
+    hard_limit = 300
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval     = "30s"
+    method       = "get"
+    path         = "/healthz"
+    protocol     = "http"
+    timeout      = "5s"
+
+# Customers reach us only via Caddy → pb-<slug>.fly.dev. No public IP
+# allocated on the workspace app itself.
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 2
+  memory_mb = 2048

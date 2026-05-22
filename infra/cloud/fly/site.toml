@@ -1,0 +1,55 @@
+# fly.toml — pulseboard --site-only (apex marketing host)
+#
+# Serves /, /home, /docs, /pricing, /signup, /signin and proxies
+# POST /api/signup to the provisioner. No tenant data, no ingest.
+# Stateless; safe to run multiple machines.
+#
+# Reached only from pulseboard-caddy over flycast (no public IP).
+#
+# Deploy:
+#   fly apps create pulseboard-site
+#   fly secrets set -a pulseboard-site \
+#       PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080
+#   fly deploy -a pulseboard-site --config site.toml
+
+app            = "pulseboard-site"
+primary_region = "iad"
+
+[build]
+  image = "registry.fly.io/pulseboard:latest"
+
+[processes]
+  app = "dotnet PulseBoard.dll --site-only --port=8080"
+
+[env]
+  # PULSE_PROVISIONER_URL is set via `fly secrets set`.
+  DOTNET_GCHeapCount = "1"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = false   # private; TLS is at the Caddy app
+  auto_stop_machines   = "stop"
+  auto_start_machines  = true
+  min_machines_running = 1
+  processes            = ["app"]
+
+  [http_service.concurrency]
+    type       = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "get"
+    path         = "/healthz"
+    protocol     = "http"
+    timeout      = "5s"
+
+# No public ports — flycast-only. Caddy reaches us at
+# http://pulseboard-site.flycast:8080.
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 1
+  memory_mb = 512
