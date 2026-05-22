@@ -233,7 +233,7 @@ Flags / env:
 | `--fly-token=` | `FLY_API_TOKEN` | *(required unless `--dry-run`)* |
 | `--fly-org=` | `FLY_ORG_SLUG` | *(required unless `--dry-run`)* |
 | `--fly-region=` | `PULSE_FLY_REGION` | `iad` |
-| `--workspace-image=` | `PULSE_WORKSPACE_IMAGE` | `registry.fly.io/pulseboard:latest` |
+| `--workspace-image=` | `PULSE_WORKSPACE_IMAGE` | `registry.fly.io/pulseboard1:latest` |
 | `--postgres=` | `PULSE_POSTGRES` | when set, slug→workspace registry persists in table `pb_workspaces` (schema auto-created). Without it the registry is in-memory and a provisioner restart forgets every allocation. Recommended for any non-dev deploy. |
 | `--dry-run` | — | when set, logs intent and returns synthetic IDs without calling Fly. Useful for local smoke tests. |
 
@@ -243,7 +243,7 @@ Run live:
 FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard \
   dotnet PulseBoard.dll --mode=provisioner --port=8080 \
     --root-domain=pulseboard.cloud \
-    --workspace-image=registry.fly.io/pulseboard:latest
+    --workspace-image=registry.fly.io/pulseboard1:latest
 ```
 
 Run dry (no credentials needed, useful for testing the marketing flow):

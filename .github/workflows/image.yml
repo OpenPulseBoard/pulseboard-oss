@@ -3,10 +3,10 @@ name: image
 # Build the PulseBoard Docker image and push it to Fly's registry on
 # every push to main. Tagged with both :latest (convenience) and
 # :<sha> (pin per deploy). The four cloud Fly apps in
-# infra/cloud/fly/ pull from registry.fly.io/pulseboard.
+# infra/cloud/fly/ pull from registry.fly.io/pulseboard1.
 #
 # Required repo secret:
-#   FLY_API_TOKEN  — `fly tokens create deploy -o pulseboard` output;
+#   FLY_API_TOKEN  — `fly tokens create deploy -a pulseboard1` output;
 #                    needs push scope on the `pulseboard` Fly app.
 
 on:
@@ -45,7 +45,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            registry.fly.io/pulseboard:latest
-            registry.fly.io/pulseboard:${{ github.sha }}
+            registry.fly.io/pulseboard1:latest
+            registry.fly.io/pulseboard1:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

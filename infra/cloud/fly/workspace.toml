@@ -41,7 +41,7 @@ app            = "pb-TEMPLATE"        # provisioner replaces with pb-<slug>
 primary_region = "iad"
 
 [build]
-  image = "registry.fly.io/pulseboard:latest"
+  image = "registry.fly.io/pulseboard1:latest"
 
 [processes]
   app = "dotnet PulseBoard.dll --multi-tenant --port=8080"

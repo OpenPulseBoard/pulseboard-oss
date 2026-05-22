@@ -16,7 +16,7 @@ app            = "pulseboard-site"
 primary_region = "iad"
 
 [build]
-  image = "registry.fly.io/pulseboard:latest"
+  image = "registry.fly.io/pulseboard1:latest"
 
 [processes]
   app = "dotnet PulseBoard.dll --site-only --port=8080"

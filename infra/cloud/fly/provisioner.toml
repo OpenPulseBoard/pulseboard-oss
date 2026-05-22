@@ -17,7 +17,7 @@
 # Optional:
 #   PULSE_ROOT_DOMAIN      (default pulseboard.cloud)
 #   PULSE_FLY_REGION       (default iad)
-#   PULSE_WORKSPACE_IMAGE  (default registry.fly.io/pulseboard:latest)
+#   PULSE_WORKSPACE_IMAGE  (default registry.fly.io/pulseboard1:latest)
 #
 # Deploy:
 #   fly apps create pulseboard-provisioner
@@ -31,7 +31,7 @@ app            = "pulseboard-provisioner"
 primary_region = "iad"
 
 [build]
-  image = "registry.fly.io/pulseboard:latest"
+  image = "registry.fly.io/pulseboard1:latest"
 
 [processes]
   app = "dotnet PulseBoard.dll --mode=provisioner --port=8080"
@@ -39,7 +39,7 @@ primary_region = "iad"
 [env]
   PULSE_ROOT_DOMAIN     = "pulseboard.cloud"
   PULSE_FLY_REGION      = "iad"
-  PULSE_WORKSPACE_IMAGE = "registry.fly.io/pulseboard:latest"
+  PULSE_WORKSPACE_IMAGE = "registry.fly.io/pulseboard1:latest"
   DOTNET_GCHeapCount    = "1"
 
 [http_service]

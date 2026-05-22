@@ -1,7 +1,7 @@
 # Fly.io deployment configs
 
 Four Fly apps make up the hosted PulseBoard topology. All four ship
-the same Docker image (`registry.fly.io/pulseboard:latest`) except
+the same Docker image (`registry.fly.io/pulseboard1:latest`) except
 Caddy, which uses upstream `caddy:2-alpine`.
 
 ```

@@ -74,7 +74,7 @@ type InMemoryWorkspaceRegistry () =
 // -- Fly Machines client ----------------------------------------------------
 
 type FlyMachineConfig =
-  { image       : string                  // e.g. registry.fly.io/pulseboard:latest
+  { image       : string                  // e.g. registry.fly.io/pulseboard1:latest
     region      : string                  // e.g. "iad"
     envExtra    : Map<string, string>     // merged with built-in defaults
     sizeCpus    : int                     // shared CPUs

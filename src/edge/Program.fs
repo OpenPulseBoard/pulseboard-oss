@@ -64,7 +64,7 @@ let main argv =
     let dryRun   = argv |> Array.contains "--dry-run"
     let image    =
       envOrEarly "PULSE_WORKSPACE_IMAGE" (argValueEarly "--workspace-image=")
-      |> Option.defaultValue "registry.fly.io/pulseboard:latest"
+      |> Option.defaultValue "registry.fly.io/pulseboard1:latest"
     let region   =
       envOrEarly "PULSE_FLY_REGION" (argValueEarly "--fly-region=")
       |> Option.defaultValue "iad"
