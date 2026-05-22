@@ -15,7 +15,8 @@
 #   *.pulseboard.cloud          AAAA  <fly v6>
 # Fetch the IPs with `fly ips list -a pulseboard-caddy`.
 #
-# Deploy:
+# Deploy (run from repo root so the Dockerfile's build context can
+# reach infra/cloud/Caddyfile):
 #   fly apps create pulseboard-caddy
 #   fly ips allocate-v4 -a pulseboard-caddy
 #   fly ips allocate-v6 -a pulseboard-caddy
@@ -23,17 +24,18 @@
 #   fly secrets set -a pulseboard-caddy \
 #       PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080 \
 #       SITE_URL=http://pulseboard-site.flycast:8080
-#   fly deploy -a pulseboard-caddy --config caddy.toml \
+#   fly deploy -a pulseboard-caddy \
+#       --config infra/cloud/fly/caddy.toml \
 #       --dockerfile caddy.Dockerfile
 
 app            = "pulseboard-caddy"
 primary_region = "iad"
 
 [build]
-  # Trivial Dockerfile (commit alongside this file):
-  #   FROM caddy:2-alpine
-  #   COPY Caddyfile /etc/caddy/Caddyfile
-  image = "caddy:2-alpine"
+  # See ../../../caddy.Dockerfile at the repo root. We don't set
+  # `dockerfile = …` here because flyctl resolves that path relative to
+  # the deploy CWD; passing `--dockerfile caddy.Dockerfile` on the
+  # command line keeps the contract explicit.
 
 [mounts]
   source      = "caddy_data"
