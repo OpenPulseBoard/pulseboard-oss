@@ -55,7 +55,9 @@ pulseboard.cloud, www.pulseboard.cloud {
 	}
 	encode zstd gzip
 
-	reverse_proxy http://pb-{labels.2}.internal:8080 {
+	# Caddy refuses placeholders in an upstream that includes a scheme,
+	# so we drop the `http://` prefix (plain HTTP is the default transport).
+	reverse_proxy pb-{labels.2}.internal:8080 {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
