@@ -54,9 +54,19 @@
     <Compile Include="Rum.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Signup.fs" />
-    <Compile Include="Provisioner.fs" />
-    <Compile Include="PgWorkspaceRegistry.fs" />
-    <Compile Include="SiteOnly.fs" />
+    <!-- Cloud-only code: hosted control plane (provisioner, site-only proxy,
+         workspace registry). Lives in src/cloud/ to keep the OSS/SaaS
+         boundary visible; will move to a private repo before the OSS
+         release. See src/cloud/README.md. -->
+    <Compile Include="..\cloud\Provisioner.fs">
+      <Link>cloud\Provisioner.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\PgWorkspaceRegistry.fs">
+      <Link>cloud\PgWorkspaceRegistry.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\SiteOnly.fs">
+      <Link>cloud\SiteOnly.fs</Link>
+    </Compile>
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -67,19 +77,26 @@
     <None Include="wwwroot/live.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="wwwroot/pricing.html">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="wwwroot/home.html">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="wwwroot/docs.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="wwwroot/signup.html">
+    <!-- Cloud-only marketing pages. Linked into output wwwroot/ so the
+         single binary still serves them today; when src/cloud/ moves to
+         the private repo these four entries go with it. -->
+    <None Include="..\cloud\wwwroot\home.html">
+      <Link>wwwroot\home.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="wwwroot/signin.html">
+    <None Include="..\cloud\wwwroot\pricing.html">
+      <Link>wwwroot\pricing.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\signup.html">
+      <Link>wwwroot\signup.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\signin.html">
+      <Link>wwwroot\signin.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/uPlot.iife.min.js">

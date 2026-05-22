@@ -266,7 +266,7 @@ to add (interface is in `Provisioner.fs`); not in this slice.
 
 ### 6.3 Caddy in front — on-demand TLS for `*.pulseboard.cloud`
 
-Use [`infra/Caddyfile`](../infra/Caddyfile) as the starting point. Key
+Use [`infra/cloud/Caddyfile`](../infra/cloud/Caddyfile) as the starting point. Key
 ideas:
 
 - `on_demand_tls { ask {$PROVISIONER_URL}/provision/ask }` makes Caddy

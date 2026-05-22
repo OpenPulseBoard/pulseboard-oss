@@ -983,7 +983,7 @@ Three pieces of work — first cut shipped:
 
 Still to do:
 
-- **`infra/Caddyfile`** — DONE. Wildcard TLS with `ask` + dynamic
+- **`infra/cloud/Caddyfile`** — DONE. Wildcard TLS with `ask` + dynamic
   upstreams.
 - **Postgres-backed `IWorkspaceRegistry`** — DONE. `src/edge/PgWorkspaceRegistry.fs`
   (table `pb_workspaces`, upsert on Insert, `SELECT … FOR UPDATE` inside a
@@ -1049,7 +1049,41 @@ Still to do:
 4. **OSS edition license** — MIT (max adoption, weakest moat),
    Apache-2.0, AGPL (forces hosted competitors to share), BSL with
    delayed open-sourcing à la Sentry. Decision drives community
-   strategy.
+   strategy. The Step 1 `src/cloud/` split (below) keeps all hosted
+   business code out of the public tree, so even a permissive license
+   on `src/edge/` does not give competitors the provisioner or
+   marketing surface for free.
+
+---
+
+## Repository layout — OSS / cloud separation
+
+**Step 1 (done).** In-repo folder boundary, single fsproj:
+
+- [`src/edge/`](src/edge/) — the open-sourceable product: ingest,
+  query, alerts, dashboards, RBAC, retention, traces, RUM, AI assist,
+  secrets, OIDC, on-call, billing meter + `FileBillingProvider`, plan
+  catalog. Anything a self-hoster runs.
+- [`src/cloud/`](src/cloud/) — hosted-only control plane:
+  `Provisioner.fs`, `PgWorkspaceRegistry.fs`, `SiteOnly.fs`, plus
+  `wwwroot/{home,pricing,signup,signin}.html`. See
+  [`src/cloud/README.md`](src/cloud/README.md) for the boundary
+  contract.
+- [`infra/cloud/Caddyfile`](infra/cloud/Caddyfile) — hosted edge TLS +
+  dynamic upstream config.
+- The unified `src/edge/PulseBoard.fsproj` links the cloud files in
+  via `<Compile Include="..\cloud\…">` / `<None …><Link>wwwroot\…`
+  so today's single binary continues to ship both surfaces. Build +
+  smoke verified clean.
+
+**Step 2 (deferred).** Extract `src/cloud/` and `infra/cloud/` into a
+private `pulseboard/cloud` repo via `git filter-repo`, drop the four
+`..\cloud\…` items from the OSS fsproj, drop the `--mode=provisioner`
+and `--site-only` early-dispatch branches from `Program.fs`, and add a
+minimal `src/edge/wwwroot/home.html` self-host stub. Cloud repo builds
+its own provisioner/site-only binary and uses the OSS docker image as
+the workspace image. Trigger: when we're ready to flip the OSS repo
+public.
 
 ---
 
