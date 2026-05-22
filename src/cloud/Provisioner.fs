@@ -319,6 +319,9 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
   // here so we don't churn sockets on every signup.
   let http = new HttpClient(Timeout = TimeSpan.FromSeconds 30.0)
   choose [
+    GET >=> path "/healthz" >=>
+      (OK """{"status":"ok","role":"provisioner"}"""
+       >=> Writers.setMimeType "application/json")
     POST >=> path "/api/provision" >=> provision cfg http
     GET  >=> path "/provision/ask"   >=> askOrRoute cfg true
     GET  >=> path "/provision/route" >=> askOrRoute cfg false

@@ -64,6 +64,9 @@ let webPart (wwwroot : string) (provisionerUrl : string option) : WebPart =
            """{"error":"site-only deployment: no --provisioner-url configured"}"""
          >=> Writers.setMimeType "application/json")
   choose [
+    GET >=> path "/healthz" >=>
+      (OK """{"status":"ok","role":"site-only"}"""
+       >=> Writers.setMimeType "application/json")
     signupPart
     GET >=> path "/"             >=> Files.browseFile wwwroot "home.html"
     GET >=> path "/index.html"   >=> Files.browseFile wwwroot "home.html"

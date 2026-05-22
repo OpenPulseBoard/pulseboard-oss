@@ -1070,6 +1070,14 @@ let main argv =
 
   let app : WebPart =
     choose [
+      // Liveness probe. Cheap, no auth, no DB call — used by Fly
+      // http_service.checks, Caddy upstream health, and CI smoke.
+      GET >=> path "/healthz" >=>
+        (Successful.OK
+           (sprintf """{"status":"ok","role":%s,"multiTenant":%b}"""
+              (if multiTenant then "\"workspace\"" else "\"single-tenant\"")
+              multiTenant)
+         >=> Writers.setMimeType "application/json")
       internalRoutes    // unauthenticated by API key — HMAC-guarded inside
       (if multiTenant then
          PulseBoard.Signup.webPart
