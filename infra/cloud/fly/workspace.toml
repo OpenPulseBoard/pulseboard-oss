@@ -68,7 +68,11 @@ primary_region = "iad"
     hard_limit = 300
 
   [[http_service.checks]]
-    grace_period = "20s"
+    # Cold-start budget: Machine boot + .NET 10 runtime + Suave bind +
+    # tenant DB warmup typically takes 15-25s on shared-cpu-1x, so give
+    # /healthz a generous 30s before the first failure can mark the
+    # Machine down.
+    grace_period = "30s"
     interval     = "30s"
     method       = "get"
     path         = "/healthz"
