@@ -35,27 +35,27 @@ pulseboard.cloud, www.pulseboard.cloud {
 	}
 }
 
-# Every workspace subdomain — Caddy looks up the upstream dynamically.
+# Every workspace subdomain — upstream is derived from the slug.
+#
+# Workspace apps are deterministically named `pb-<slug>` and reachable on
+# Fly's internal DNS at `pb-<slug>.internal:8080`. So for
+# `foo.pulseboard.cloud` the upstream is `pb-foo.internal:8080`, computed
+# via Caddy's {labels.N} placeholder (labels are right-to-left:
+# labels.0=cloud, labels.1=pulseboard, labels.2=<slug>). This avoids
+# pulling in the third-party `dynamic http` upstreams module — stock
+# Caddy only ships `srv`, `a`, and `multi` providers.
+#
+# On-demand TLS still calls /provision/ask before minting a cert, so an
+# attacker can't trick Caddy into hammering Let's Encrypt for random
+# subdomains. If a workspace is deprovisioned later, requests reaching
+# this block will simply 502 (DNS NXDOMAIN at proxy time).
 *.pulseboard.cloud {
 	tls {
 		on_demand
 	}
 	encode zstd gzip
 
-	# WebSocket upgrade for the live dashboard hub (/ws).
-	@ws {
-		header Connection *Upgrade*
-		header Upgrade websocket
-	}
-
-	# Dynamic upstreams from the provisioner. Caddy re-queries on every
-	# request; cache it with a small TTL if traffic warrants.
-	reverse_proxy {
-		dynamic http {
-			url {$PROVISIONER_URL}/provision/route?domain={http.request.host}
-			cache_duration 30s
-			max_cached_destinations 1024
-		}
+	reverse_proxy http://pb-{labels.2}.internal:8080 {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
