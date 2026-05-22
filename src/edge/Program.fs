@@ -1116,23 +1116,43 @@ let main argv =
       NOT_FOUND "Not found."
     ]
 
-  // Bind address: default to loopback so the OSS demo isn't exposed to
-  // the LAN by accident. Containers (Fly, K8s) override via PULSE_BIND_ADDR=0.0.0.0
-  // — set in the Dockerfile so every role binds publicly inside the VM.
-  let bindAddr =
+  // Bind address(es): default to loopback so the OSS demo isn't exposed
+  // to the LAN by accident. Containers (Fly, K8s) override via
+  // PULSE_BIND_ADDR — set in the Dockerfile so every role binds publicly
+  // inside the VM.
+  //
+  // Accepts a comma-separated list, e.g. PULSE_BIND_ADDR="::,0.0.0.0".
+  // We bind every listed address as its own Suave HttpBinding because
+  // .NET on Linux defaults IPv6 sockets to IPV6_V6ONLY=1 (unlike the
+  // kernel's default of 0), so a single `::` listener does NOT accept
+  // IPv4 traffic. Listing both `::` and `0.0.0.0` gives a real
+  // dual-stack listener: Fly's loopback health check (127.0.0.1) and
+  // flycast's IPv6 traffic both arrive at the same Suave instance.
+  let bindAddrs =
     match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
-    | null | "" -> IPAddress.Loopback
+    | null | "" -> [ IPAddress.Loopback ]
     | s ->
-      try IPAddress.Parse(s.Trim())
-      with _ ->
-        eprintfn "  [WARN] PULSE_BIND_ADDR=%s is not a valid IP; falling back to 127.0.0.1" s
-        IPAddress.Loopback
+      s.Split([| ',' ; ';' ; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.choose (fun raw ->
+           let t = raw.Trim()
+           match IPAddress.TryParse t with
+           | true, ip -> Some ip
+           | _ ->
+             eprintfn "  [WARN] PULSE_BIND_ADDR entry %s is not a valid IP; ignoring" t
+             None)
+      |> Array.toList
+      |> function
+         | []   ->
+           eprintfn "  [WARN] PULSE_BIND_ADDR=%s yielded no valid IPs; falling back to 127.0.0.1" s
+           [ IPAddress.Loopback ]
+         | ips  -> ips
   let config =
     { defaultConfig with
-        bindings   = [ HttpBinding.create HTTP bindAddr (uint16 port) ]
+        bindings   = bindAddrs |> List.map (fun ip -> HttpBinding.create HTTP ip (uint16 port))
         homeFolder = Some wwwroot }
 
-  printfn "PulseBoard listening on http://%O:%d" bindAddr port
+  for ip in bindAddrs do
+    printfn "PulseBoard listening on http://%O:%d" ip port
   if multiTenant then
     printfn "  Mode: multi-tenant. /ingest/* requires scope=ingest, /api/* requires scope=query, /api/admin/* requires scope=admin."
     printfn "  Quotas: ingest=%g rps (burst %g), query=%g rps (burst %g) per tenant."

@@ -10,15 +10,16 @@ WORKDIR /app
 COPY --from=build /out .
 ENV PULSE_DATA_DIR=/data
 # Bind to all interfaces inside the container so Fly's health checks and
-# flycast / public IPs can actually reach the listener. We use the IPv6
-# wildcard `::` rather than `0.0.0.0` because Fly's flycast network is
-# IPv6-only; binding only to `0.0.0.0` leaves the IPv6 port unbound and
-# the kernel RSTs the proxy's SYN. On Linux a socket bound to `::` is
-# dual-stack by default (IPV6_V6ONLY=0), so IPv4 traffic (e.g. on the
-# public-IP `pulseboard-caddy` app) still works. Outside the container
-# the default stays loopback so an OSS user running `dotnet run` isn't
-# surprised by a LAN-visible socket.
-ENV PULSE_BIND_ADDR=::
+# flycast / public IPs can actually reach the listener. We list BOTH the
+# IPv6 wildcard (`::`) and the IPv4 wildcard (`0.0.0.0`) because .NET on
+# Linux creates AF_INET6 sockets with IPV6_V6ONLY=1 by default — so a
+# `::`-only listener silently rejects IPv4 traffic (including the local
+# 127.0.0.1 probe Fly's health check uses). Binding both addresses gives
+# a true dual-stack listener: flycast (IPv6) and the local health check
+# (IPv4) both reach Suave. Outside the container the default stays
+# loopback so an OSS user running `dotnet run` isn't surprised by a
+# LAN-visible socket.
+ENV PULSE_BIND_ADDR=::,0.0.0.0
 VOLUME /data
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "PulseBoard.dll"]
