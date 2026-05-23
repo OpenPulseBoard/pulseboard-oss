@@ -68,6 +68,20 @@ let main argv =
     let region   =
       envOrEarly "PULSE_FLY_REGION" (argValueEarly "--fly-region=")
       |> Option.defaultValue "iad"
+    // Workspace guest sizing. 256 MB is not enough headroom for .NET +
+    // Suave + Npgsql + the OIDC/JWT libs; new workspaces OOM-kill on
+    // the first real request. Default to 1 GB; override per-deploy
+    // with PULSE_WORKSPACE_MEM_MB / PULSE_WORKSPACE_CPUS.
+    let workspaceMemMb =
+      envOrEarly "PULSE_WORKSPACE_MEM_MB" (argValueEarly "--workspace-mem-mb=")
+      |> Option.bind (fun s ->
+           match Int32.TryParse s with true, n when n > 0 -> Some n | _ -> None)
+      |> Option.defaultValue 1024
+    let workspaceCpus =
+      envOrEarly "PULSE_WORKSPACE_CPUS" (argValueEarly "--workspace-cpus=")
+      |> Option.bind (fun s ->
+           match Int32.TryParse s with true, n when n > 0 -> Some n | _ -> None)
+      |> Option.defaultValue 1
     let provPgConn =
       envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
     let provPublicUrl =
@@ -112,8 +126,8 @@ let main argv =
           { image     = image
             region    = region
             envExtra  = Map.empty
-            sizeCpus  = 1
-            sizeMemMb = 256 }
+            sizeCpus  = workspaceCpus
+            sizeMemMb = workspaceMemMb }
         adminTokens   =
           // Operator bearer tokens for /admin/*. Comma- or whitespace-
           // separated. Empty → admin portal disabled (every /admin/*
