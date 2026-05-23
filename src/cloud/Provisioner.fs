@@ -82,8 +82,8 @@ type FlyMachineConfig =
 
 type ProvisionedWorkspace =
   { appName     : string
-    publicUrl   : string                  // https://<app>.fly.dev — the upstream Caddy will proxy to
-    internalUrl : string }                // https://<app>.internal — Fly private net
+    publicUrl   : string                  // http://<app>.flycast — the upstream Caddy will proxy to
+    internalUrl : string }                // http://<app>.flycast — same (kept for symmetry)
 
 type IFlyClient =
   abstract CreateWorkspace : slug:string * ownerEmail:string * cfg:FlyMachineConfig -> Async<ProvisionedWorkspace>
@@ -97,15 +97,17 @@ type DryRunFlyClient () =
         slug email cfg.image cfg.region cfg.sizeCpus cfg.sizeMemMb
       return
         { appName     = sprintf "pb-%s" slug
-          publicUrl   = sprintf "https://pb-%s.fly.dev" slug
-          internalUrl = sprintf "http://pb-%s.internal:8080" slug }
+          publicUrl   = sprintf "http://pb-%s.flycast" slug
+          internalUrl = sprintf "http://pb-%s.flycast" slug }
     }
 
 /// Real HTTP client against the Fly Machines REST API (api.machines.dev/v1).
 /// Configurable via `FLY_API_TOKEN`, `FLY_ORG_SLUG`. Each provision creates
 /// a fresh app (`pb-<slug>`) and one Machine running the configured image
-/// in `--multi-tenant` mode. The Machine config exposes port 8080 publicly
-/// over HTTPS so Caddy's on-demand TLS can reverse_proxy to it.
+/// in `--multi-tenant` mode. The Machine exposes port 8080 on Fly's
+/// private flycast network only — no public IPs are allocated, since all
+/// external traffic is fronted by `pulseboard-caddy` which reverse-proxies
+/// over flycast.
 type HttpFlyClient (token : string, orgSlug : string) =
   let http = new HttpClient(BaseAddress = Uri "https://api.machines.dev/")
   do http.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
@@ -142,7 +144,7 @@ type HttpFlyClient (token : string, orgSlug : string) =
                (JsonSerializer.Serialize v))
         |> String.concat ","
       let machineBody =
-        sprintf """{"name":%s,"region":%s,"config":{"image":%s,"env":{%s},"services":[{"protocol":"tcp","internal_port":8080,"ports":[{"port":80,"handlers":["http"]},{"port":443,"handlers":["tls","http"]}]}],"guest":{"cpu_kind":"shared","cpus":%d,"memory_mb":%d}}}"""
+        sprintf """{"name":%s,"region":%s,"config":{"image":%s,"env":{%s},"services":[{"protocol":"tcp","internal_port":8080,"ports":[{"port":80,"handlers":["http"]}]}],"guest":{"cpu_kind":"shared","cpus":%d,"memory_mb":%d}}}"""
           (JsonSerializer.Serialize (appName + "-0"))
           (JsonSerializer.Serialize cfg.region)
           (JsonSerializer.Serialize cfg.image)
@@ -152,8 +154,8 @@ type HttpFlyClient (token : string, orgSlug : string) =
       let! _ = postJson (sprintf "/v1/apps/%s/machines" appName) machineBody
       return
         { appName     = appName
-          publicUrl   = sprintf "https://%s.fly.dev" appName
-          internalUrl = sprintf "http://%s.internal:8080" appName }
+          publicUrl   = sprintf "http://%s.flycast" appName
+          internalUrl = sprintf "http://%s.flycast" appName }
     }
 
   interface IDisposable with
@@ -178,9 +180,31 @@ type BootstrapResult =
     apiKeyId : string
     apiKey   : string }
 
+/// Poll the new workspace's /healthz until it returns 200 (or we give up).
+/// flycast DNS resolves as soon as the app exists, but the Machine itself
+/// takes a few seconds to boot the .NET runtime + bind its sockets. We
+/// don't want to race that with the bootstrap POST.
+let private waitForHealth (http : HttpClient) (baseUrl : string) : Async<unit> = async {
+  let url = baseUrl.TrimEnd('/') + "/healthz"
+  let deadline = DateTime.UtcNow.AddSeconds 60.0
+  let mutable lastErr = "(no attempts yet)"
+  let mutable ok = false
+  while not ok && DateTime.UtcNow < deadline do
+    try
+      let! resp = http.GetAsync url |> Async.AwaitTask
+      if resp.IsSuccessStatusCode then ok <- true
+      else lastErr <- sprintf "HTTP %d" (int resp.StatusCode)
+    with ex ->
+      lastErr <- ex.Message
+    if not ok then do! Async.Sleep 1000
+  if not ok then
+    failwithf "workspace %s never became healthy: %s" url lastErr
+}
+
 let private bootstrapWorkspace (http : HttpClient) (baseUrl : string)
                                (slug : string) (email : string)
                                : Async<BootstrapResult> = async {
+  do! waitForHealth http baseUrl
   let body = sprintf """{"slug":%s,"email":%s}"""
                (JsonSerializer.Serialize slug)
                (JsonSerializer.Serialize email)
