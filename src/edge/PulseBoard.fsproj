@@ -87,6 +87,10 @@
       <Link>wwwroot\home.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\cloud\wwwroot\workspace.html">
+      <Link>wwwroot\workspace.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="..\cloud\wwwroot\pricing.html">
       <Link>wwwroot\pricing.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

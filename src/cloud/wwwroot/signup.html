@@ -160,7 +160,15 @@ form.addEventListener('submit', async (e) => {
     sessionStorage.setItem('pb.bearer', j.apiKey);
     sessionStorage.setItem('pb.tenantId', j.tenantId);
     document.getElementById('continueBtn').onclick = () => {
-      location.href = '/admin';
+      // The provisioner returns the workspace URL (e.g.
+      // "https://acme.pulseboard.cloud"). Send the user there with the
+      // key handed off via the URL fragment so signin.html can pre-fill
+      // it without putting the secret in server logs. Fall back to a
+      // local /admin only if no URL was returned (single-binary dev).
+      const target = j.url
+        ? (j.url.replace(/\/+$/, '') + '/signin#key=' + encodeURIComponent(j.apiKey))
+        : '/admin';
+      location.href = target;
     };
   } catch (e) {
     errEl.textContent = e.message || String(e);

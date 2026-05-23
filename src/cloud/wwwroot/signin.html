@@ -70,7 +70,26 @@
 </header>
 
 <div class="wrap">
-<div class="card">
+<div class="card" id="apexCard" style="display:none;">
+  <h1>Find your workspace</h1>
+  <p class="lede">Each PulseBoard tenant has its own subdomain. Enter your
+    workspace slug to continue.</p>
+
+  <form id="findForm">
+    <label for="slug">Workspace slug</label>
+    <input id="slug" name="slug" type="text" required minlength="2" maxlength="40"
+           pattern="[a-z0-9][a-z0-9-]*" placeholder="acme"
+           autocomplete="off" autocapitalize="off" spellcheck="false" />
+    <button type="submit">Go to workspace →</button>
+  </form>
+  <div class="err" id="apexErr" style="display:none;"></div>
+
+  <div class="alt">
+    No workspace yet? <a href="/signup">Sign up →</a>
+  </div>
+</div>
+
+<div class="card" id="tenantCard" style="display:none;">
   <h1>Sign in</h1>
   <p class="lede">Paste your API key. We store it in this browser tab only.</p>
 
@@ -90,33 +109,74 @@
 </div>
 
 <script>
-const form = document.getElementById('f');
-const errEl = document.getElementById('err');
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  errEl.style.display = 'none';
-  const key = document.getElementById('key').value.trim();
-  if (!key.startsWith('pk_')) {
-    errEl.textContent = 'API keys start with "pk_". Check that you pasted the full secret.';
-    errEl.style.display = 'block'; return;
-  }
-  // Probe /auth/me — this validates the key without exposing tenant routes.
-  try {
-    const r = await fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + key } });
-    if (!r.ok) throw new Error('Key rejected (HTTP ' + r.status + '). Double-check, or sign up for a new one.');
-    sessionStorage.setItem('pb.bearer', key);
-    location.href = '/admin';
-  } catch (e) {
-    // /auth/me may not exist in all builds; if so still accept the key — /admin will revalidate.
-    if (String(e.message).includes('HTTP 404')) {
+// Two modes: apex marketing host ("pulseboard.cloud", "www.pulseboard.cloud",
+// localhost during dev) shows a "find your workspace" form; a tenant
+// subdomain ("acme.pulseboard.cloud") shows the paste-API-key form.
+const host    = location.hostname;
+const parts   = host.split('.');
+// Apex = exactly two labels (root domain), or "www.<root>", or any single-label host
+// like "localhost"/"127.0.0.1". A tenant subdomain has 3+ labels and the first
+// label is not "www".
+const isApex  = parts.length < 3 || parts[0] === 'www';
+
+if (isApex) {
+  document.getElementById('apexCard').style.display = 'block';
+  const findForm = document.getElementById('findForm');
+  const apexErr  = document.getElementById('apexErr');
+  findForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    apexErr.style.display = 'none';
+    const slug = document.getElementById('slug').value.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
+      apexErr.textContent = 'Slug must be lowercase letters, digits, and dashes.';
+      apexErr.style.display = 'block'; return;
+    }
+    // Strip "www." if present, then prepend the slug. "pulseboard.cloud" stays
+    // as "pulseboard.cloud", "www.pulseboard.cloud" -> "pulseboard.cloud".
+    const root = (parts[0] === 'www' ? parts.slice(1) : parts).join('.');
+    location.href = location.protocol + '//' + slug + '.' + root + '/signin';
+  });
+} else {
+  document.getElementById('tenantCard').style.display = 'block';
+  const form  = document.getElementById('f');
+  const errEl = document.getElementById('err');
+  // Pre-fill the key if signup.html handed it off via the URL hash
+  // (hashes never hit the server). Wipe the hash immediately so it
+  // doesn't linger in the address bar.
+  (function () {
+    const h = location.hash || '';
+    const m = h.match(/(?:^#|&)key=([^&]+)/);
+    if (m) {
+      try { document.getElementById('key').value = decodeURIComponent(m[1]); } catch {}
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  })();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errEl.style.display = 'none';
+    const key = document.getElementById('key').value.trim();
+    if (!key.startsWith('pk_')) {
+      errEl.textContent = 'API keys start with "pk_". Check that you pasted the full secret.';
+      errEl.style.display = 'block'; return;
+    }
+    // Probe /auth/me — this validates the key without exposing tenant routes.
+    try {
+      const r = await fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + key } });
+      if (!r.ok) throw new Error('Key rejected (HTTP ' + r.status + '). Double-check, or sign up for a new one.');
       sessionStorage.setItem('pb.bearer', key);
       location.href = '/admin';
-      return;
+    } catch (e) {
+      // /auth/me may not exist in all builds; if so still accept the key — /admin will revalidate.
+      if (String(e.message).includes('HTTP 404')) {
+        sessionStorage.setItem('pb.bearer', key);
+        location.href = '/admin';
+        return;
+      }
+      errEl.textContent = e.message || String(e);
+      errEl.style.display = 'block';
     }
-    errEl.textContent = e.message || String(e);
-    errEl.style.display = 'block';
-  }
-});
+  });
+}
 </script>
 
 </body>

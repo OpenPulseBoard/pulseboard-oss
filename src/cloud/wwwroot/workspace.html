@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PulseBoard — Workspace</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex" />
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #1f242d; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #5ec8ff;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+               font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Roboto, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header.nav {
+    display: flex; align-items: center; gap: 18px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+  }
+  header.nav .brand { font: 600 15px/1 ui-monospace, monospace;
+                       color: var(--accent); letter-spacing: 2px; }
+  header.nav nav { display: flex; gap: 4px; }
+  header.nav nav a { color: var(--muted); padding: 6px 12px; border-radius: 4px; }
+  header.nav nav a:hover { color: var(--fg); background: var(--panel-2); text-decoration: none; }
+  header.nav .grow { flex: 1; }
+  header.nav .cta {
+    background: var(--accent); color: #04121d; padding: 6px 14px;
+    border-radius: 4px; font-weight: 600;
+  }
+  header.nav .cta:hover { background: #8ad8ff; text-decoration: none; }
+  .wrap { max-width: 720px; margin: 80px auto; padding: 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: 8px; padding: 2rem 2.2rem; }
+  h1 { font-size: 1.8rem; margin: 0 0 .5rem; }
+  h1 .slug { color: var(--accent); font-family: ui-monospace, monospace; }
+  .lede { color: var(--muted); margin: 0 0 1.6rem; }
+  .ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 1.6rem; }
+  .btn {
+    padding: .65rem 1.1rem; border-radius: 4px; font-weight: 600;
+    border: 1px solid var(--border); color: var(--fg);
+  }
+  .btn:hover { background: var(--panel-2); text-decoration: none; }
+  .btn.primary { background: var(--accent); color: #04121d; border-color: var(--accent); }
+  .btn.primary:hover { background: #8ad8ff; }
+  .meta { margin-top: 2rem; padding-top: 1.2rem; border-top: 1px solid var(--border);
+          color: var(--muted); font-size: 13px; }
+  code { font-family: ui-monospace, monospace; color: var(--fg);
+         background: var(--panel-2); padding: 1px 6px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <a href="/" class="brand">PULSEBOARD</a>
+  <nav>
+    <a href="/docs">Docs</a>
+    <a href="/dashboard">Dashboard</a>
+  </nav>
+  <span class="grow"></span>
+  <a href="/signin" class="cta">Sign in →</a>
+</header>
+
+<div class="wrap">
+<div class="card">
+  <h1>Workspace <span class="slug" id="slug">…</span></h1>
+  <p class="lede">
+    You're on a private PulseBoard workspace. Sign in with your API key
+    to reach the dashboard, ingest endpoints, and admin tools.
+  </p>
+
+  <div class="ctas">
+    <a href="/signin" class="btn primary">Sign in →</a>
+    <a href="/dashboard" class="btn">Open dashboard</a>
+    <a href="/docs" class="btn">Docs</a>
+  </div>
+
+  <div class="meta">
+    <div>Ingest:&nbsp; <code id="ingest">https://…/ingest</code></div>
+    <div>Query:&nbsp;&nbsp; <code id="query">https://…/api</code></div>
+    <div style="margin-top:.6rem;">Lost your key? <a href="https://pulseboard.cloud/signup">Provision a new workspace</a>.</div>
+  </div>
+</div>
+</div>
+
+<script>
+// Derive the slug from the hostname (Caddy routes *.pulseboard.cloud to
+// pb-<slug>.flycast, and the workspace boots with PULSE_SLUG injected;
+// we don't bother round-tripping — the hostname is the source of truth).
+(function () {
+  const host = location.hostname;
+  // e.g. "first-tenant.pulseboard.cloud" -> "first-tenant"
+  const slug = host.split('.')[0] || 'workspace';
+  document.getElementById('slug').textContent = slug;
+  document.title = 'PulseBoard — ' + slug;
+  const base = location.protocol + '//' + host;
+  document.getElementById('ingest').textContent = base + '/ingest';
+  document.getElementById('query').textContent  = base + '/api';
+})();
+</script>
+
+</body>
+</html>
