@@ -279,8 +279,8 @@ ideas:
   `--site-only` host. Two env vars wire it together:
 
 ```bash
-PROVISIONER_URL=http://provisioner.flycast:8080 \
-SITE_URL=http://site.flycast:8080 \
+PROVISIONER_URL=http://provisioner.flycast \
+SITE_URL=http://site.flycast \
   caddy run --config /etc/caddy/Caddyfile
 ```
 

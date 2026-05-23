@@ -11,7 +11,7 @@
 # whatever upstream the provisioner returns (`/provision/route`).
 #
 # Environment expected:
-#   PROVISIONER_URL  internal URL of the provisioner (e.g. http://provisioner.flycast:8080)
+#   PROVISIONER_URL  internal URL of the provisioner (e.g. http://provisioner.flycast)
 #   SITE_URL         internal URL of the --site-only marketing instance
 #
 # Drop this in /etc/caddy/Caddyfile and `caddy reload`.

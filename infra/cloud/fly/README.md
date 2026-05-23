@@ -48,7 +48,7 @@ fly deploy -a pulseboard-provisioner --config provisioner.toml
 # 3. Marketing site.
 fly apps create pulseboard-site
 fly secrets set -a pulseboard-site \
-    PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080
+    PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast
 fly deploy -a pulseboard-site --config site.toml
 
 # 4. Caddy front door — last, because it depends on the two above.
@@ -57,8 +57,8 @@ fly ips allocate-v4 -a pulseboard-caddy
 fly ips allocate-v6 -a pulseboard-caddy
 fly volumes create caddy_data --size 1 --region iad -a pulseboard-caddy
 fly secrets set -a pulseboard-caddy \
-    PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080 \
-    SITE_URL=http://pulseboard-site.flycast:8080
+    PROVISIONER_URL=http://pulseboard-provisioner.flycast \
+    SITE_URL=http://pulseboard-site.flycast
 fly deploy -a pulseboard-caddy --config caddy.toml
 
 # 5. Point DNS at the Caddy app's IPs (apex + wildcard A/AAAA).

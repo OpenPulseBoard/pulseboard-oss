@@ -50,7 +50,7 @@ primary_region = "iad"
     timeout      = "5s"
 
 # No public ports — flycast-only. Caddy reaches us at
-# http://pulseboard-site.flycast:8080.
+# http://pulseboard-site.flycast.
 
 [[vm]]
   cpu_kind  = "shared"
