@@ -112,6 +112,12 @@ type HttpFlyClient (token : string, orgSlug : string) =
   let http = new HttpClient(BaseAddress = Uri "https://api.machines.dev/")
   do http.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
 
+  // The Machines REST API (api.machines.dev) doesn't expose IP allocation,
+  // so we need a second client pointed at the older GraphQL endpoint at
+  // api.fly.io to allocate the private-v6 (flycast) address. Same token.
+  let graphql = new HttpClient(BaseAddress = Uri "https://api.fly.io/")
+  do graphql.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
+
   let postJson (path : string) (body : string) = async {
     use content = new StringContent(body, Encoding.UTF8, "application/json")
     let! resp = http.PostAsync(path, content) |> Async.AwaitTask
@@ -119,6 +125,30 @@ type HttpFlyClient (token : string, orgSlug : string) =
     if not resp.IsSuccessStatusCode then
       failwithf "fly API %s -> %d: %s" path (int resp.StatusCode) txt
     return txt
+  }
+
+  /// Allocate a private-v6 (flycast) address on the given app. Without
+  /// this, `<app>.flycast` does not resolve and nothing on the 6PN can
+  /// reach the workspace. The Machines REST API doesn't expose IP
+  /// allocation, so we have to call the GraphQL API for this one step.
+  let allocateFlycast (appName : string) = async {
+    let query =
+      "mutation($appId:ID!){allocateIpAddress(input:{appId:$appId,type:private_v6}){ipAddress{address type}}}"
+    let body =
+      sprintf """{"query":%s,"variables":{"appId":%s}}"""
+        (JsonSerializer.Serialize query)
+        (JsonSerializer.Serialize appName)
+    use content = new StringContent(body, Encoding.UTF8, "application/json")
+    let! resp = graphql.PostAsync("/graphql", content) |> Async.AwaitTask
+    let! txt = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+    if not resp.IsSuccessStatusCode then
+      failwithf "fly GraphQL allocateIpAddress -> %d: %s" (int resp.StatusCode) txt
+    // GraphQL returns 200 even on errors; surface them.
+    use doc = JsonDocument.Parse txt
+    match doc.RootElement.TryGetProperty "errors" with
+    | true, errs when errs.ValueKind = JsonValueKind.Array && errs.GetArrayLength() > 0 ->
+      failwithf "fly GraphQL allocateIpAddress errors: %s" txt
+    | _ -> ()
   }
 
   interface IFlyClient with
@@ -129,7 +159,11 @@ type HttpFlyClient (token : string, orgSlug : string) =
                       (JsonSerializer.Serialize appName)
                       (JsonSerializer.Serialize orgSlug)
       let! _ = postJson "/v1/apps" appBody
-      // 2. Create one Machine with our binary.
+      // 2. Allocate a flycast (private-v6) address so `<app>.flycast`
+      //    resolves on the 6PN. Must happen before the Machine starts
+      //    accepting flycast traffic.
+      do! allocateFlycast appName
+      // 3. Create one Machine with our binary.
       let envMap =
         cfg.envExtra
         |> Map.add "PULSE_MULTI_TENANT" "1"
@@ -159,7 +193,9 @@ type HttpFlyClient (token : string, orgSlug : string) =
     }
 
   interface IDisposable with
-    member _.Dispose () = http.Dispose ()
+    member _.Dispose () =
+      http.Dispose ()
+      graphql.Dispose ()
 
 // -- bootstrap the new workspace -------------------------------------------
 //
