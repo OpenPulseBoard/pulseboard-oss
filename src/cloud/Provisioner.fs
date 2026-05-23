@@ -164,9 +164,11 @@ type HttpFlyClient (token : string, orgSlug : string) =
       //    accepting flycast traffic.
       do! allocateFlycast appName
       // 3. Create one Machine with our binary.
+      //    `init.cmd` overrides the Dockerfile CMD (the ENTRYPOINT is
+      //    `dotnet PulseBoard.dll`); we need `--multi-tenant` so the
+      //    /api/signup endpoint is mounted and our bootstrap POST works.
       let envMap =
         cfg.envExtra
-        |> Map.add "PULSE_MULTI_TENANT" "1"
         |> Map.add "PULSE_OWNER_EMAIL" email
         |> Map.add "PULSE_SLUG" slug
       let envJson =
@@ -178,7 +180,7 @@ type HttpFlyClient (token : string, orgSlug : string) =
                (JsonSerializer.Serialize v))
         |> String.concat ","
       let machineBody =
-        sprintf """{"name":%s,"region":%s,"config":{"image":%s,"env":{%s},"services":[{"protocol":"tcp","internal_port":8080,"ports":[{"port":80,"handlers":["http"]}]}],"guest":{"cpu_kind":"shared","cpus":%d,"memory_mb":%d}}}"""
+        sprintf """{"name":%s,"region":%s,"config":{"image":%s,"env":{%s},"init":{"cmd":["--multi-tenant"]},"services":[{"protocol":"tcp","internal_port":8080,"ports":[{"port":80,"handlers":["http"]}]}],"guest":{"cpu_kind":"shared","cpus":%d,"memory_mb":%d}}}"""
           (JsonSerializer.Serialize (appName + "-0"))
           (JsonSerializer.Serialize cfg.region)
           (JsonSerializer.Serialize cfg.image)
