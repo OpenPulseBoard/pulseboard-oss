@@ -71,7 +71,7 @@ pulseboard.cloud, www.pulseboard.cloud {
 	# Caddy refuses placeholders in an upstream that includes a scheme,
 	# so we drop the `http://` prefix (plain HTTP is the default
 	# transport). No `:port` either — flycast's proxy is on :80.
-	reverse_proxy pb-{labels.2}.flycast {
+	reverse_proxy pb-{labels.2}.flycast:80 {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
