@@ -290,7 +290,16 @@ function showAuth() {
 
 async function checkSession() {
   // If a bearer was pasted earlier, accept it without touching /auth/me
-  // (legacy/non-OIDC deployments don't expose /auth/me).
+  // (legacy/non-OIDC deployments don't expose /auth/me, which would
+  // otherwise produce a noisy 404 in the console on every load).
+  if (state.bearer) {
+    try {
+      await api('GET', '/api/admin/tenants');
+      $('whoami').textContent = `api-key · ${state.bearer.slice(0, 12)}…`;
+      $('signOut').style.display = '';
+      return true;
+    } catch { /* fall through to /auth/me / sign-in */ }
+  }
   try {
     const me = await api('GET', '/auth/me');
     state.me = me;
@@ -298,15 +307,6 @@ async function checkSession() {
     $('signOut').style.display = '';
     return true;
   } catch (e) {
-    if (state.bearer) {
-      // Probe an admin endpoint to verify the key has admin scope.
-      try {
-        await api('GET', '/api/admin/tenants');
-        $('whoami').textContent = `api-key · ${state.bearer.slice(0, 12)}…`;
-        $('signOut').style.display = '';
-        return true;
-      } catch { /* fall through */ }
-    }
     showAuth();
     return false;
   }

@@ -201,13 +201,32 @@ let parseVectorSelector (expr : string) : Result<VectorSelector, string> =
   else
     // Reject obvious unsupported syntax up front so we surface a
     // clear "use Mimir for full PromQL" hint rather than mis-parsing.
+    // Scan with quoted strings (e.g. regex matcher values like ".+")
+    // stripped out, so operators inside quotes don't trigger false
+    // positives.
+    let stripQuoted (input : string) : string =
+      let sb = StringBuilder()
+      let mutable j = 0
+      while j < input.Length do
+        let c = input.[j]
+        if c = '"' then
+          j <- j + 1
+          while j < input.Length && input.[j] <> '"' do
+            if input.[j] = '\\' && j + 1 < input.Length then j <- j + 2
+            else j <- j + 1
+          if j < input.Length then j <- j + 1   // skip closing quote
+        else
+          sb.Append c |> ignore
+          j <- j + 1
+      sb.ToString()
+    let scanSrc = stripQuoted s
     let unsupported = [| "("; ")"; "["; "]"; "+"; "-"; "*"; "/"; "%"; " or "; " and "; " unless " |]
-    let lowered = " " + s.ToLowerInvariant() + " "
+    let lowered = " " + scanSrc.ToLowerInvariant() + " "
     let badIdx =
       unsupported
       |> Array.tryFind (fun tok ->
           if tok.StartsWith " " then lowered.Contains tok
-          else s.Contains tok)
+          else scanSrc.Contains tok)
     match badIdx with
     | Some tok ->
       Result.Error (sprintf "embedded PromQL supports vector selectors only (got %s); use --mimir-url= for full PromQL" (tok.Trim()))
