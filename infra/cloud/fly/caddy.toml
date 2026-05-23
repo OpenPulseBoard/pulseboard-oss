@@ -5,8 +5,8 @@
 # pulseboard-provisioner are reached from here over flycast.
 #
 # Secrets to set (fly secrets set …):
-#   PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080
-#   SITE_URL=http://pulseboard-site.flycast:8080
+#   PROVISIONER_URL=http://pulseboard-provisioner.flycast
+#   SITE_URL=http://pulseboard-site.flycast
 #
 # DNS to set at the registrar (Route 53, Cloudflare, …):
 #   pulseboard.cloud            A     <fly v4>
@@ -22,8 +22,8 @@
 #   fly ips allocate-v6 -a pulseboard-caddy
 #   fly volumes create caddy_data --size 1 --region iad -a pulseboard-caddy
 #   fly secrets set -a pulseboard-caddy \
-#       PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080 \
-#       SITE_URL=http://pulseboard-site.flycast:8080
+#       PROVISIONER_URL=http://pulseboard-provisioner.flycast \
+#       SITE_URL=http://pulseboard-site.flycast
 #   fly deploy -a pulseboard-caddy \
 #       --config infra/cloud/fly/caddy.toml \
 #       --dockerfile caddy.Dockerfile

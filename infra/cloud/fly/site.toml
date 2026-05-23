@@ -9,7 +9,7 @@
 # Deploy:
 #   fly apps create pulseboard-site
 #   fly secrets set -a pulseboard-site \
-#       PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast:8080
+#       PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast
 #   fly deploy -a pulseboard-site --config site.toml
 
 app            = "pulseboard-site"
