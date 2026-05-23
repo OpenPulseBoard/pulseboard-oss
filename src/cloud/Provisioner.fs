@@ -219,17 +219,22 @@ type BootstrapResult =
     apiKey   : string }
 
 /// Poll the new workspace's /healthz until it returns 200 (or we give up).
-/// flycast DNS resolves as soon as the app exists, but the Machine itself
-/// takes a few seconds to boot the .NET runtime + bind its sockets. We
-/// don't want to race that with the bootstrap POST.
+/// flycast DNS resolves as soon as the IP is allocated, but the Machine
+/// itself takes time to: pull the image (cold), start the container,
+/// boot the .NET runtime, and bind its sockets. Meanwhile Fly's flycast
+/// proxy will accept TCP connections and hold them open waiting for the
+/// container to become reachable — so we use a short per-request timeout
+/// (so a stalled probe doesn't burn the whole budget) and a long total
+/// deadline (so cold image pulls have room).
 let private waitForHealth (http : HttpClient) (baseUrl : string) : Async<unit> = async {
   let url = baseUrl.TrimEnd('/') + "/healthz"
-  let deadline = DateTime.UtcNow.AddSeconds 60.0
+  let deadline = DateTime.UtcNow.AddMinutes 3.0
   let mutable lastErr = "(no attempts yet)"
   let mutable ok = false
   while not ok && DateTime.UtcNow < deadline do
     try
-      let! resp = http.GetAsync url |> Async.AwaitTask
+      use cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds 5.0)
+      let! resp = http.GetAsync(url, cts.Token) |> Async.AwaitTask
       if resp.IsSuccessStatusCode then ok <- true
       else lastErr <- sprintf "HTTP %d" (int resp.StatusCode)
     with ex ->
@@ -378,8 +383,11 @@ let private askOrRoute (cfg : ProvisionerConfig) (isAsk : bool) : WebPart =
 
 let webPart (cfg : ProvisionerConfig) : WebPart =
   // One shared HttpClient for the workspace bootstrap call. Created once
-  // here so we don't churn sockets on every signup.
-  let http = new HttpClient(Timeout = TimeSpan.FromSeconds 30.0)
+  // here so we don't churn sockets on every signup. Total timeout is
+  // generous because /healthz polling uses its own per-request
+  // CancellationToken; the bootstrap POST itself is fast once /healthz
+  // is green.
+  let http = new HttpClient(Timeout = TimeSpan.FromMinutes 5.0)
   choose [
     GET >=> path "/healthz" >=>
       (OK """{"status":"ok","role":"provisioner"}"""
