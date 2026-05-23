@@ -98,8 +98,8 @@ type DryRunFlyClient () =
         slug email cfg.image cfg.region cfg.sizeCpus cfg.sizeMemMb
       return
         { appName     = sprintf "pb-%s" slug
-          publicUrl   = sprintf "http://pb-%s.flycast" slug
-          internalUrl = sprintf "http://pb-%s.flycast" slug }
+          publicUrl   = sprintf "http://pb-%s.flycast:80" slug
+          internalUrl = sprintf "http://pb-%s.flycast:80" slug }
     }
 
 /// Real HTTP client against the Fly Machines REST API (api.machines.dev/v1).
@@ -229,10 +229,14 @@ type HttpFlyClient (token : string, orgSlug : string, pgAdminConn : string optio
           cfg.sizeCpus
           cfg.sizeMemMb
       let! _ = postJson (sprintf "/v1/apps/%s/machines" appName) machineBody
+      // Caddy's dynamic-upstream module doesn't infer the port from the
+      // scheme — give it host:port explicitly. Without the `:80`, Caddy
+      // dials port 0 and times out (see
+      // `dial tcp [...]:0: i/o timeout` in fly logs).
       return
         { appName     = appName
-          publicUrl   = sprintf "http://%s.flycast" appName
-          internalUrl = sprintf "http://%s.flycast" appName }
+          publicUrl   = sprintf "http://%s.flycast:80" appName
+          internalUrl = sprintf "http://%s.flycast:80" appName }
     }
 
   interface IDisposable with
