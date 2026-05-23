@@ -329,18 +329,35 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
 
 /// Run a standalone provisioner service. Returns once the server exits.
 let run (port : int) (cfg : ProvisionerConfig) : unit =
-  let bindAddr =
+  // Accepts a comma-separated list, e.g. PULSE_BIND_ADDR="::,0.0.0.0".
+  // See the matching block in Program.fs / SiteOnly.fs for the rationale
+  // (.NET on Linux defaults AF_INET6 sockets to IPV6_V6ONLY=1, so a
+  // single `::` listener does NOT accept the IPv4 loopback that Fly's
+  // health check uses; we need both an IPv6 and an IPv4 binding to be
+  // truly dual-stack).
+  let bindAddrs =
     match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
-    | null | "" -> IPAddress.Loopback
+    | null | "" -> [ IPAddress.Loopback ]
     | s ->
-      try IPAddress.Parse(s.Trim())
-      with _ ->
-        eprintfn "  [WARN] PULSE_BIND_ADDR=%s is not a valid IP; falling back to 127.0.0.1" s
-        IPAddress.Loopback
+      s.Split([| ',' ; ';' ; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.choose (fun raw ->
+           let t = raw.Trim()
+           match IPAddress.TryParse t with
+           | true, ip -> Some ip
+           | _ ->
+             eprintfn "  [WARN] PULSE_BIND_ADDR entry %s is not a valid IP; ignoring" t
+             None)
+      |> Array.toList
+      |> function
+         | []  ->
+           eprintfn "  [WARN] PULSE_BIND_ADDR=%s yielded no valid IPs; falling back to 127.0.0.1" s
+           [ IPAddress.Loopback ]
+         | ips -> ips
   let config =
     { defaultConfig with
-        bindings = [ HttpBinding.create HTTP bindAddr (uint16 port) ] }
-  printfn "PulseBoard (provisioner) listening on http://%O:%d" bindAddr port
+        bindings = bindAddrs |> List.map (fun ip -> HttpBinding.create HTTP ip (uint16 port)) }
+  for ip in bindAddrs do
+    printfn "PulseBoard (provisioner) listening on http://%O:%d" ip port
   printfn "  Root domain: %s" cfg.rootDomain
   printfn "  Fly client:  %s" (if cfg.dryRun then "dry-run (no API calls)" else "live (api.machines.dev)")
   printfn "  Image:       %s (region %s)" cfg.machineConfig.image cfg.machineConfig.region
