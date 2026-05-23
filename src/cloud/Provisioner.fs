@@ -622,6 +622,22 @@ let private askOrRoute (cfg : ProvisionerConfig) (isAsk : bool) : WebPart =
       // also fronted by the same Caddy). Answer "yes" so it gets a cert.
       if isAsk then return! OK "" ctx
       else return! jsonResp 200 """{"upstream":"http://localhost:8080"}""" ctx
+    elif host = "admin." + cfg.rootDomain then
+      // Admin portal — Caddy proxies it back to us. We answer the
+      // on-demand ask so the cert is issued lazily on first request
+      // (avoids the boot-time race where Caddy's eager ACME fails
+      // because DNS hasn't propagated yet). `/provision/route` should
+      // never be hit for this host because the Caddyfile hard-codes
+      // the upstream in a named block — but return something sensible
+      // just in case the block is ever removed.
+      if isAsk then return! OK "" ctx
+      else
+        match cfg.provisionerPublicUrl with
+        | Some url ->
+          let body = sprintf """{"upstream":%s}""" (JsonSerializer.Serialize url)
+          return! jsonResp 200 body ctx
+        | None ->
+          return! errJson 404 "admin host has no upstream configured" ctx
     else
       match cfg.registry.TryGetByHost host with
       | None -> return! errJson 404 (sprintf "unknown host: %s" host) ctx
