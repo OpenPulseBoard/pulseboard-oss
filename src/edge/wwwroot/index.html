@@ -441,7 +441,7 @@ async function runQuery(lang, expr, startMs, endMs, stepSec) {
   if (lang === "promql") {
     const url = `/api/prom/api/v1/query_range?query=${encodeURIComponent(expr)}` +
                 `&start=${startSec}&end=${endSec}&step=${stepSec}`;
-    const r = await fetch(url);
+    const r = await authFetch(url);
     const j = await r.json();
     if (j.status !== "success") throw new Error(j.error || "promql failed");
     return promMatrixToSeries(j.data);
@@ -449,7 +449,7 @@ async function runQuery(lang, expr, startMs, endMs, stepSec) {
   if (lang === "logql") {
     const url = `/api/loki/api/v1/query_range?query=${encodeURIComponent(expr)}` +
                 `&start=${startMs*1e6}&end=${endMs*1e6}&limit=500`;
-    const r = await fetch(url);
+    const r = await authFetch(url);
     const j = await r.json();
     if (j.status !== "success") throw new Error(j.error || "logql failed");
     return logqlToEntries(j.data);
@@ -461,7 +461,7 @@ async function runQuery(lang, expr, startMs, endMs, stepSec) {
       return await nativeSynthetic(expr);
     }
     const url = `/api/metrics/${encodeURIComponent(expr.trim())}?sinceMs=${startMs}`;
-    const r = await fetch(url);
+    const r = await authFetch(url);
     if (!r.ok) throw new Error("native metric not found");
     const arr = await r.json();   // [[ts, value], ...]
     const xs = arr.map(p => p[0] / 1000);
@@ -713,14 +713,42 @@ const colorFor = (i) => PALETTE[i % PALETTE.length];
 // =====================================================================
 // Dashboard loading + persistence
 // =====================================================================
+function pbBearer() { return sessionStorage.getItem("pb.bearer"); }
+function pbAuthHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const tok = pbBearer();
+  if (tok) h["Authorization"] = "Bearer " + tok;
+  return h;
+}
+function pbRedirectSignin() {
+  sessionStorage.removeItem("pb.bearer");
+  const back = location.pathname + location.search + location.hash;
+  location.href = "/signin?returnTo=" + encodeURIComponent(back);
+}
+async function authFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = pbAuthHeaders(opts.headers);
+  const r = await fetch(url, opts);
+  if (r.status === 401 || r.status === 403) {
+    pbRedirectSignin();
+    throw new Error("unauthorized");
+  }
+  return r;
+}
+
 async function api(method, path, body) {
-  const opts = { method };
+  const opts = { method, headers: {} };
   if (body !== undefined) {
-    opts.headers = { "Content-Type": "application/json" };
+    opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
+  opts.headers = pbAuthHeaders(opts.headers);
   const r = await fetch(path, opts);
   if (r.status === 204) return null;
+  if (r.status === 401 || r.status === 403) {
+    pbRedirectSignin();
+    throw new Error("unauthorized");
+  }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).error || msg; } catch {}
@@ -863,6 +891,10 @@ async function deleteEditorPanel() {
 }
 
 function addPanel() {
+  if (!state.current) {
+    alert("Open or create a dashboard first.");
+    return;
+  }
   // Find first free row at the bottom.
   const maxY = state.current.panels.reduce((m, p) => Math.max(m, p.y + p.h), 0);
   const p = {
@@ -1051,6 +1083,10 @@ $("refresh-int").addEventListener("change", async () => {
 });
 $("refresh-now").addEventListener("click", refreshAll);
 $("edit-toggle").addEventListener("click", () => {
+  if (!state.current) {
+    alert("Open or create a dashboard first.");
+    return;
+  }
   state.editMode = !state.editMode;
   document.body.classList.toggle("edit-mode", state.editMode);
   $("edit-toggle").textContent = state.editMode ? "✓ Done" : "✎ Edit";
@@ -1102,7 +1138,7 @@ async function loadTraces() {
   const since = sinceMsFrom($("traces-range").value);
   $("traces-meta").textContent = "loading…";
   try {
-    const r = await fetch(`/api/traces?sinceMs=${since}&limit=200`);
+    const r = await authFetch(`/api/traces?sinceMs=${since}&limit=200`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const traces = await r.json();
     renderTraces(traces);
@@ -1143,7 +1179,7 @@ async function openTrace(traceId) {
   $("trace-modal-body").innerHTML = "<div class='meta'>loading…</div>";
   $("trace-modal").classList.add("open");
   try {
-    const r = await fetch("/api/traces/" + encodeURIComponent(traceId));
+    const r = await authFetch("/api/traces/" + encodeURIComponent(traceId));
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
     renderWaterfall(data);
@@ -1200,7 +1236,7 @@ async function loadServiceMap() {
   const since = sinceMsFrom($("map-range").value);
   $("map-meta").textContent = "loading…";
   try {
-    const r = await fetch(`/api/servicemap?sinceMs=${since}`);
+    const r = await authFetch(`/api/servicemap?sinceMs=${since}`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const m = await r.json();
     renderServiceMap(m);
@@ -1304,6 +1340,7 @@ window.addEventListener("hashchange", router);
 router();
 
 (async () => {
+  if (!pbBearer()) { pbRedirectSignin(); return; }
   try { await reloadList(); }
   catch (e) { console.warn("dashboard load failed", e); }
   connectWs();

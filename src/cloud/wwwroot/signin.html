@@ -159,17 +159,24 @@ if (isApex) {
       errEl.textContent = 'API keys start with "pk_". Check that you pasted the full secret.';
       errEl.style.display = 'block'; return;
     }
+    // Respect ?returnTo= so callers can bounce users back to the page
+    // that demanded auth (e.g. the dashboard SPA).
+    const qp = new URLSearchParams(location.search);
+    const rawReturn = qp.get('returnTo') || '/admin';
+    // Only allow same-origin relative paths to avoid open-redirect.
+    const dest = (rawReturn.startsWith('/') && !rawReturn.startsWith('//'))
+      ? rawReturn : '/admin';
     // Probe /auth/me — this validates the key without exposing tenant routes.
     try {
       const r = await fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + key } });
       if (!r.ok) throw new Error('Key rejected (HTTP ' + r.status + '). Double-check, or sign up for a new one.');
       sessionStorage.setItem('pb.bearer', key);
-      location.href = '/admin';
+      location.href = dest;
     } catch (e) {
       // /auth/me may not exist in all builds; if so still accept the key — /admin will revalidate.
       if (String(e.message).includes('HTTP 404')) {
         sessionStorage.setItem('pb.bearer', key);
-        location.href = '/admin';
+        location.href = dest;
         return;
       }
       errEl.textContent = e.message || String(e);
