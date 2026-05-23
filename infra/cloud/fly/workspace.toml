@@ -12,7 +12,10 @@
 #     customer's API keys; we keep the --multi-tenant flag so quotas,
 #     RBAC and the admin surface light up exactly as in self-host)
 #   - a 10 GiB volume mounted at /data (PULSE_DATA_DIR)
-#   - a private Postgres attachment for tenant/key/audit storage
+#   - a Postgres schema `pb_<slug>` carved out of the shared
+#     `pulseboard-pg` cluster (provisioner runs CREATE SCHEMA IF NOT
+#     EXISTS at workspace-create time; the workspace's connection
+#     string has Search Path=pb_<slug> so all tables land there)
 #   - no public IP; reachable only via Fly's automatic
 #     pb-<slug>.fly.dev hostname, which Caddy proxies to from
 #     <slug>.pulseboard.cloud
@@ -20,7 +23,7 @@
 # Required env per workspace (set by the provisioner at machine
 # create time, NOT in this file):
 #   PULSE_DATA_DIR  = /data
-#   PULSE_POSTGRES  = Host=…;Database=pulse_<slug>;Username=…;Password=…
+#   PULSE_POSTGRES  = Host=pulseboard-pg.flycast;Database=pulse;Username=…;Password=…;Search Path=pb_<slug>
 #   PULSE_EDGE_SECRET = <random 32-byte hex>     # HMAC for /_internal/v1/*
 #   PULSE_BOOTSTRAP_TOKEN = <single-use>          # gates first /api/signup
 #

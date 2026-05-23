@@ -8,6 +8,7 @@ open System.Net.Http.Headers
 open System.Text
 open System.Text.Json
 open System.Threading.Tasks
+open Npgsql
 open Suave
 open Suave.Operators
 open Suave.Filters
@@ -108,7 +109,15 @@ type DryRunFlyClient () =
 /// private flycast network only — no public IPs are allocated, since all
 /// external traffic is fronted by `pulseboard-caddy` which reverse-proxies
 /// over flycast.
-type HttpFlyClient (token : string, orgSlug : string) =
+///
+/// `pgAdminConn` is the provisioner's own `PULSE_POSTGRES` (the
+/// connection string Fly's `postgres attach` injected). When set, each
+/// new workspace gets a schema `pb_<slug>` carved out of that shared
+/// database, and we inject `PULSE_POSTGRES=<same conn>;Search Path=pb_<slug>`
+/// into the Machine env so the workspace's PgTenantStore / PgAuditLog /
+/// PgQuotaOverrides / PgRetentionOverrides land their tables inside that
+/// schema. When `None`, the workspace falls back to its in-memory store.
+type HttpFlyClient (token : string, orgSlug : string, pgAdminConn : string option) =
   let http = new HttpClient(BaseAddress = Uri "https://api.machines.dev/")
   do http.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", token)
 
@@ -151,6 +160,29 @@ type HttpFlyClient (token : string, orgSlug : string) =
     | _ -> ()
   }
 
+  /// Carve a Postgres schema `pb_<slug>` out of the shared cluster and
+  /// return a connection string for the workspace whose `search_path`
+  /// points there. Idempotent — re-running on an existing schema is a
+  /// no-op. Slug has already been regex-validated upstream
+  /// (^[a-z][a-z0-9-]{2,31}$); we still quote the identifier as
+  /// defence-in-depth. Hyphens are illegal in unquoted Postgres
+  /// identifiers, so we map `-` → `_` (slug `acme-corp` → `pb_acme_corp`).
+  let provisionWorkspaceDb (slug : string) : string option =
+    match pgAdminConn with
+    | None -> None
+    | Some adminCs ->
+      let schema = "pb_" + slug.Replace('-', '_')
+      use conn = new NpgsqlConnection(adminCs)
+      conn.Open()
+      use cmd =
+        new NpgsqlCommand(
+          sprintf "CREATE SCHEMA IF NOT EXISTS \"%s\"" (schema.Replace("\"", "\"\"")),
+          conn)
+      cmd.ExecuteNonQuery() |> ignore
+      let csb = NpgsqlConnectionStringBuilder(adminCs)
+      csb.SearchPath <- schema
+      Some csb.ConnectionString
+
   interface IFlyClient with
     member _.CreateWorkspace (slug, email, cfg) = async {
       let appName = sprintf "pb-%s" slug
@@ -163,14 +195,23 @@ type HttpFlyClient (token : string, orgSlug : string) =
       //    resolves on the 6PN. Must happen before the Machine starts
       //    accepting flycast traffic.
       do! allocateFlycast appName
-      // 3. Create one Machine with our binary.
+      // 3. Carve a Postgres schema for this workspace (if the
+      //    provisioner has a Postgres connection at all). The workspace
+      //    will pick up the resulting conn string from PULSE_POSTGRES
+      //    and create its tenant/key/audit tables inside `pb_<slug>`.
+      let workspacePgConn = provisionWorkspaceDb slug
+      // 4. Create one Machine with our binary.
       //    `init.cmd` overrides the Dockerfile CMD (the ENTRYPOINT is
       //    `dotnet PulseBoard.dll`); we need `--multi-tenant` so the
       //    /api/signup endpoint is mounted and our bootstrap POST works.
       let envMap =
-        cfg.envExtra
-        |> Map.add "PULSE_OWNER_EMAIL" email
-        |> Map.add "PULSE_SLUG" slug
+        let m =
+          cfg.envExtra
+          |> Map.add "PULSE_OWNER_EMAIL" email
+          |> Map.add "PULSE_SLUG" slug
+        match workspacePgConn with
+        | Some cs -> m |> Map.add "PULSE_POSTGRES" cs
+        | None    -> m
       let envJson =
         envMap
         |> Map.toSeq

@@ -68,16 +68,17 @@ let main argv =
     let region   =
       envOrEarly "PULSE_FLY_REGION" (argValueEarly "--fly-region=")
       |> Option.defaultValue "iad"
+    let provPgConn =
+      envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
     let fly : PulseBoard.Provisioner.IFlyClient =
       if dryRun then PulseBoard.Provisioner.DryRunFlyClient() :> _
       else
         match flyToken, flyOrg with
-        | Some t, Some o -> new PulseBoard.Provisioner.HttpFlyClient(t, o) :> _
+        | Some t, Some o ->
+          new PulseBoard.Provisioner.HttpFlyClient(t, o, provPgConn) :> _
         | _ ->
           eprintfn "  [ERROR] --mode=provisioner without --dry-run requires FLY_API_TOKEN and FLY_ORG_SLUG (or --fly-token=/--fly-org=)"
           exit 2
-    let provPgConn =
-      envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
     let provRegistry : PulseBoard.Provisioner.IWorkspaceRegistry =
       match provPgConn with
       | Some cs ->
@@ -91,6 +92,11 @@ let main argv =
       | None ->
         printfn "  Registry:    in-memory (ephemeral — pass --postgres=... to persist)"
         PulseBoard.Provisioner.InMemoryWorkspaceRegistry() :> _
+    match provPgConn with
+    | Some _ ->
+      printfn "  TenantStore: Postgres (per-workspace schema pb_<slug> on shared cluster)"
+    | None ->
+      printfn "  TenantStore: in-memory in each workspace (no --postgres passed to provisioner)"
     let cfg : PulseBoard.Provisioner.ProvisionerConfig =
       { fly           = fly
         dryRun        = dryRun
