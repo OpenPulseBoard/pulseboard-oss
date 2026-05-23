@@ -70,6 +70,12 @@ let main argv =
       |> Option.defaultValue "iad"
     let provPgConn =
       envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
+    let provPublicUrl =
+      envOrEarly "PULSE_PROVISIONER_PUBLIC_URL" (argValueEarly "--provisioner-public-url=")
+    let provHeartbeats : PulseBoard.Provisioner.IHeartbeatStore =
+      match provPgConn with
+      | Some cs -> PulseBoard.PgWorkspaceRegistry.PgHeartbeatStore(cs) :> _
+      | None    -> PulseBoard.Provisioner.InMemoryHeartbeatStore() :> _
     let fly : PulseBoard.Provisioner.IFlyClient =
       if dryRun then PulseBoard.Provisioner.DryRunFlyClient() :> _
       else
@@ -107,7 +113,85 @@ let main argv =
             region    = region
             envExtra  = Map.empty
             sizeCpus  = 1
-            sizeMemMb = 256 } }
+            sizeMemMb = 256 }
+        adminTokens   =
+          // Operator bearer tokens for /admin/*. Comma- or whitespace-
+          // separated. Empty → admin portal disabled (every /admin/*
+          // returns 404, indistinguishable from a typo).
+          let raw =
+            envOrEarly "PULSE_ADMIN_TOKENS" (argValueEarly "--admin-tokens=")
+            |> Option.defaultValue ""
+          raw.Split([| ','; ';'; ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries)
+          |> Array.map (fun s -> s.Trim())
+          |> Array.filter (fun s -> s.Length > 0)
+          |> Set.ofArray
+        postgresConn  = provPgConn
+        heartbeats    = provHeartbeats
+        provisionerPublicUrl = provPublicUrl
+        adminOidc     =
+          // OIDC config for the admin portal. All four core fields must
+          // be present for OIDC to activate; missing any one leaves the
+          // portal bearer-only. Allowlist of emails and/or domains is
+          // additive — a login is accepted if either matches.
+          let issuer     = envOrEarly "PULSE_ADMIN_OIDC_ISSUER"        (argValueEarly "--admin-oidc-issuer=")
+          let clientId   = envOrEarly "PULSE_ADMIN_OIDC_CLIENT_ID"     (argValueEarly "--admin-oidc-client-id=")
+          let clientSecret = envOrEarly "PULSE_ADMIN_OIDC_CLIENT_SECRET" (argValueEarly "--admin-oidc-client-secret=")
+          let redirectUri = envOrEarly "PULSE_ADMIN_OIDC_REDIRECT_URI" (argValueEarly "--admin-oidc-redirect-uri=")
+          let splitCsv (raw : string) =
+            raw.Split([| ','; ';'; ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun s -> s.Trim().ToLowerInvariant())
+            |> Array.filter (fun s -> s.Length > 0)
+            |> Set.ofArray
+          let emails =
+            envOrEarly "PULSE_ADMIN_OIDC_ALLOWED_EMAILS"  (argValueEarly "--admin-oidc-allowed-emails=")
+            |> Option.defaultValue "" |> splitCsv
+          let domains =
+            envOrEarly "PULSE_ADMIN_OIDC_ALLOWED_DOMAINS" (argValueEarly "--admin-oidc-allowed-domains=")
+            |> Option.defaultValue "" |> splitCsv
+          let sessionSecret =
+            envOrEarly "PULSE_ADMIN_OIDC_SESSION_SECRET" (argValueEarly "--admin-oidc-session-secret=")
+          match issuer, clientId, redirectUri with
+          | Some iss, Some cid, Some ruri when (not (Set.isEmpty emails)) || (not (Set.isEmpty domains)) ->
+            // Session key: prefer operator-supplied (base64) for cookie
+            // continuity across restarts; otherwise generate a fresh one
+            // (sessions invalidated on each provisioner restart, which is
+            // acceptable for human SSO since they can re-auth in seconds).
+            let key =
+              match sessionSecret with
+              | Some s ->
+                try PulseBoard.Session.keyFromBase64 s
+                with ex ->
+                  eprintfn "  [WARN] PULSE_ADMIN_OIDC_SESSION_SECRET invalid (%s); generating ephemeral key" ex.Message
+                  PulseBoard.Session.generateKey ()
+              | None -> PulseBoard.Session.generateKey ()
+            let secure = ruri.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            Some
+              ({ issuer         = iss.TrimEnd '/'
+                 clientId       = cid
+                 clientSecret   = clientSecret
+                 redirectUri    = ruri
+                 allowedEmails  = emails
+                 allowedDomains = domains
+                 sessionKey     = key
+                 sessionTtl     = TimeSpan.FromHours 12.0
+                 cookieSecure   = secure } : PulseBoard.AdminOidc.Config)
+          | _ -> None }
+    if Set.isEmpty cfg.adminTokens && cfg.adminOidc.IsNone then
+      printfn "  Admin:       disabled (set PULSE_ADMIN_TOKENS and/or PULSE_ADMIN_OIDC_* to enable /admin/*)"
+    else
+      let bearerInfo =
+        if Set.isEmpty cfg.adminTokens then "no bearer"
+        else sprintf "%d bearer token(s)" cfg.adminTokens.Count
+      let oidcInfo =
+        match cfg.adminOidc with
+        | None -> "no OIDC"
+        | Some oc ->
+          sprintf "OIDC via %s (%d email(s), %d domain(s))"
+            oc.issuer (Set.count oc.allowedEmails) (Set.count oc.allowedDomains)
+      printfn "  Admin:       enabled — %s, %s" bearerInfo oidcInfo
+    match provPublicUrl with
+    | Some url -> printfn "  Heartbeats:  workspaces ping %s/provision/heartbeat (PULSE_PROVISIONER_URL injected)" url
+    | None     -> printfn "  Heartbeats:  PULSE_PROVISIONER_PUBLIC_URL not set; workspaces won't heartbeat (admin portal will show 'never')"
     PulseBoard.Provisioner.run port cfg
     exit 0
 
@@ -776,6 +860,45 @@ let main argv =
       printfn "    (shown once — pass via 'Authorization: Bearer <key>' or 'X-API-Key: <key>')"
     | None ->
       printfn "  [WARN] --multi-tenant set without --seed-tenant=<slug>. No tenants exist; all gated routes will 403."
+
+  // -- Workspace heartbeat client (PLAN.md Phase 9 step 6) -----------------
+  // When this process is itself a workspace machine spawned by the
+  // provisioner (multi-tenant + PULSE_SLUG + PULSE_PROVISIONER_URL all
+  // set), fire-and-forget a background loop that POSTs
+  // `{slug, version}` to <provisioner>/provision/heartbeat every 15s.
+  // The provisioner is on flycast-only, so no auth is needed; failures
+  // are swallowed (heartbeats are informational only).
+  if multiTenant then
+    let hbSlug = Environment.GetEnvironmentVariable "PULSE_SLUG"
+    let hbProv = Environment.GetEnvironmentVariable "PULSE_PROVISIONER_URL"
+    if not (String.IsNullOrWhiteSpace hbSlug)
+       && not (String.IsNullOrWhiteSpace hbProv) then
+      let version =
+        try System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString()
+        with _ -> "unknown"
+      let url = hbProv.TrimEnd('/') + "/provision/heartbeat"
+      let body =
+        sprintf """{"slug":%s,"version":%s}"""
+          (System.Text.Json.JsonSerializer.Serialize hbSlug)
+          (System.Text.Json.JsonSerializer.Serialize version)
+      printfn "  Heartbeat:   posting to %s every 15s (slug=%s)" url hbSlug
+      let http = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds 5.0)
+      let loop = async {
+        // Tiny initial jitter so a fleet of synchronised restarts
+        // doesn't dogpile the provisioner.
+        do! Async.Sleep (Random().Next(0, 5000))
+        while true do
+          try
+            use content = new System.Net.Http.StringContent(
+                            body, System.Text.Encoding.UTF8, "application/json")
+            let! _ = http.PostAsync(url, content) |> Async.AwaitTask
+            ()
+          with _ -> () // swallow; informational only
+          do! Async.Sleep 15000
+      }
+      Async.Start loop
+    else
+      printfn "  Heartbeat:   disabled (PULSE_SLUG and PULSE_PROVISIONER_URL must both be set)"
 
   // -- Route composition ------------------------------------------------------
 

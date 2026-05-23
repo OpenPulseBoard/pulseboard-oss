@@ -40,6 +40,39 @@ open Suave.ServerErrors
 
 // -- types ------------------------------------------------------------------
 
+/// Latest heartbeat ping from a workspace. Workspaces (running in
+/// `--multi-tenant` mode with `PULSE_SLUG` and `PULSE_PROVISIONER_URL`
+/// set in their env) POST `/provision/heartbeat` every ~15s. The admin
+/// portal uses this to surface live/stale state independently of the
+/// Fly Machines API (which only tells us the machine is *running*, not
+/// that the PulseBoard process inside it is healthy).
+type Heartbeat =
+  { slug       : string
+    lastSeenAt : DateTimeOffset
+    version    : string option }
+
+type IHeartbeatStore =
+  /// Stamp `lastSeenAt = at` and replace `version` for this slug.
+  /// Inserts a new row if missing. No-op on missing-slug semantics:
+  /// the caller has already validated the slug exists in the registry.
+  abstract Record : slug:string -> version:string option -> at:DateTimeOffset -> unit
+  abstract TryGet : slug:string -> Heartbeat option
+  /// Snapshot of every slug → latest heartbeat. Used by the admin
+  /// portal listing so we don't issue one query per row.
+  abstract All : unit -> Map<string, Heartbeat>
+
+type InMemoryHeartbeatStore () =
+  let m = ConcurrentDictionary<string, Heartbeat>()
+  interface IHeartbeatStore with
+    member _.Record slug version at =
+      m.[slug] <- { slug = slug; lastSeenAt = at; version = version }
+    member _.TryGet slug =
+      match m.TryGetValue slug with true, h -> Some h | _ -> None
+    member _.All () =
+      m
+      |> Seq.map (fun kv -> kv.Key, kv.Value)
+      |> Map.ofSeq
+
 type WorkspaceRecord =
   { slug         : string
     flyAppName   : string
@@ -47,13 +80,29 @@ type WorkspaceRecord =
     tenantId     : string option
     apiKeyId     : string option
     ownerEmail   : string
-    createdAt    : DateTimeOffset }
+    createdAt    : DateTimeOffset
+    /// When `Some`, the workspace is archived: its Fly machines have
+    /// been stopped, the router refuses traffic (`410 Gone`), and the
+    /// operator can either unarchive (reversible) or purge (irreversible
+    /// — destroys the Fly app and drops the Postgres schema). When
+    /// `None`, the workspace is live.
+    archivedAt   : DateTimeOffset option }
 
 type IWorkspaceRegistry =
   abstract Insert : WorkspaceRecord -> unit
   abstract TryGetBySlug : string -> WorkspaceRecord option
   abstract TryGetByHost : string -> WorkspaceRecord option
   abstract Update : string -> (WorkspaceRecord -> WorkspaceRecord) -> unit
+  /// Return every workspace record, newest first. Used by the admin
+  /// portal; pagination is intentionally not part of v1 (a few hundred
+  /// rows fit comfortably in one JSON response).
+  abstract List : unit -> WorkspaceRecord list
+  /// Stamp / clear the `archivedAt` field. `None` brings the workspace
+  /// back online; `Some now` archives it.
+  abstract SetArchived : slug:string -> at:DateTimeOffset option -> unit
+  /// Remove the row entirely. Called by `purgeWorkspace` after Fly app
+  /// destruction; no-op if the slug is already gone.
+  abstract Delete : slug:string -> unit
 
 type InMemoryWorkspaceRegistry () =
   let bySlug = ConcurrentDictionary<string, WorkspaceRecord>()
@@ -71,6 +120,15 @@ type InMemoryWorkspaceRegistry () =
     member _.Update s f =
       bySlug.AddOrUpdate(s, (fun _ -> failwithf "no such slug: %s" s),
                              (fun _ old -> f old)) |> ignore
+    member _.List () =
+      bySlug.Values
+      |> Seq.sortByDescending (fun r -> r.createdAt)
+      |> List.ofSeq
+    member _.SetArchived slug at =
+      bySlug.AddOrUpdate(slug, (fun _ -> failwithf "no such slug: %s" slug),
+                               (fun _ old -> { old with archivedAt = at })) |> ignore
+    member _.Delete slug =
+      bySlug.TryRemove slug |> ignore
 
 // -- Fly Machines client ----------------------------------------------------
 
@@ -86,8 +144,34 @@ type ProvisionedWorkspace =
     publicUrl   : string                  // http://<app>.flycast — the upstream Caddy will proxy to
     internalUrl : string }                // http://<app>.flycast — same (kept for symmetry)
 
+/// A live Fly Machine, as reported by `GET /v1/apps/<app>/machines`.
+/// Populated by `IFlyClient.ListMachines`; consumed by the admin portal
+/// to surface per-workspace state without round-tripping through the
+/// workspace itself.
+type MachineInfo =
+  { id        : string
+    state     : string   // "started" | "stopped" | "created" | "destroying" | …
+    region    : string
+    createdAt : string } // ISO-8601 from the Fly API, kept as-is
+
 type IFlyClient =
   abstract CreateWorkspace : slug:string * ownerEmail:string * cfg:FlyMachineConfig -> Async<ProvisionedWorkspace>
+  /// List the Machines belonging to a Fly app. Empty list when the app
+  /// exists but has no machines (e.g. after a manual `fly machine
+  /// destroy`). Throws if the app itself is missing or the API errors.
+  abstract ListMachines : appName:string -> Async<MachineInfo list>
+  /// Stop every Machine on the app. Returns the number of machines
+  /// acted upon. Cheap idempotent: stopping an already-stopped machine
+  /// is a no-op on Fly's side.
+  abstract SuspendApp : appName:string -> Async<int>
+  /// Start every Machine on the app. Returns the number of machines
+  /// acted upon. Cheap idempotent: starting an already-started machine
+  /// is a no-op on Fly's side.
+  abstract ResumeApp : appName:string -> Async<int>
+  /// Delete the Fly app entirely (with `?force=true` so any remaining
+  /// machines are torn down in the same call). Idempotent: a 404 from
+  /// Fly (app already gone) is treated as success.
+  abstract DestroyApp : appName:string -> Async<unit>
 
 type DryRunFlyClient () =
   interface IFlyClient with
@@ -100,6 +184,27 @@ type DryRunFlyClient () =
         { appName     = sprintf "pb-%s" slug
           publicUrl   = sprintf "http://pb-%s.flycast:80" slug
           internalUrl = sprintf "http://pb-%s.flycast:80" slug }
+    }
+    member _.ListMachines appName = async {
+      // Synthetic single "started" machine so the admin portal renders
+      // a sensible state column in dry-run mode.
+      return
+        [ { id        = appName + "-0"
+            state     = "started"
+            region    = "iad"
+            createdAt = DateTimeOffset.UtcNow.ToString("o") } ]
+    }
+    member _.SuspendApp appName = async {
+      eprintfn "  [provisioner/dry-run] would stop all machines on %s" appName
+      return 1
+    }
+    member _.ResumeApp appName = async {
+      eprintfn "  [provisioner/dry-run] would start all machines on %s" appName
+      return 1
+    }
+    member _.DestroyApp appName = async {
+      eprintfn "  [provisioner/dry-run] would destroy Fly app %s" appName
+      return ()
     }
 
 /// Real HTTP client against the Fly Machines REST API (api.machines.dev/v1).
@@ -239,6 +344,69 @@ type HttpFlyClient (token : string, orgSlug : string, pgAdminConn : string optio
           internalUrl = sprintf "http://%s.flycast:80" appName }
     }
 
+    member _.ListMachines appName = async {
+      // GET /v1/apps/<app>/machines — returns a JSON array of machines.
+      // We only surface the four fields the admin portal renders; the
+      // full response is much larger (config, checks, events, …).
+      let path = sprintf "/v1/apps/%s/machines" appName
+      let! resp = http.GetAsync(path) |> Async.AwaitTask
+      let! txt = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+      if not resp.IsSuccessStatusCode then
+        failwithf "fly API GET %s -> %d: %s" path (int resp.StatusCode) txt
+      use doc = JsonDocument.Parse txt
+      let root = doc.RootElement
+      if root.ValueKind <> JsonValueKind.Array then
+        return []
+      else
+        let getStr (el : JsonElement) (n : string) =
+          match el.TryGetProperty n with
+          | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+          | _ -> ""
+        let items =
+          root.EnumerateArray()
+          |> Seq.map (fun el ->
+               { id        = getStr el "id"
+                 state     = getStr el "state"
+                 region    = getStr el "region"
+                 createdAt = getStr el "created_at" })
+          |> List.ofSeq
+        return items
+    }
+
+    member this.SuspendApp appName = async {
+      // Fly Machines API: POST /v1/apps/<app>/machines/<id>/stop with
+      // empty JSON body. Already-stopped machines return 200.
+      let! machines = (this :> IFlyClient).ListMachines appName
+      for m in machines do
+        let path = sprintf "/v1/apps/%s/machines/%s/stop" appName m.id
+        let! _ = postJson path "{}"
+        ()
+      return machines.Length
+    }
+
+    member this.ResumeApp appName = async {
+      // Fly Machines API: POST /v1/apps/<app>/machines/<id>/start.
+      let! machines = (this :> IFlyClient).ListMachines appName
+      for m in machines do
+        let path = sprintf "/v1/apps/%s/machines/%s/start" appName m.id
+        let! _ = postJson path "{}"
+        ()
+      return machines.Length
+    }
+
+    member _.DestroyApp appName = async {
+      // Fly Machines API: DELETE /v1/apps/<app>?force=true tears down
+      // the app and its machines in one call. A 404 means the app is
+      // already gone — treat as success for idempotency.
+      let path = sprintf "/v1/apps/%s?force=true" appName
+      let! resp = http.DeleteAsync(path) |> Async.AwaitTask
+      let! txt = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+      if resp.StatusCode = System.Net.HttpStatusCode.NotFound then
+        eprintfn "  [provisioner] DestroyApp %s: app already gone (404)" appName
+      elif not resp.IsSuccessStatusCode then
+        failwithf "fly API DELETE %s -> %d: %s" path (int resp.StatusCode) txt
+    }
+
   interface IDisposable with
     member _.Dispose () =
       http.Dispose ()
@@ -324,7 +492,35 @@ type ProvisionerConfig =
     dryRun        : bool         // when true, skip workspace bootstrap HTTP call
     registry      : IWorkspaceRegistry
     rootDomain    : string       // e.g. "pulseboard.cloud"
-    machineConfig : FlyMachineConfig }
+    machineConfig : FlyMachineConfig
+    /// Bearer tokens accepted on `/admin/*` routes. Empty set ⇒ the
+    /// admin portal is disabled (every request returns 404 so the
+    /// surface is invisible). Populate from `PULSE_ADMIN_TOKENS=tok1,tok2`
+    /// or `--admin-tokens=…`. Tokens are compared in constant time.
+    adminTokens   : Set<string>
+    /// Optional admin Postgres connection string. When set, `purge`
+    /// also issues `DROP SCHEMA pb_<slug> CASCADE` so the workspace's
+    /// per-tenant tables go away with the Fly app. When `None`, purge
+    /// only destroys the Fly app and the registry row (data lives in
+    /// each workspace's local SQLite / in-memory store anyway).
+    postgresConn  : string option
+    /// Latest-heartbeat store. Workspaces ping `/provision/heartbeat`
+    /// every ~15s; the admin portal joins this against the registry
+    /// to render "last seen Xs ago" per row.
+    heartbeats    : IHeartbeatStore
+    /// Public flycast URL of the provisioner itself (e.g.
+    /// `http://pulseboard-provisioner.flycast`). When `Some`, gets
+    /// injected into every new workspace machine as
+    /// `PULSE_PROVISIONER_URL` so the workspace knows where to ship
+    /// its heartbeats. When `None`, workspaces still come up — they
+    /// just won't heartbeat (admin portal shows them as never-seen).
+    provisionerPublicUrl : string option
+    /// OIDC config for the admin portal. When `Some`, the portal
+    /// exposes `/admin/login` / `/admin/callback` / `/admin/logout`
+    /// and `adminAuth` accepts a valid `pulse_admin` session cookie
+    /// in addition to the bearer tokens in `adminTokens`. When `None`,
+    /// the portal is bearer-only (the original behaviour).
+    adminOidc            : AdminOidc.Config option }
 
 // -- HTTP surface -----------------------------------------------------------
 
@@ -374,7 +570,16 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
             | Some _ ->
               let salt = Guid.NewGuid().ToString("N").Substring(0, 4)
               sprintf "%s-%s" slug salt
-          let! ws = cfg.fly.CreateWorkspace(finalSlug, email, cfg.machineConfig)
+          // Inject PULSE_PROVISIONER_URL so the spawned workspace knows
+          // where to ship heartbeats. Operator can pre-set it in
+          // machineConfig.envExtra to override (e.g. for canary).
+          let machineCfg =
+            match cfg.provisionerPublicUrl with
+            | Some url when not (cfg.machineConfig.envExtra.ContainsKey "PULSE_PROVISIONER_URL") ->
+              { cfg.machineConfig with
+                  envExtra = cfg.machineConfig.envExtra |> Map.add "PULSE_PROVISIONER_URL" url }
+            | _ -> cfg.machineConfig
+          let! ws = cfg.fly.CreateWorkspace(finalSlug, email, machineCfg)
           // Record before bootstrap so /provision/ask works as soon as
           // Caddy receives the first cert request.
           let host = sprintf "%s.%s" finalSlug cfg.rootDomain
@@ -382,7 +587,8 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
             { slug = finalSlug; flyAppName = ws.appName
               upstreamUrl = ws.publicUrl
               tenantId = None; apiKeyId = None
-              ownerEmail = email; createdAt = DateTimeOffset.UtcNow }
+              ownerEmail = email; createdAt = DateTimeOffset.UtcNow
+              archivedAt = None }
           cfg.registry.Insert record0
           // Bootstrap the workspace key. In dry-run we synthesise one.
           let! boot =
@@ -419,12 +625,668 @@ let private askOrRoute (cfg : ProvisionerConfig) (isAsk : bool) : WebPart =
     else
       match cfg.registry.TryGetByHost host with
       | None -> return! errJson 404 (sprintf "unknown host: %s" host) ctx
+      | Some r when r.archivedAt.IsSome ->
+        // Archived workspaces are off-limits to live traffic. Caddy's
+        // ask returns 404 (don't mint a fresh cert), route returns 410
+        // Gone so the operator sees a clear signal instead of a 502.
+        if isAsk then return! NOT_FOUND "archived" ctx
+        else return! Suave.RequestErrors.GONE "workspace archived" ctx
       | Some r ->
         if isAsk then return! OK "" ctx
         else
           let body = sprintf """{"upstream":%s}""" (JsonSerializer.Serialize r.upstreamUrl)
           return! jsonResp 200 body ctx
   }
+
+/// POST /provision/heartbeat — workspaces ping this every ~15s.
+/// Body: `{"slug":"acme","version":"0.9.1"}` (`version` optional).
+/// Returns 200 `{ok:true,intervalSec:15}` on success, 404 for unknown
+/// slugs, 410 Gone for archived ones, 400 for malformed bodies.
+///
+/// This endpoint is intentionally UNAUTHENTICATED at the HTTP layer:
+/// the provisioner listens on flycast-only (private-v6) in production,
+/// so only machines inside the same Fly org can reach it. A spoofed
+/// heartbeat is at worst a misleading "last seen" badge in the admin
+/// portal; it can't escalate privileges or affect routing.
+let private heartbeat (cfg : ProvisionerConfig) : WebPart =
+  fun ctx -> async {
+    try
+      let body = readBody ctx.request
+      use doc = JsonDocument.Parse (if String.IsNullOrWhiteSpace body then "{}" else body)
+      let root = doc.RootElement
+      let tryStr (n : string) =
+        match root.TryGetProperty n with
+        | true, v when v.ValueKind = JsonValueKind.String ->
+          let s = v.GetString().Trim() in if s = "" then None else Some s
+        | _ -> None
+      match tryStr "slug" with
+      | None -> return! errJson 400 "field 'slug' is required" ctx
+      | Some slug ->
+        match cfg.registry.TryGetBySlug (slug.ToLowerInvariant()) with
+        | None -> return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+        | Some r when r.archivedAt.IsSome ->
+          return! Suave.RequestErrors.GONE "workspace archived" ctx
+        | Some r ->
+          let version = tryStr "version"
+          cfg.heartbeats.Record r.slug version DateTimeOffset.UtcNow
+          return! jsonResp 200 """{"ok":true,"intervalSec":15}""" ctx
+    with ex ->
+      return! errJson 400 ex.Message ctx
+  }
+
+// -- admin portal -----------------------------------------------------------
+//
+// `/admin/*` is gated by a bearer token from `PULSE_ADMIN_TOKENS`. When
+// no tokens are configured, the admin surface is entirely invisible:
+// every `/admin/*` request returns 404 just like any other unknown
+// path. When tokens are configured, missing/invalid bearers return 401.
+
+/// Constant-time comparison so a timing oracle can't be used to enumerate
+/// valid tokens character by character.
+let private ctEquals (a : string) (b : string) =
+  if a.Length <> b.Length then false
+  else
+    let mutable diff = 0
+    for i in 0 .. a.Length - 1 do diff <- diff ||| (int a.[i] ^^^ int b.[i])
+    diff = 0
+
+let private extractBearer (req : HttpRequest) =
+  match req.header "authorization" with
+  | Choice1Of2 v ->
+    let v = v.Trim()
+    if v.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+    then Some (v.Substring(7).Trim())
+    else None
+  | _ -> None
+
+let private adminAuth (cfg : ProvisionerConfig) (inner : WebPart) : WebPart =
+  fun ctx -> async {
+    // Surface is "on" if either bearer tokens or OIDC is configured.
+    // When neither is set, every /admin/* returns 404 so the surface
+    // is indistinguishable from a typo.
+    let bearerOn = not (Set.isEmpty cfg.adminTokens)
+    let oidcOn   = cfg.adminOidc.IsSome
+    if not bearerOn && not oidcOn then
+      return! NOT_FOUND "Not found." ctx
+    else
+      // Try bearer first (CI/automation), then fall back to the
+      // session cookie (humans via OIDC).
+      let bearerOk =
+        match extractBearer ctx.request with
+        | Some tok when bearerOn ->
+          cfg.adminTokens |> Set.exists (fun t -> ctEquals t tok)
+        | _ -> false
+      let cookieOk =
+        match cfg.adminOidc with
+        | Some oc -> AdminOidc.tryReadSession oc ctx.request |> Option.isSome
+        | None    -> false
+      if bearerOk || cookieOk then return! inner ctx
+      else
+        // 401 with no body — clients distinguish bearer-vs-cookie at
+        // call sites (the HTML portal redirects to /admin/login on 401
+        // when OIDC is configured).
+        return! Suave.RequestErrors.UNAUTHORIZED "authentication required" ctx
+  }
+
+/// Same visibility rule as `adminAuth`, but for surfaces the operator
+/// hits unauthenticated (the HTML portal page itself). When neither
+/// bearer tokens nor OIDC is configured the route returns 404. When
+/// OIDC IS configured and the visitor has no valid session cookie,
+/// 302 to `/admin/login` so they don't see a stale paste-your-token
+/// page. Otherwise serve the supplied web part (the JSON endpoints
+/// it calls do their own auth via `adminAuth`).
+let private adminVisible (cfg : ProvisionerConfig) (inner : WebPart) : WebPart =
+  fun ctx -> async {
+    let bearerOn = not (Set.isEmpty cfg.adminTokens)
+    let oidcOn   = cfg.adminOidc.IsSome
+    if not bearerOn && not oidcOn then
+      return! NOT_FOUND "Not found." ctx
+    else
+      match cfg.adminOidc with
+      | Some oc when AdminOidc.tryReadSession oc ctx.request |> Option.isNone
+                  && not bearerOn ->
+        // OIDC-only deployment + no cookie -> kick straight to login.
+        return! Suave.Redirection.FOUND "/admin/login?returnTo=/admin" ctx
+      | _ ->
+        return! inner ctx
+  }
+
+/// JSON-encode a workspace record plus its live Fly machines. `machines`
+/// is either an array of `MachineInfo` JSON objects, or `null` if the
+/// Fly API call failed (we surface the error in `machinesError` instead
+/// of poisoning the whole response). Sensitive fields (apiKey) were
+/// never stored, so this is safe to expose to authenticated admins.
+let private machineToJson (m : MachineInfo) =
+  let s = JsonSerializer.Serialize : string -> string
+  sprintf """{"id":%s,"state":%s,"region":%s,"createdAt":%s}"""
+    (s m.id) (s m.state) (s m.region) (s m.createdAt)
+
+let private recordToJson (r : WorkspaceRecord) (machines : Result<MachineInfo list, string>) (hb : Heartbeat option) =
+  let s = JsonSerializer.Serialize : string -> string
+  let optS = function Some v -> s v | None -> "null"
+  let optDate = function Some (d : DateTimeOffset) -> s (d.ToString("o")) | None -> "null"
+  let machinesField, errField =
+    match machines with
+    | Result.Ok ms ->
+      let arr = ms |> List.map machineToJson |> String.concat ","
+      sprintf "[%s]" arr, "null"
+    | Result.Error e -> "null", s e
+  let lastSeenAt = hb |> Option.map (fun h -> h.lastSeenAt)
+  let version    = hb |> Option.bind (fun h -> h.version)
+  sprintf """{"slug":%s,"flyAppName":%s,"upstreamUrl":%s,"tenantId":%s,"apiKeyId":%s,"ownerEmail":%s,"createdAt":%s,"archivedAt":%s,"machines":%s,"machinesError":%s,"lastSeenAt":%s,"version":%s}"""
+    (s r.slug)
+    (s r.flyAppName)
+    (s r.upstreamUrl)
+    (optS r.tenantId)
+    (optS r.apiKeyId)
+    (s r.ownerEmail)
+    (s (r.createdAt.ToString("o")))
+    (optDate r.archivedAt)
+    machinesField
+    errField
+    (optDate lastSeenAt)
+    (optS version)
+
+/// Bounded-concurrency fan-out: ask the Fly client about every app in
+/// parallel, but at most `maxConcurrent` in flight at a time. Per-row
+/// errors are captured as `Error msg` so one dead app doesn't poison the
+/// whole admin listing.
+let private fetchMachinesParallel (cfg : ProvisionerConfig) (rows : WorkspaceRecord list)
+    : Async<Map<string, Result<MachineInfo list, string>>> = async {
+  let maxConcurrent = 8
+  use sem = new System.Threading.SemaphoreSlim(maxConcurrent, maxConcurrent)
+  let one (r : WorkspaceRecord) = async {
+    do! sem.WaitAsync() |> Async.AwaitTask
+    try
+      try
+        let! ms = cfg.fly.ListMachines r.flyAppName
+        return r.slug, Result.Ok ms
+      with ex ->
+        return r.slug, Result.Error ex.Message
+    finally
+      sem.Release() |> ignore
+  }
+  let! pairs = rows |> List.map one |> Async.Parallel
+  return pairs |> Map.ofArray
+}
+
+/// GET /admin/workspaces — list every provisioned workspace, newest first,
+/// enriched with live Fly machine state. Pass `?machines=0` to skip the
+/// Fly fan-out and return the bare registry (faster, no external calls).
+let private listWorkspaces (cfg : ProvisionerConfig) : WebPart =
+  fun ctx -> async {
+    try
+      let rows = cfg.registry.List()
+      let skipMachines =
+        match ctx.request.queryParam "machines" with
+        | Choice1Of2 v ->
+          let v = v.Trim().ToLowerInvariant()
+          v = "0" || v = "false" || v = "no"
+        | _ -> false
+      let! machinesBySlug =
+        if skipMachines then async { return Map.empty }
+        else fetchMachinesParallel cfg rows
+      let lookup slug =
+        match Map.tryFind slug machinesBySlug with
+        | Some r -> r
+        | None   -> Result.Ok []
+      let heartbeats = cfg.heartbeats.All()
+      let items =
+        rows
+        |> List.map (fun r -> recordToJson r (lookup r.slug) (Map.tryFind r.slug heartbeats))
+        |> String.concat ","
+      let body = sprintf """{"count":%d,"items":[%s]}""" rows.Length items
+      return! jsonResp 200 body ctx
+    with ex ->
+      eprintfn "  [provisioner/admin] list failed: %s" ex.Message
+      return! errJson 500 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/suspend — stop every Machine on the
+/// workspace's Fly app. Returns `{slug, action:"suspend", machines:N}`.
+/// 404 when the slug is unknown; 502 when the Fly API call fails.
+let private suspendWorkspace (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    match cfg.registry.TryGetBySlug slug with
+    | None ->
+      return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+    | Some r ->
+      try
+        let! n = cfg.fly.SuspendApp r.flyAppName
+        let body =
+          sprintf """{"slug":%s,"flyAppName":%s,"action":"suspend","machines":%d}"""
+            (JsonSerializer.Serialize (slug : string))
+            (JsonSerializer.Serialize (r.flyAppName : string))
+            n
+        return! jsonResp 200 body ctx
+      with ex ->
+        eprintfn "  [provisioner/admin] suspend %s failed: %s" slug ex.Message
+        return! errJson 502 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/resume — start every Machine on the
+/// workspace's Fly app. Same response shape as `suspendWorkspace`.
+let private resumeWorkspace (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    match cfg.registry.TryGetBySlug slug with
+    | None ->
+      return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+    | Some r ->
+      try
+        let! n = cfg.fly.ResumeApp r.flyAppName
+        let body =
+          sprintf """{"slug":%s,"flyAppName":%s,"action":"resume","machines":%d}"""
+            (JsonSerializer.Serialize (slug : string))
+            (JsonSerializer.Serialize (r.flyAppName : string))
+            n
+        return! jsonResp 200 body ctx
+      with ex ->
+        eprintfn "  [provisioner/admin] resume %s failed: %s" slug ex.Message
+        return! errJson 502 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/archive — stop all machines AND mark
+/// the workspace archived so the router refuses live traffic. Reversible
+/// via `unarchive`. 409 when already archived (idempotency-friendly: the
+/// caller can treat 409 as success).
+let private archiveWorkspace (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    match cfg.registry.TryGetBySlug slug with
+    | None -> return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+    | Some r when r.archivedAt.IsSome ->
+      return! errJson 409 (sprintf "already archived at %s" (r.archivedAt.Value.ToString("o"))) ctx
+    | Some r ->
+      try
+        let! n = cfg.fly.SuspendApp r.flyAppName
+        let at = DateTimeOffset.UtcNow
+        cfg.registry.SetArchived slug (Some at)
+        let body =
+          sprintf """{"slug":%s,"flyAppName":%s,"action":"archive","machines":%d,"archivedAt":%s}"""
+            (JsonSerializer.Serialize (slug : string))
+            (JsonSerializer.Serialize (r.flyAppName : string))
+            n
+            (JsonSerializer.Serialize (at.ToString("o")))
+        return! jsonResp 200 body ctx
+      with ex ->
+        eprintfn "  [provisioner/admin] archive %s failed: %s" slug ex.Message
+        return! errJson 502 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/unarchive — clear the archived flag and
+/// restart machines. 409 when the workspace was never archived.
+let private unarchiveWorkspace (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    match cfg.registry.TryGetBySlug slug with
+    | None -> return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+    | Some r when r.archivedAt.IsNone ->
+      return! errJson 409 "not archived" ctx
+    | Some r ->
+      try
+        cfg.registry.SetArchived slug None
+        let! n = cfg.fly.ResumeApp r.flyAppName
+        let body =
+          sprintf """{"slug":%s,"flyAppName":%s,"action":"unarchive","machines":%d}"""
+            (JsonSerializer.Serialize (slug : string))
+            (JsonSerializer.Serialize (r.flyAppName : string))
+            n
+        return! jsonResp 200 body ctx
+      with ex ->
+        eprintfn "  [provisioner/admin] unarchive %s failed: %s" slug ex.Message
+        return! errJson 502 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/purge — irreversible. REQUIRES the
+/// workspace to be already archived, AND the request body must echo the
+/// slug back as `{"confirm":"<slug>"}`. On success: Fly app destroyed,
+/// `pb_<slug>` schema dropped (if `postgresConn` is configured), and the
+/// registry row removed. Per-step failures are logged but don't abort
+/// later steps — the goal is "the resource is gone" even if one cleanup
+/// step needs operator follow-up.
+let private purgeWorkspace (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    match cfg.registry.TryGetBySlug slug with
+    | None -> return! errJson 404 (sprintf "unknown workspace: %s" slug) ctx
+    | Some r when r.archivedAt.IsNone ->
+      return! errJson 409 "must archive before purge" ctx
+    | Some r ->
+      // Require slug echo so a misclick can't nuke a tenant.
+      let body = readBody ctx.request
+      let confirmed =
+        try
+          use doc = JsonDocument.Parse (if String.IsNullOrWhiteSpace body then "{}" else body)
+          match doc.RootElement.TryGetProperty "confirm" with
+          | true, v when v.ValueKind = JsonValueKind.String -> v.GetString() = slug
+          | _ -> false
+        with _ -> false
+      if not confirmed then
+        return! errJson 400 (sprintf """purge requires {"confirm":"%s"} in body""" slug) ctx
+      else
+        // Step 1: destroy Fly app (force=true tears down machines too).
+        let mutable errs : string list = []
+        try
+          do! cfg.fly.DestroyApp r.flyAppName
+        with ex ->
+          let m = sprintf "destroy %s: %s" r.flyAppName ex.Message
+          eprintfn "  [provisioner/admin] purge %s: %s" slug m
+          errs <- m :: errs
+        // Step 2: drop the per-workspace Postgres schema if we have a conn.
+        match cfg.postgresConn with
+        | None -> ()
+        | Some conn ->
+          try
+            use c = new Npgsql.NpgsqlConnection(conn)
+            c.Open()
+            // Safe: schema name is constrained to pb_<slug> where slug
+            // already passed `slugOk` (`[a-z][a-z0-9-]{2,31}`). Hyphens
+            // need quoting in identifiers, hence the double-quotes.
+            let sql = sprintf "DROP SCHEMA IF EXISTS \"pb_%s\" CASCADE" slug
+            use cmd = new Npgsql.NpgsqlCommand(sql, c)
+            cmd.ExecuteNonQuery() |> ignore
+          with ex ->
+            let m = sprintf "drop schema pb_%s: %s" slug ex.Message
+            eprintfn "  [provisioner/admin] purge %s: %s" slug m
+            errs <- m :: errs
+        // Step 3: drop the registry row.
+        try
+          cfg.registry.Delete slug
+        with ex ->
+          let m = sprintf "registry delete: %s" ex.Message
+          eprintfn "  [provisioner/admin] purge %s: %s" slug m
+          errs <- m :: errs
+        let errsJson =
+          if List.isEmpty errs then "null"
+          else
+            errs
+            |> List.rev
+            |> List.map (fun e -> JsonSerializer.Serialize (e : string))
+            |> String.concat ","
+            |> sprintf "[%s]"
+        let body =
+          sprintf """{"slug":%s,"flyAppName":%s,"action":"purge","errors":%s}"""
+            (JsonSerializer.Serialize (slug : string))
+            (JsonSerializer.Serialize (r.flyAppName : string))
+            errsJson
+        return! jsonResp 200 body ctx
+  }
+
+/// Single self-contained HTML page for the admin portal. No external
+/// assets, no framework. The operator pastes a bearer token (persisted
+/// in sessionStorage) and the page fetches `/admin/workspaces`.
+let private portalHtml = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PulseBoard admin</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; margin: 24px; max-width: 1100px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #888; margin: 0 0 18px; font-size: 12px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  input[type=password], input[type=text] {
+    font: inherit; padding: 6px 8px; border: 1px solid #888; border-radius: 4px;
+    background: transparent; color: inherit; min-width: 280px;
+  }
+  button {
+    font: inherit; padding: 6px 14px; border: 1px solid #888; border-radius: 4px;
+    background: #f4f4f4; color: #111; cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) { button { background: #2a2a2a; color: #eee; } }
+  button:hover { border-color: #444; }
+  .stat { color: #888; font-size: 12px; margin-left: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ddd; vertical-align: top; }
+  @media (prefers-color-scheme: dark) { th, td { border-bottom-color: #333; } }
+  th { font-weight: 600; font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: .04em; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
+    font-weight: 600; letter-spacing: .02em;
+  }
+  .pill.started { background: #d6f5dd; color: #0a5d20; }
+  .pill.stopped { background: #f5d6d6; color: #6b0a0a; }
+  .pill.other   { background: #ececec; color: #555; }
+  @media (prefers-color-scheme: dark) {
+    .pill.started { background: #133d1d; color: #8be09c; }
+    .pill.stopped { background: #4a1414; color: #f0a3a3; }
+    .pill.other   { background: #2a2a2a; color: #bbb; }
+  }
+  .err { color: #b02020; font-size: 12px; }
+  .muted { color: #888; }
+  .machines { display: flex; flex-direction: column; gap: 3px; }
+  .machine { display: flex; gap: 6px; align-items: center; }
+  .machine code { color: #888; }
+  .seen { font-size: 11px; }
+  .seen.fresh  { color: #0a5d20; }
+  .seen.stale  { color: #b07000; }
+  .seen.dead   { color: #b02020; }
+  .seen.never  { color: #888; }
+  @media (prefers-color-scheme: dark) {
+    .seen.fresh { color: #8be09c; }
+    .seen.stale { color: #e6c160; }
+    .seen.dead  { color: #f0a3a3; }
+  }
+  .archived { display: inline-block; padding: 1px 6px; border-radius: 3px;
+              font-size: 10px; font-weight: 700; letter-spacing: .05em;
+              background: #f5d6d6; color: #6b0a0a; margin-left: 6px; }
+  @media (prefers-color-scheme: dark) { .archived { background: #4a1414; color: #f0a3a3; } }
+  tr.is-archived td { opacity: .6; }
+  tr.is-archived td:first-child, tr.is-archived td:last-child { opacity: 1; }
+  button.danger { border-color: #b02020; color: #b02020; }
+  @media (prefers-color-scheme: dark) { button.danger { color: #f0a3a3; border-color: #b04040; } }
+</style>
+</head>
+<body>
+<h1>PulseBoard admin</h1>
+<p class="sub">Provisioner: <code id="origin"></code> &nbsp;&middot;&nbsp; <span id="who" class="muted"></span></p>
+<div class="bar" id="tokbar" hidden>
+  <input id="tok" type="password" placeholder="bearer token" autocomplete="off" spellcheck="false">
+  <button id="load">Load</button>
+  <button id="reload" title="Refresh with live Fly machine state">Refresh</button>
+  <label><input id="fast" type="checkbox"> skip Fly (faster)</label>
+  <span class="stat" id="stat"></span>
+</div>
+<div class="bar" id="cookiebar" hidden>
+  <button id="reloadc">Refresh</button>
+  <label><input id="fastc" type="checkbox"> skip Fly (faster)</label>
+  <span class="stat" id="statc"></span>
+</div>
+<div id="err" class="err"></div>
+<table id="t" hidden>
+  <thead>
+    <tr>
+      <th>Slug</th><th>Owner</th><th>Machines</th><th>Last seen</th><th>Created</th><th>Fly app</th><th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  $("origin").textContent = location.origin;
+  var tokKey = "pb-admin-token";
+  $("tok").value = sessionStorage.getItem(tokKey) || "";
+
+  // Auth mode is decided once at startup: if /admin/whoami says 200,
+  // we're in cookie mode (OIDC signed in) and never touch the bearer
+  // input; otherwise we fall back to the legacy bearer paste box.
+  var cookieMode = false;
+  function isFast () {
+    return cookieMode ? $("fastc").checked : $("fast").checked;
+  }
+  function setStat (s) {
+    if (cookieMode) $("statc").textContent = s;
+    else $("stat").textContent = s;
+  }
+
+  function pillClass (state) {
+    if (state === "started") return "pill started";
+    if (state === "stopped" || state === "destroyed" || state === "failed") return "pill stopped";
+    return "pill other";
+  }
+  function esc (s) {
+    return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
+      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c];
+    });
+  }
+  function fmtDate (s) {
+    if (!s) return "";
+    var d = new Date(s);
+    if (isNaN(d)) return esc(s);
+    return d.toISOString().replace("T", " ").replace(/\..*/, "Z");
+  }
+  function fmtSeen (iso, version) {
+    if (!iso) return '<span class="seen never">never</span>';
+    var d = new Date(iso);
+    if (isNaN(d)) return esc(iso);
+    var secs = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+    var rel;
+    if      (secs < 60)   rel = secs + "s ago";
+    else if (secs < 3600) rel = Math.floor(secs / 60) + "m ago";
+    else if (secs < 86400) rel = Math.floor(secs / 3600) + "h ago";
+    else                  rel = Math.floor(secs / 86400) + "d ago";
+    var cls = secs < 45 ? "fresh" : (secs < 120 ? "stale" : "dead");
+    var v = version ? ' <code class="muted">v' + esc(version) + '</code>' : "";
+    return '<span class="seen ' + cls + '" title="' + esc(d.toISOString()) + '">' + rel + '</span>' + v;
+  }
+  function renderMachines (machines, err) {
+    if (err) return '<span class="err">' + esc(err) + '</span>';
+    if (!machines || !machines.length) return '<span class="muted">(none)</span>';
+    return '<div class="machines">' + machines.map(function (m) {
+      return '<div class="machine"><span class="' + pillClass(m.state) + '">' +
+        esc(m.state) + '</span> <code>' + esc(m.region) + '</code> <code>' + esc(m.id) + '</code></div>';
+    }).join("") + '</div>';
+  }
+
+  async function load () {
+    var tok = $("tok").value.trim();
+    if (!cookieMode) {
+      if (!tok) { $("err").textContent = "Paste a bearer token first."; return; }
+      sessionStorage.setItem(tokKey, tok);
+    }
+    $("err").textContent = "";
+    setStat("loading…");
+    var url = "/admin/workspaces" + (isFast() ? "?machines=0" : "");
+    var t0 = Date.now();
+    try {
+      var headers = cookieMode ? {} : { "Authorization": "Bearer " + tok };
+      var r = await fetch(url, { headers: headers, credentials: "same-origin" });
+      if (r.status === 401 || r.status === 403) {
+        $("err").textContent = cookieMode
+          ? "Session expired or unauthorized. "
+          : "Auth failed (" + r.status + "). Check the token.";
+        if (cookieMode) {
+          // Bounce to login — the cookie has expired or been cleared.
+          location.href = "/admin/login?returnTo=/admin";
+          return;
+        }
+        setStat("");
+        return;
+      }
+      if (!r.ok) {
+        $("err").textContent = "HTTP " + r.status + ": " + (await r.text());
+        setStat("");
+        return;
+      }
+      var j = await r.json();
+      $("rows").innerHTML = (j.items || []).map(function (w) {
+        var slug = esc(w.slug);
+        var arch = !!w.archivedAt;
+        var archBadge = arch ? '<span class="archived">ARCHIVED</span>' : '';
+        var actions = arch
+          ? '<button data-act="unarchive" data-slug="' + slug + '">Unarchive</button> ' +
+            '<button class="danger" data-act="purge" data-slug="' + slug + '">Purge</button>'
+          : '<button data-act="suspend" data-slug="' + slug + '">Suspend</button> ' +
+            '<button data-act="resume"  data-slug="' + slug + '">Resume</button> ' +
+            '<button data-act="archive" data-slug="' + slug + '">Archive</button>';
+        return '<tr class="' + (arch ? 'is-archived' : '') + '">' +
+          "<td><code>" + slug + "</code>" + archBadge + "</td>" +
+          "<td>" + esc(w.ownerEmail || "") + "</td>" +
+          "<td>" + renderMachines(w.machines, w.machinesError) + "</td>" +
+          "<td>" + fmtSeen(w.lastSeenAt, w.version) + "</td>" +
+          "<td><code>" + fmtDate(w.createdAt) + "</code></td>" +
+          "<td><code>" + esc(w.flyAppName) + "</code></td>" +
+          "<td>" + actions + "</td>" +
+          "</tr>";
+      }).join("");
+      $("t").hidden = false;
+      setStat(j.count + " workspace(s) · " + (Date.now() - t0) + " ms");
+    } catch (e) {
+      $("err").textContent = String(e);
+      setStat("");
+    }
+  }
+  $("load").addEventListener("click", load);
+  $("reload").addEventListener("click", load);
+  $("reloadc").addEventListener("click", load);
+  $("tok").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+
+  // Delegate Suspend/Resume/Archive/Unarchive/Purge button clicks. We
+  // deliberately confirm() for all of them — the operator is one
+  // keystroke from stopping a tenant; purge requires re-typing the slug.
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    var act = btn.getAttribute("data-act");
+    var slug = btn.getAttribute("data-slug");
+    var tok = $("tok").value.trim();
+    if (!cookieMode && !tok) { $("err").textContent = "Paste a bearer token first."; return; }
+    var bodyJson = null;
+    if (act === "purge") {
+      var typed = prompt('PURGE is irreversible. Re-type the slug "' + slug + '" to confirm:');
+      if (typed !== slug) { $("err").textContent = "Purge cancelled (slug mismatch)."; return; }
+      bodyJson = JSON.stringify({ confirm: slug });
+    } else {
+      if (!confirm(act + " workspace \"" + slug + "\"?")) return;
+    }
+    btn.disabled = true;
+    $("err").textContent = "";
+    setStat(act + " " + slug + "…");
+    try {
+      var headers = cookieMode ? {} : { "Authorization": "Bearer " + tok };
+      if (bodyJson) headers["Content-Type"] = "application/json";
+      var r = await fetch("/admin/workspaces/" + encodeURIComponent(slug) + "/" + act,
+        { method: "POST", headers: headers, body: bodyJson, credentials: "same-origin" });
+      var t = await r.text();
+      if (!r.ok) { $("err").textContent = "HTTP " + r.status + ": " + t; return; }
+      setStat(act + " " + slug + " ok — " + t);
+      setTimeout(load, 500);
+    } catch (ex) {
+      $("err").textContent = String(ex);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Decide auth mode on startup.
+  (async function init () {
+    try {
+      var r = await fetch("/admin/whoami", { credentials: "same-origin" });
+      if (r.ok) {
+        var j = await r.json();
+        cookieMode = true;
+        $("cookiebar").hidden = false;
+        $("who").innerHTML = "Signed in as <code>" + esc(j.email) +
+          "</code> · <a href=\"/admin/logout\">Sign out</a>";
+        load();
+        return;
+      }
+    } catch (_) { /* fall through to bearer mode */ }
+    // /admin/whoami missing or 401 — use the bearer paste box.
+    $("tokbar").hidden = false;
+    $("who").textContent = "Token is stored in sessionStorage only (cleared on tab close).";
+    if ($("tok").value) load();
+  })();
+})();
+</script>
+</body>
+</html>"""
+
+let private adminPortalPage : WebPart =
+  OK portalHtml
+  >=> Writers.setMimeType "text/html; charset=utf-8"
+  >=> Writers.setHeader "Cache-Control" "no-store"
 
 let webPart (cfg : ProvisionerConfig) : WebPart =
   // One shared HttpClient for the workspace bootstrap call. Created once
@@ -440,6 +1302,27 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
     POST >=> path "/api/provision" >=> provision cfg http
     GET  >=> path "/provision/ask"   >=> askOrRoute cfg true
     GET  >=> path "/provision/route" >=> askOrRoute cfg false
+    POST >=> path "/provision/heartbeat" >=> heartbeat cfg
+    // OIDC login/callback/logout/whoami — mounted before the bearer-gated
+    // /admin/* routes so the auth flow short-circuits. When OIDC isn't
+    // configured this is a no-op that lets `choose` move to the next part.
+    (match cfg.adminOidc with
+     | Some oc -> AdminOidc.routes oc
+     | None    -> (fun _ -> async.Return None))
+    // Admin portal (token-gated; surface disappears when no tokens configured).
+    GET  >=> path "/admin"            >=> adminVisible cfg adminPortalPage
+    GET  >=> path "/admin/"           >=> adminVisible cfg adminPortalPage
+    GET  >=> path "/admin/workspaces" >=> adminAuth cfg (listWorkspaces cfg)
+    POST >=> pathScan "/admin/workspaces/%s/suspend"
+                                      (fun slug -> adminAuth cfg (suspendWorkspace cfg slug))
+    POST >=> pathScan "/admin/workspaces/%s/resume"
+                                      (fun slug -> adminAuth cfg (resumeWorkspace cfg slug))
+    POST >=> pathScan "/admin/workspaces/%s/archive"
+                                      (fun slug -> adminAuth cfg (archiveWorkspace cfg slug))
+    POST >=> pathScan "/admin/workspaces/%s/unarchive"
+                                      (fun slug -> adminAuth cfg (unarchiveWorkspace cfg slug))
+    POST >=> pathScan "/admin/workspaces/%s/purge"
+                                      (fun slug -> adminAuth cfg (purgeWorkspace cfg slug))
   ]
 
 /// Run a standalone provisioner service. Returns once the server exits.

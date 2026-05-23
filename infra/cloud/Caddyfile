@@ -35,6 +35,23 @@ pulseboard.cloud, www.pulseboard.cloud {
 	}
 }
 
+# Admin portal — a named host (NOT under the wildcard) so it gets a
+# standard ACME cert without going through the on_demand_tls ask path,
+# and so Caddy's specificity-based matcher always picks this block over
+# the `*.pulseboard.cloud` wildcard below.
+#
+# `OIDC_REDIRECT_URI` on the provisioner must point at
+# https://admin.pulseboard.cloud/admin/callback so the IdP returns the
+# browser to this hostname.
+admin.pulseboard.cloud {
+	encode zstd gzip
+	reverse_proxy {$PROVISIONER_URL} {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
 # Every workspace subdomain — upstream is derived from the slug.
 #
 # Workspace apps are deterministically named `pb-<slug>` and reachable

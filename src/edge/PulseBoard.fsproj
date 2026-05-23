@@ -58,6 +58,9 @@
          workspace registry). Lives in src/cloud/ to keep the OSS/SaaS
          boundary visible; will move to a private repo before the OSS
          release. See src/cloud/README.md. -->
+    <Compile Include="..\cloud\AdminOidc.fs">
+      <Link>cloud\AdminOidc.fs</Link>
+    </Compile>
     <Compile Include="..\cloud\Provisioner.fs">
       <Link>cloud\Provisioner.fs</Link>
     </Compile>
