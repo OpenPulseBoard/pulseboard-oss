@@ -392,11 +392,22 @@ $('newTenantBtn').addEventListener('click', async () => {
 
 // -- api keys -------------------------------------------------------------
 async function loadKeys() {
-  const tid = state.selectedTenant.id;
-  const keys = await api('GET', `/api/admin/tenants/${encodeURIComponent(tid)}/api-keys`);
   const tb = $('keysTable').querySelector('tbody');
+  if (!state.selectedTenant) {
+    tb.innerHTML = '<tr><td colspan=5 class="muted">Select a tenant on the left to view its keys.</td></tr>';
+    return;
+  }
+  const tid = state.selectedTenant.id;
+  let keys;
+  try {
+    keys = await api('GET', `/api/admin/tenants/${encodeURIComponent(tid)}/api-keys`);
+  } catch (e) {
+    tb.innerHTML = `<tr><td colspan=5 class="muted">Failed to load keys: ${escapeHtml(e.message)}</td></tr>`;
+    toast('keys load failed: ' + e.message, 'err');
+    return;
+  }
   tb.innerHTML = '';
-  if (keys.length === 0) {
+  if (!Array.isArray(keys) || keys.length === 0) {
     tb.innerHTML = '<tr><td colspan=5 class="muted">No keys yet.</td></tr>';
     return;
   }
@@ -405,7 +416,7 @@ async function loadKeys() {
     tr.innerHTML =
       `<td>${escapeHtml(k.label)}</td>` +
       `<td><span class="pill role-${k.role}">${k.role}</span></td>` +
-      `<td>${k.scopes.map(s => `<span class="pill">${s}</span>`).join('')}</td>` +
+      `<td>${(k.scopes || []).map(s => `<span class="pill">${s}</span>`).join('')}</td>` +
       `<td class="muted">${fmtTs(k.lastUsedAt)}</td>` +
       `<td class="muted">${fmtTs(k.createdAt)}</td>`;
     tb.appendChild(tr);
