@@ -70,13 +70,18 @@ let main argv =
       |> Option.defaultValue "iad"
     // Workspace guest sizing. 256 MB is not enough headroom for .NET +
     // Suave + Npgsql + the OIDC/JWT libs; new workspaces OOM-kill on
-    // the first real request. Default to 1 GB; override per-deploy
-    // with PULSE_WORKSPACE_MEM_MB / PULSE_WORKSPACE_CPUS.
+    // the first real request. 1 GB still wasn't enough — Server GC
+    // happily expands the heap to ~75% of the cgroup and combined with
+    // shared-buffer/native overhead the process easily peaks past
+    // 900 MB RSS. Default to 2 GB and also pin DOTNET_GCHeapHardLimit
+    // to ~50% of the guest so the heap can't drag the whole machine
+    // into the OOM killer. Override per-deploy with
+    // PULSE_WORKSPACE_MEM_MB / PULSE_WORKSPACE_CPUS.
     let workspaceMemMb =
       envOrEarly "PULSE_WORKSPACE_MEM_MB" (argValueEarly "--workspace-mem-mb=")
       |> Option.bind (fun s ->
            match Int32.TryParse s with true, n when n > 0 -> Some n | _ -> None)
-      |> Option.defaultValue 1024
+      |> Option.defaultValue 2048
     let workspaceCpus =
       envOrEarly "PULSE_WORKSPACE_CPUS" (argValueEarly "--workspace-cpus=")
       |> Option.bind (fun s ->
@@ -125,7 +130,18 @@ let main argv =
         machineConfig =
           { image     = image
             region    = region
-            envExtra  = Map.empty
+            // Pin the .NET GC heap to ~50% of the guest. Server GC
+            // otherwise expands to ~75% of the cgroup and, combined
+            // with native/JIT/Npgsql buffers, pushes the workspace
+            // into the kernel OOM killer. Value is in bytes per
+            // DOTNET_GCHeapHardLimit docs. Operators can still
+            // override by passing the same key in --workspace-env or
+            // (eventually) per-tenant config.
+            envExtra  =
+              Map.ofList [
+                "DOTNET_GCHeapHardLimit",
+                  sprintf "0x%x" (int64 workspaceMemMb * 1024L * 1024L / 2L)
+              ]
             sizeCpus  = workspaceCpus
             sizeMemMb = workspaceMemMb }
         adminTokens   =
