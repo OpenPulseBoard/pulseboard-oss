@@ -223,6 +223,12 @@
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
+  <span class="status" id="workspace-badge" title="Active workspace"
+        style="margin-right:12px; display:inline-flex; align-items:center; gap:6px;">
+    <span class="badge" style="background:var(--panel-2); color:var(--accent);
+                               font-size:11px; padding:2px 7px;">workspace</span>
+    <span id="workspace-slug" style="color:var(--fg);">—</span>
+  </span>
   <span class="status"><span id="dot" class="dot"></span><span id="conn">offline</span></span>
   <span class="status" style="margin-left:12px;"><a href="/admin">admin →</a></span>
 </header>
@@ -393,6 +399,28 @@
 // State + utilities
 // =====================================================================
 const $ = (id) => document.getElementById(id);
+
+// --- workspace badge --------------------------------------------------
+// Each PulseBoard tenant lives on its own subdomain (e.g. acme.pulseboard.cloud),
+// so the workspace slug is the first label of the hostname. The apex
+// site (pulseboard.cloud / www.*) and dev hosts (localhost/127.*) don't
+// have a slug; we show "local" there for clarity.
+(function setWorkspaceBadge() {
+  try {
+    const host  = location.hostname || "";
+    const parts = host.split(".");
+    let slug;
+    if (parts.length >= 3 && parts[0] !== "www") slug = parts[0];
+    else if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) slug = "local";
+    else slug = host;
+    const el = $("workspace-slug");
+    if (el) {
+      el.textContent = slug;
+      const badge = $("workspace-badge");
+      if (badge) badge.title = "Workspace: " + slug + " · host: " + host;
+    }
+  } catch { /* badge is decorative; never block boot */ }
+})();
 const fmtNum = (n) => {
   if (!Number.isFinite(n)) return String(n);
   const a = Math.abs(n);

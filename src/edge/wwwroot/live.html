@@ -58,7 +58,13 @@
   <h1>PULSEBOARD</h1>
   <span class="status"><span id="dot" class="dot"></span><span id="conn">connecting…</span></span>
   <span class="status" id="counts"></span>
-  <span class="status" style="margin-left:auto;"><a href="/admin" style="color:var(--accent);text-decoration:none;">admin →</a></span>
+  <span class="status" id="workspace-badge" title="Active workspace"
+        style="margin-left:auto; display:inline-flex; align-items:center; gap:6px;">
+    <span style="background:#1f242d; color:#5ec8ff; font-size:11px;
+                 padding:2px 7px; border-radius:3px;">workspace</span>
+    <span id="workspace-slug">—</span>
+  </span>
+  <span class="status" style="margin-left:12px;"><a href="/admin" style="color:var(--accent);text-decoration:none;">admin →</a></span>
 </header>
 <main>
   <section id="metrics">
@@ -86,6 +92,25 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// Workspace badge — derive the slug from the subdomain. See
+// /src/edge/wwwroot/index.html for the canonical copy of this rule.
+(function setWorkspaceBadge() {
+  try {
+    const host  = location.hostname || "";
+    const parts = host.split(".");
+    let slug;
+    if (parts.length >= 3 && parts[0] !== "www") slug = parts[0];
+    else if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) slug = "local";
+    else slug = host;
+    const el = $("workspace-slug");
+    if (el) {
+      el.textContent = slug;
+      const badge = $("workspace-badge");
+      if (badge) badge.title = "Workspace: " + slug + " · host: " + host;
+    }
+  } catch { /* badge is decorative; never block boot */ }
+})();
 const fmt = (n) => Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(3)) : String(n);
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
 

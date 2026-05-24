@@ -81,6 +81,13 @@
   <h1>PULSEBOARD · ADMIN</h1>
   <a href="/">&larr; dashboard</a>
   <span class="who" id="whoami">checking session…</span>
+  <span id="workspace-badge" title="Active workspace"
+        style="margin-left:12px; display:inline-flex; align-items:center; gap:6px;
+               color:var(--muted); font-size:12px;">
+    <span style="background:#1f242d; color:#5ec8ff; font-size:11px;
+                 padding:2px 7px; border-radius:3px;">workspace</span>
+    <span id="workspace-slug">—</span>
+  </span>
   <button class="ghost" id="signOut" style="display:none;">Sign out</button>
 </header>
 
@@ -235,6 +242,25 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// Workspace badge — derive the slug from the subdomain. See
+// /src/edge/wwwroot/index.html for the canonical copy of this rule.
+(function setWorkspaceBadge() {
+  try {
+    const host  = location.hostname || "";
+    const parts = host.split(".");
+    let slug;
+    if (parts.length >= 3 && parts[0] !== "www") slug = parts[0];
+    else if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) slug = "local";
+    else slug = host;
+    const el = $("workspace-slug");
+    if (el) {
+      el.textContent = slug;
+      const badge = $("workspace-badge");
+      if (badge) badge.title = "Workspace: " + slug + " · host: " + host;
+    }
+  } catch { /* badge is decorative; never block boot */ }
+})();
 
 function toast(msg, kind = 'ok') {
   const el = $('toast');
