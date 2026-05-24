@@ -252,16 +252,28 @@ type FileDashboardRepo(root : string) =
   interface IDashboardRepo with
 
     member _.List (tid : TenantId) =
-      // Fall back to re-reading on first access for a previously
-      // unseen tenant id (e.g. one created mid-process).
-      let dir = tenantDir tid
-      if not (cache.Keys |> Seq.exists (fun k -> k.StartsWith(sanitize (let (TenantId s) = tid in s) + "/"))) then
+      // The cache is keyed `<sanitized-tenant>/<sanitized-dash-id>`,
+      // so the tenant prefix is the only safe way to scope a listing
+      // across tenants \u2014 filtering cache.Values by `File.Exists`
+      // alone (keyed on dashboard id) leaks duplicates whenever two
+      // tenants share a dashboard id (e.g. the auto-seeded
+      // `overview`).
+      let dir       = tenantDir tid
+      let (TenantId raw) = tid
+      let prefix    = sanitize raw + "/"
+      let hasPrefix =
+        cache.Keys |> Seq.exists (fun k -> k.StartsWith prefix)
+      if not hasPrefix then
         for d in load tid do
           cache.[key tid d.id] <- d
-      cache.Values
-      |> Seq.filter (fun d ->
-        // Only return dashboards from this tenant's folder.
-        File.Exists(Path.Combine(dir, sanitize d.id + ".json")))
+      cache
+      |> Seq.filter (fun kv ->
+        kv.Key.StartsWith prefix
+        // Defensive: also require the on-disk file to be present so a
+        // cached entry left dangling by an out-of-band `rm` is not
+        // resurrected.
+        && File.Exists(Path.Combine(dir, sanitize kv.Value.id + ".json")))
+      |> Seq.map (fun kv -> kv.Value)
       |> Seq.sortBy (fun d -> d.title)
       |> Seq.toArray
 
