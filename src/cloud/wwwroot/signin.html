@@ -160,12 +160,16 @@ if (isApex) {
       errEl.style.display = 'block'; return;
     }
     // Respect ?returnTo= so callers can bounce users back to the page
-    // that demanded auth (e.g. the dashboard SPA).
+    // that demanded auth (e.g. the dashboard SPA). Default to the
+    // dashboard root, not /admin — most keys are Viewer/Editor and
+    // don't have the Admin scope, so /admin would 403 or render an
+    // empty shell. Callers that actually want admin (e.g. the admin
+    // SPA's own auth bounce) pass returnTo explicitly.
     const qp = new URLSearchParams(location.search);
-    const rawReturn = qp.get('returnTo') || '/admin';
+    const rawReturn = qp.get('returnTo') || '/';
     // Only allow same-origin relative paths to avoid open-redirect.
     const dest = (rawReturn.startsWith('/') && !rawReturn.startsWith('//'))
-      ? rawReturn : '/admin';
+      ? rawReturn : '/';
     // Probe /auth/me — this validates the key without exposing tenant routes.
     try {
       const r = await fetch('/auth/me', { headers: { 'Authorization': 'Bearer ' + key } });
