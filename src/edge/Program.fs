@@ -1087,6 +1087,17 @@ let main argv =
       Some routes, mw
     | None -> None, (fun inner -> inner)
 
+  // `/auth/me` is needed by every workspace SPA (header tenant badge,
+  // admin sign-in probe). When OIDC is configured the route above already
+  // serves it; for bearer-only workspaces we mount a sibling guarded only
+  // by `resolveApiKey` so a `pk_…` Authorization header is enough.
+  let whoamiRoute : WebPart =
+    if multiTenant then
+      GET >=> path "/auth/me" >=>
+        PulseBoard.Auth.resolveApiKey tenantStore PulseBoard.Oidc.meHandler
+    else
+      fun _ -> async { return None }
+
   let ingest =
     pathStarts "/ingest" >=>
       (if multiTenant then
@@ -1252,6 +1263,7 @@ let main argv =
       PulseBoard.Admin.pricingWebPart ()   // Phase 8 #5 — public rate card + calculator
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
+      whoamiRoute
       path "/ws"   >=> handShake (Hub.handler hub)
       // In --multi-tenant (workspace) mode, "/" is a tenant-scoped landing
       // page (Sign in / Dashboard / Docs CTAs). The marketing home.html is

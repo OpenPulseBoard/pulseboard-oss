@@ -93,23 +93,33 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
-// Workspace badge — derive the slug from the subdomain. See
-// /src/edge/wwwroot/index.html for the canonical copy of this rule.
-(function setWorkspaceBadge() {
+// Workspace tenant badge — see /src/edge/wwwroot/index.html for the
+// canonical copy of this logic.
+(async function setWorkspaceBadge() {
+  const el    = document.getElementById("workspace-slug");
+  const badge = document.getElementById("workspace-badge");
+  if (!el) return;
+  const render = (slug, host, confirmed) => {
+    el.textContent = slug;
+    if (badge) badge.title =
+      (confirmed ? "Tenant: " : "Tenant (unconfirmed): ") + slug +
+      (host ? " · host: " + host : "");
+  };
   try {
-    const host  = location.hostname || "";
-    const parts = host.split(".");
-    let slug;
-    if (parts.length >= 3 && parts[0] !== "www") slug = parts[0];
-    else if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) slug = "local";
-    else slug = host;
-    const el = $("workspace-slug");
-    if (el) {
-      el.textContent = slug;
-      const badge = $("workspace-badge");
-      if (badge) badge.title = "Workspace: " + slug + " · host: " + host;
+    const tok = sessionStorage.getItem("pb.bearer");
+    const headers = tok ? { "Authorization": "Bearer " + tok } : {};
+    const r = await fetch("/auth/me", { headers, credentials: "same-origin" });
+    if (r.ok) {
+      const me = await r.json();
+      if (me && me.slug) { render(me.slug, location.hostname, true); return; }
     }
-  } catch { /* badge is decorative; never block boot */ }
+  } catch { /* fall through */ }
+  const host  = location.hostname || "";
+  const parts = host.split(".");
+  const slug  = (parts.length >= 3 && parts[0] !== "www") ? parts[0]
+              : (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) ? "local"
+              : host;
+  render(slug + " ?", host, false);
 })();
 const fmt = (n) => Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(3)) : String(n);
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);

@@ -375,7 +375,11 @@ let private logoutHandler (cfg : Config) : WebPart =
     return! (Session.clearSessionCookie >=> FOUND returnTo) ctx
   }
 
-let private meHandler : WebPart =
+/// Returns the active TenantCtx (set by either the API-key middleware or
+/// the OIDC session middleware) as JSON. Public so callers that don't
+/// build the full OIDC route set (e.g. bearer-only workspaces) can still
+/// mount `/auth/me` behind their own auth chain.
+let meHandler : WebPart =
   fun ctx -> async {
     match PulseBoard.Rbac.tryGetTenant ctx with
     | None ->

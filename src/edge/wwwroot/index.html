@@ -400,26 +400,35 @@
 // =====================================================================
 const $ = (id) => document.getElementById(id);
 
-// --- workspace badge --------------------------------------------------
-// Each PulseBoard tenant lives on its own subdomain (e.g. acme.pulseboard.cloud),
-// so the workspace slug is the first label of the hostname. The apex
-// site (pulseboard.cloud / www.*) and dev hosts (localhost/127.*) don't
-// have a slug; we show "local" there for clarity.
-(function setWorkspaceBadge() {
+// --- workspace tenant badge ------------------------------------------
+// Asks the server which tenant the current bearer/session is bound to.
+// Falls back to the hostname-derived slug (suffixed with "?") if the
+// request fails — e.g. before sign-in or on a non-tenant host.
+(async function setWorkspaceBadge() {
+  const el    = document.getElementById("workspace-slug");
+  const badge = document.getElementById("workspace-badge");
+  if (!el) return;
+  const render = (slug, host, confirmed) => {
+    el.textContent = slug;
+    if (badge) badge.title =
+      (confirmed ? "Tenant: " : "Tenant (unconfirmed): ") + slug +
+      (host ? " · host: " + host : "");
+  };
   try {
-    const host  = location.hostname || "";
-    const parts = host.split(".");
-    let slug;
-    if (parts.length >= 3 && parts[0] !== "www") slug = parts[0];
-    else if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) slug = "local";
-    else slug = host;
-    const el = $("workspace-slug");
-    if (el) {
-      el.textContent = slug;
-      const badge = $("workspace-badge");
-      if (badge) badge.title = "Workspace: " + slug + " · host: " + host;
+    const tok = sessionStorage.getItem("pb.bearer");
+    const headers = tok ? { "Authorization": "Bearer " + tok } : {};
+    const r = await fetch("/auth/me", { headers, credentials: "same-origin" });
+    if (r.ok) {
+      const me = await r.json();
+      if (me && me.slug) { render(me.slug, location.hostname, true); return; }
     }
-  } catch { /* badge is decorative; never block boot */ }
+  } catch { /* fall through to hostname-derived fallback */ }
+  const host  = location.hostname || "";
+  const parts = host.split(".");
+  const slug  = (parts.length >= 3 && parts[0] !== "www") ? parts[0]
+              : (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) ? "local"
+              : host;
+  render(slug + " ?", host, false);
 })();
 const fmtNum = (n) => {
   if (!Number.isFinite(n)) return String(n);
