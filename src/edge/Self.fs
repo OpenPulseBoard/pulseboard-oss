@@ -81,8 +81,14 @@ let bootstrap (tenants : ITenantStore) (repo : IDashboardRepo) : Tenant =
   // CreateTenant in the in-memory store is idempotent by slug; the
   // Postgres-backed store uses the same contract.
   let t = tenants.CreateTenant metaSlug
-  match repo.List metaTenantId with
-  | xs when xs.Length = 0 -> repo.Upsert(metaTenantId, metaDashboard ())
+  // IMPORTANT: dashboards must be keyed by the tenant's *real* id (the
+  // value the auth layer attaches to inbound requests), not the slug.
+  // Persisted stores (Postgres) generate an opaque id per tenant, so
+  // writing under `TenantId "__meta__"` would place the dashboard in a
+  // directory that no request ever resolves to and the API would then
+  // auto-seed a default `overview` on first hit instead.
+  match repo.List t.id with
+  | xs when xs.Length = 0 -> repo.Upsert(t.id, metaDashboard ())
   | _ -> ()
   t
 
