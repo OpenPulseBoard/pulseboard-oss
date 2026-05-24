@@ -67,7 +67,19 @@ type IngestQuotas =
   { limiter  : Limiter
     auditLog : IAuditLog }
 
-let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
+/// Self-observability sink. When `Some` the ingest handlers record
+/// `pulse_ingest_total` / `pulse_ingest_errors_total` /
+/// `pulse_quota_deny_total` into the in-process MetricStore so the
+/// `__meta__` tenant's curated dashboard can plot them. Optional so
+/// single-tenant builds and tests can pass `None`.
+let private bumpSelf (selfM : MetricStore option) (name : string) (v : float) =
+  match selfM with
+  | Some m ->
+    try m.Record(name, { ts = nowMs (); value = v }) with _ -> ()
+  | None -> ()
+
+let private emitQuotaDeny (q : IngestQuotas) (selfM : MetricStore option)
+                          (ctx : HttpContext)
                           (action : string) (details : string) =
   let t = PulseBoard.Rbac.tryGetTenant ctx
   let ev : AuditEvent =
@@ -80,6 +92,7 @@ let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
       remoteIp = None
       details  = Some details }
   try q.auditLog.Append ev with _ -> ()
+  bumpSelf selfM "pulse_quota_deny_total" 1.0
 
 /// POST /ingest/metrics — accepts a single object, JSON array, or NDJSON.
 /// When `quotas` is `Some`, each distinct metric name is admitted against
@@ -90,7 +103,8 @@ let private emitQuotaDeny (q : IngestQuotas) (ctx : HttpContext)
 /// `--role=edge` it POSTs protobuf to the storage tier.
 let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
             (meter : PulseBoard.Billing.IBillingMeter option)
-            (costs : PulseBoard.Costs.ICostTracker option) : WebPart =
+            (costs : PulseBoard.Costs.ICostTracker option)
+            (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -114,7 +128,7 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
               | CardinalityResult.Rejected cap ->
                 rejected    <- rejected + 1
                 rejectedCap <- cap
-                emitQuotaDeny q ctx "quota.cardinality"
+                emitQuotaDeny q selfMetrics ctx "quota.cardinality"
                   (sprintf "series=%s cap=%d" name cap)
                 false
             | _ -> true
@@ -125,6 +139,16 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.WriteMetricSamples(tid, samples)
       let accepted = samples.Count
+      // Self-observability counters — read by the `__meta__` tenant's
+      // dashboard. `pulse_ingest_total` counts admitted samples (one
+      // record per sample makes the counter sum match the dashboard's
+      // "ops over window" intuition); `pulse_ingest_errors_total`
+      // covers cardinality rejections at this layer (request-level
+      // exceptions are bumped in the `with` arm below).
+      if accepted > 0 then
+        bumpSelf selfMetrics "pulse_ingest_total" (float accepted)
+      if rejected > 0 then
+        bumpSelf selfMetrics "pulse_ingest_errors_total" (float rejected)
       // Phase 7 #1 — meter ingest bytes against the tenant's quota even
       // when no rate-limit was applied. We count raw request bytes (not
       // sample count) so the SaaS bill matches the size of the workload.
@@ -156,6 +180,7 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
           sprintf """{"accepted":%d}""" accepted
       return! (OK body >=> Writers.setMimeType "application/json") ctx
     with ex ->
+      bumpSelf selfMetrics "pulse_ingest_errors_total" 1.0
       return! INTERNAL_ERROR (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
@@ -165,7 +190,8 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
 /// are rejected with 429 before any payload parsing.
 let logs (storage : IStorageClient) (quotas : IngestQuotas option)
          (secrets : PulseBoard.Secrets.ISecretsStore option)
-         (meter : PulseBoard.Billing.IBillingMeter option) : WebPart =
+         (meter : PulseBoard.Billing.IBillingMeter option)
+         (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
     try
       let body = readBody ctx
@@ -179,7 +205,7 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
           match q.limiter.TryAcquire(tid, LogBytes, bytes) with
           | AcquireResult.Ok -> None
           | AcquireResult.Throttled ms ->
-            emitQuotaDeny q ctx "quota.logBytes"
+            emitQuotaDeny q selfMetrics ctx "quota.logBytes"
               (sprintf "bytes=%g retryAfterMs=%d" bytes ms)
             Some ms
         | _ -> None
@@ -211,6 +237,8 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
           entries.Add { ts = ts; service = service; level = level; message = message }
         let tid = match tenantId with Some (TenantId s) -> s | None -> ""
         do! storage.WriteLogs(tid, entries)
+        if entries.Count > 0 then
+          bumpSelf selfMetrics "pulse_ingest_total" (float entries.Count)
         // Phase 7 #1 — meter log bytes for billing.
         match meter, tenantId with
         | Some m, Some tenant when entries.Count > 0 ->
@@ -219,14 +247,16 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
         return! (OK (sprintf """{"accepted":%d}""" entries.Count)
                  >=> Writers.setMimeType "application/json") ctx
     with ex ->
+      bumpSelf selfMetrics "pulse_ingest_errors_total" 1.0
       return! INTERNAL_ERROR (sprintf """{"error":%s}""" (JsonSerializer.Serialize ex.Message)) ctx
   }
 
 let webPart (storage : IStorageClient) (quotas : IngestQuotas option)
             (secrets : PulseBoard.Secrets.ISecretsStore option)
             (meter   : PulseBoard.Billing.IBillingMeter option)
-            (costs   : PulseBoard.Costs.ICostTracker option) : WebPart =
+            (costs   : PulseBoard.Costs.ICostTracker option)
+            (selfMetrics : MetricStore option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter costs
-    POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets meter
+    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter costs selfMetrics
+    POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets meter selfMetrics
   ]

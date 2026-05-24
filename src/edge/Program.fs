@@ -959,9 +959,9 @@ let main argv =
   let costTracker : PulseBoard.Costs.ICostTracker =
     PulseBoard.Costs.InMemoryCostTracker() :> _
   let ingestInner =
-    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker)
+    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker) (Some metricStore)
   let queryInner =
-    PulseBoard.Query.webPart  metricStore logStore rollupStore
+    PulseBoard.Query.webPart  metricStore logStore rollupStore (Some metricStore)
 
   // -- Prometheus / Loki query APIs (PLAN.md Phase 4 step 1) ---------
   // When the metric / log pillar is wired to a cloud backend we
@@ -1115,7 +1115,7 @@ let main argv =
       PulseBoard.Auth.protect tokens inner
 
   let promRemoteWriteInner =
-    PulseBoard.PromRemoteWrite.handler storage ingestQuotas
+    PulseBoard.PromRemoteWrite.handler storage ingestQuotas (Some metricStore)
   let promRemoteWrite : WebPart =
     POST >=> choose [
       path "/api/v1/write"     // Prometheus standard

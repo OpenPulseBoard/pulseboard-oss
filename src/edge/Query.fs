@@ -13,6 +13,38 @@ open PulseBoard.Rollups
 let private json (s : string) : WebPart =
   OK s >=> Writers.setMimeType "application/json"
 
+/// Sliding-window p99 estimator for `pulse_query_p99_ms`. Keeps the
+/// last `windowMs` of per-request latencies (capped at `maxSamples` so
+/// a sustained query storm can't unbound memory). Thread-safe; cheap
+/// enough to call on every /api/metrics/* request.
+type private LatencyTracker(windowMs : int64, maxSamples : int) =
+  let buf  = ResizeArray<int64 * float>()
+  let gate = obj()
+  member _.AddAndP99 (latMs : float) : float =
+    lock gate (fun () ->
+      let now = nowMs ()
+      buf.Add(now, latMs)
+      let cutoff = now - windowMs
+      while buf.Count > 0 && fst buf.[0] < cutoff do buf.RemoveAt 0
+      while buf.Count > maxSamples do buf.RemoveAt 0
+      let arr = buf |> Seq.map snd |> Seq.toArray
+      System.Array.Sort arr
+      if arr.Length = 0 then latMs
+      else
+        let idx = (int (System.Math.Ceiling(0.99 * float arr.Length))) - 1
+        arr.[max 0 (min (arr.Length - 1) idx)])
+
+let private queryLatency = LatencyTracker(60_000L, 1024)
+
+let private recordQueryMetrics (selfM : MetricStore option) (latMs : float) =
+  match selfM with
+  | Some m ->
+    let now = nowMs ()
+    try m.Record("pulse_query_total", { ts = now; value = 1.0 }) with _ -> ()
+    let p99 = queryLatency.AddAndP99 latMs
+    try m.Record("pulse_query_p99_ms", { ts = now; value = p99 }) with _ -> ()
+  | None -> ()
+
 let private serializePoints (points : Point array) =
   let sb = StringBuilder()
   sb.Append '[' |> ignore
@@ -60,9 +92,11 @@ let metricNames (store : MetricStore) : WebPart =
 ///
 /// When `rollupStore` is `None` (rollups disabled) every request
 /// falls through to raw points.
-let metricSeries (store : MetricStore) (rollupStore : RollupStore option) : WebPart =
+let metricSeries (store : MetricStore) (rollupStore : RollupStore option)
+                 (selfMetrics : MetricStore option) : WebPart =
   pathScan "/api/metrics/%s" (fun name ->
     fun ctx ->
+      let started = System.Diagnostics.Stopwatch.StartNew()
       let qp k =
         match ctx.request.queryParam k with
         | Choice1Of2 v -> Some v
@@ -100,6 +134,8 @@ let metricSeries (store : MetricStore) (rollupStore : RollupStore option) : WebP
           rs.GetSinceAgg(name, res.Ms, 0L, agg)
         | _, _, Some s -> store.GetSince(name, s)
         | _, _, None   -> store.Get name
+      started.Stop()
+      recordQueryMetrics selfMetrics (float started.ElapsedMilliseconds)
       json (serializePoints points) ctx)
 
 /// GET /api/logs?tail=200
@@ -115,9 +151,10 @@ let logTail (logs : LogStore) : WebPart =
     json (serializeLogs (logs.Tail tail)) ctx
 
 let webPart (metricStore : MetricStore) (logStore : LogStore)
-            (rollupStore : RollupStore option) : WebPart =
+            (rollupStore : RollupStore option)
+            (selfMetrics : MetricStore option) : WebPart =
   choose [
     GET >=> path "/api/metrics"        >=> metricNames metricStore
-    GET >=> metricSeries metricStore rollupStore
+    GET >=> metricSeries metricStore rollupStore selfMetrics
     GET >=> path "/api/logs"           >=> logTail logStore
   ]

@@ -115,7 +115,8 @@ let private seriesName (labels : Label[]) : string =
     sb.Append '}' |> ignore
     sb.ToString()
 
-let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
+let private auditDeny (q : IngestQuotas) (selfM : MetricStore option)
+                      (ctx : HttpContext)
                       (action : string) (details : string) =
   let t = PulseBoard.Rbac.tryGetTenant ctx
   let ev : AuditEvent =
@@ -128,6 +129,11 @@ let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
       remoteIp = None
       details  = Some details }
   try q.auditLog.Append ev with _ -> ()
+  match selfM with
+  | Some m ->
+    try m.Record("pulse_quota_deny_total",
+                 { ts = nowMs (); value = 1.0 }) with _ -> ()
+  | None -> ()
 
 /// POST /api/v1/write — Prometheus remote_write 1.0. Body is snappy-
 /// compressed protobuf `prometheus.WriteRequest`. NaN samples (Prom
@@ -138,7 +144,8 @@ let private auditDeny (q : IngestQuotas) (ctx : HttpContext)
 /// samples are batched into a single `IStorageClient.WriteMetricSamples`
 /// call per request.
 let handler (storage : IStorageClient)
-            (quotas : IngestQuotas option) : WebPart =
+            (quotas : IngestQuotas option)
+            (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
     try
       let raw = ctx.request.rawForm
@@ -171,7 +178,7 @@ let handler (storage : IStorageClient)
               | CardinalityResult.Rejected cap ->
                 rejectedSamples <- rejectedSamples + s.samples.Length
                 rejectedCap     <- cap
-                auditDeny q ctx "quota.cardinality"
+                auditDeny q selfMetrics ctx "quota.cardinality"
                   (sprintf "series=%s cap=%d" name cap)
                 false
             | _ -> true
@@ -182,6 +189,21 @@ let handler (storage : IStorageClient)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.WriteMetricSamples(tid, samples)
       let acceptedSamples = samples.Count
+      // Self-observability counters — mirrors the JSON ingest path so
+      // the `__meta__` dashboard's `pulse_ingest_*` panels reflect all
+      // remote_write traffic too.
+      match selfMetrics with
+      | Some sm ->
+        let now = nowMs ()
+        if acceptedSamples > 0 then
+          try sm.Record("pulse_ingest_total",
+                        { ts = now; value = float acceptedSamples })
+          with _ -> ()
+        if rejectedSamples > 0 then
+          try sm.Record("pulse_ingest_errors_total",
+                        { ts = now; value = float rejectedSamples })
+          with _ -> ()
+      | None -> ()
       let body =
         if rejectedSamples > 0 then
           sprintf
@@ -194,6 +216,11 @@ let handler (storage : IStorageClient)
       // for parity with /ingest/metrics and easier curl smoke tests.
       return! (OK body >=> Writers.setMimeType "application/json") ctx
     with ex ->
+      match selfMetrics with
+      | Some sm ->
+        try sm.Record("pulse_ingest_errors_total",
+                      { ts = nowMs (); value = 1.0 }) with _ -> ()
+      | None -> ()
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
