@@ -1275,9 +1275,13 @@ let main argv =
       GET >=> path "/workspace"    >=> Files.browseFile wwwroot "workspace.html"
       GET >=> path "/docs"         >=> Files.browseFile wwwroot "docs.html"
       GET >=> path "/docs.html"    >=> Files.browseFile wwwroot "docs.html"
-      GET >=> path "/signup"       >=> Files.browseFile wwwroot "signup.html"
-      GET >=> path "/signup.html"  >=> Files.browseFile wwwroot "signup.html"
-      GET >=> path "/onboard"      >=> Files.browseFile wwwroot "signup.html"
+      // /signup, /signup.html, /onboard intentionally NOT served on the
+      // workspace edge: creating a new workspace from inside an existing
+      // workspace is a category error (workspace provisioning lives at the
+      // cloud apex via site-only mode + the Provisioner service). In
+      // single-tenant mode the same routes are also unnecessary. The
+      // POST /api/signup endpoint stays mounted (above) because the
+      // cloud Provisioner calls it once during workspace bootstrap.
       GET >=> path "/signin"       >=> Files.browseFile wwwroot "signin.html"
       GET >=> path "/signin.html"  >=> Files.browseFile wwwroot "signin.html"
       GET >=> path "/app"          >=> Files.browseFile wwwroot "index.html"
@@ -1404,7 +1408,6 @@ let main argv =
     printfn "Public website:"
     printfn "  GET  /                                 (landing page)"
     printfn "  GET  /docs                             (documentation)"
-    printfn "  GET  /signup                           (sign-up form)"
     printfn "  GET  /signin                           (sign-in form)"
     printfn "  GET  /app                              (dashboard SPA)"
   match oidcConfig with

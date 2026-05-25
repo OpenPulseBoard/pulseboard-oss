@@ -92,7 +92,7 @@
 </header>
 
 <nav class="tabs" id="tabs">
-  <button data-tab="tenants" class="active">Tenants</button>
+  <button data-tab="tenants" class="active">Teams</button>
   <button data-tab="keys">API Keys</button>
   <button data-tab="users">Users</button>
   <button data-tab="quotas">Quotas</button>
@@ -116,23 +116,23 @@
     </div>
   </section>
 
-  <!-- Tenants -->
+  <!-- Teams (workspace-internal sub-tenants; the surrounding workspace itself is the cloud "tenant") -->
   <section id="tab-tenants" class="tab active">
     <div class="row">
       <div class="panel" style="flex:2 1 480px;">
-        <h2>Tenants</h2>
+        <h2>Teams</h2>
         <table id="tenantTable"><thead>
           <tr><th>Slug</th><th>ID</th><th>Created</th></tr>
         </thead><tbody></tbody></table>
       </div>
       <div class="panel" style="flex:1 1 280px;">
-        <h2>Create tenant</h2>
+        <h2>Create team</h2>
         <div class="form-row">
           <label>Slug</label>
           <input id="newSlug" placeholder="acme" />
           <button class="primary" id="newTenantBtn">Create</button>
         </div>
-        <p class="muted">Slugs are lowercase, no spaces. Existing slugs return the existing tenant.</p>
+        <p class="muted">Slugs are lowercase, no spaces. Existing slugs return the existing team.</p>
       </div>
     </div>
   </section>
@@ -168,7 +168,7 @@
           <label><input type="checkbox" class="keyScope" value="admin"> admin</label>
         </div>
         <div class="form-row">
-          <button class="primary" id="issueKeyBtn" disabled>Issue (select a tenant)</button>
+          <button class="primary" id="issueKeyBtn" disabled>Issue (select a team)</button>
         </div>
         <div id="issuedKey" class="gone">
           <h2 style="margin-top:14px;">New key &mdash; shown once</h2>
@@ -209,7 +209,7 @@
       <div class="form-row">
         <button class="primary" id="quotaSaveBtn" disabled>Save changes</button>
         <button class="ghost"   id="quotaResetBtn" disabled>Clear all overrides</button>
-        <span class="muted" id="quotaHint">Select a tenant from the Tenants tab.</span>
+        <span class="muted" id="quotaHint">Select a team from the Teams tab.</span>
       </div>
     </div>
   </section>
@@ -224,7 +224,7 @@
         <button class="primary" id="auditRefresh">Refresh</button>
       </div>
       <table id="auditTable"><thead>
-        <tr><th>When</th><th>Tenant</th><th>Action</th><th>Outcome</th><th>Resource</th><th>Details</th></tr>
+        <tr><th>When</th><th>Team</th><th>Action</th><th>Outcome</th><th>Resource</th><th>Details</th></tr>
       </thead><tbody></tbody></table>
     </div>
   </section>
@@ -252,7 +252,7 @@ const $ = (id) => document.getElementById(id);
   const render = (slug, host, confirmed) => {
     el.textContent = slug;
     if (badge) badge.title =
-      (confirmed ? "Tenant: " : "Tenant (unconfirmed): ") + slug +
+      (confirmed ? "Workspace: " : "Workspace (unconfirmed): ") + slug +
       (host ? " · host: " + host : "");
   };
   try {
@@ -420,7 +420,7 @@ $('newTenantBtn').addEventListener('click', async () => {
   try {
     const t = await api('POST', '/api/admin/tenants', { slug });
     $('newSlug').value = '';
-    toast(`tenant '${t.slug}' ready`);
+    toast(`team '${t.slug}' ready`);
     await loadTenants();
     selectTenant(state.tenants.find(x => x.id === t.id) || t);
   } catch (e) { toast('create failed: ' + e.message, 'err'); }
@@ -430,7 +430,7 @@ $('newTenantBtn').addEventListener('click', async () => {
 async function loadKeys() {
   const tb = $('keysTable').querySelector('tbody');
   if (!state.selectedTenant) {
-    tb.innerHTML = '<tr><td colspan=5 class="muted">Select a tenant on the left to view its keys.</td></tr>';
+    tb.innerHTML = '<tr><td colspan=5 class="muted">Select a team on the left to view its keys.</td></tr>';
     return;
   }
   const tid = state.selectedTenant.id;
