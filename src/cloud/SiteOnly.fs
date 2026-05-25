@@ -53,21 +53,50 @@ let private proxySignup (provisionerUrl : string) (http : HttpClient) : WebPart 
 /// Build the Suave webpart for site-only mode. Pass `None` for
 /// provisionerUrl to surface a clear 503 on signup attempts (useful when
 /// staging a deployment without the provisioner ready yet).
-let webPart (wwwroot : string) (provisionerUrl : string option) : WebPart =
+///
+/// `customerAuth` is the Phase 10 customer-account surface. When supplied
+/// the apex serves the new email/password + GitHub auth endpoints under
+/// `/api/auth/*` and the legacy anonymous `/api/signup` is removed (a
+/// 404 makes the deprecation visible to anyone still calling it). When
+/// `None`, the legacy proxy-to-provisioner behaviour is preserved so
+/// existing deployments keep working until they opt in.
+let webPart (wwwroot : string)
+            (provisionerUrl : string option)
+            (customerAuth : PulseBoard.CustomerAuthApi.CustomerAuthConfig option)
+            (portal : PulseBoard.PortalApi.PortalApiConfig option)
+            : WebPart =
   let http = new HttpClient(Timeout = TimeSpan.FromSeconds 30.0)
-  let signupPart =
-    match provisionerUrl with
-    | Some u -> POST >=> path "/api/signup" >=> proxySignup u http
+  let signupOrAuth : WebPart =
+    match customerAuth with
+    | Some cfg ->
+      // New world: anonymous /api/signup is gone; the customer-auth
+      // surface owns signup.
+      choose [
+        PulseBoard.CustomerAuthApi.webPart cfg
+        POST >=> path "/api/signup" >=>
+          (Suave.RequestErrors.GONE
+             """{"error":"deprecated: use POST /api/auth/signup to create a customer account, then POST /api/portal/workspaces to create a workspace"}"""
+           >=> Writers.setMimeType "application/json")
+      ]
     | None ->
-      POST >=> path "/api/signup" >=>
-        (Suave.ServerErrors.SERVICE_UNAVAILABLE
-           """{"error":"site-only deployment: no --provisioner-url configured"}"""
-         >=> Writers.setMimeType "application/json")
+      // Legacy path: forward /api/signup to the provisioner.
+      match provisionerUrl with
+      | Some u -> POST >=> path "/api/signup" >=> proxySignup u http
+      | None ->
+        POST >=> path "/api/signup" >=>
+          (Suave.ServerErrors.SERVICE_UNAVAILABLE
+             """{"error":"site-only deployment: no --provisioner-url configured"}"""
+           >=> Writers.setMimeType "application/json")
   choose [
     GET >=> path "/healthz" >=>
       (OK """{"status":"ok","role":"site-only"}"""
        >=> Writers.setMimeType "application/json")
-    signupPart
+    signupOrAuth
+    (match portal with
+     | Some pcfg -> PulseBoard.PortalApi.webPart pcfg
+     | None      -> (fun _ -> async.Return None))
+    GET >=> path "/portal"        >=> Files.browseFile wwwroot "portal.html"
+    GET >=> path "/portal.html"   >=> Files.browseFile wwwroot "portal.html"
     GET >=> path "/"             >=> Files.browseFile wwwroot "home.html"
     GET >=> path "/index.html"   >=> Files.browseFile wwwroot "home.html"
     GET >=> path "/home"         >=> Files.browseFile wwwroot "home.html"
@@ -79,12 +108,18 @@ let webPart (wwwroot : string) (provisionerUrl : string option) : WebPart =
     GET >=> path "/signup.html"  >=> Files.browseFile wwwroot "signup.html"
     GET >=> path "/signin"       >=> Files.browseFile wwwroot "signin.html"
     GET >=> path "/signin.html"  >=> Files.browseFile wwwroot "signin.html"
+    GET >=> path "/forgot"       >=> Files.browseFile wwwroot "forgot.html"
+    GET >=> path "/auth/reset"   >=> Files.browseFile wwwroot "reset.html"
     GET >=> Files.browse wwwroot
     NOT_FOUND "Not found."
   ]
 
 /// Run a standalone site-only server. Returns once the server exits.
-let run (port : int) (wwwroot : string) (provisionerUrl : string option) : unit =
+let run (port : int) (wwwroot : string)
+        (provisionerUrl : string option)
+        (customerAuth : PulseBoard.CustomerAuthApi.CustomerAuthConfig option)
+        (portal : PulseBoard.PortalApi.PortalApiConfig option)
+        : unit =
   // Accepts a comma-separated list, e.g. PULSE_BIND_ADDR="::,0.0.0.0".
   // See the matching block in Program.fs for the rationale (.NET on
   // Linux defaults AF_INET6 sockets to IPV6_V6ONLY=1, so a single `::`
@@ -118,4 +153,13 @@ let run (port : int) (wwwroot : string) (provisionerUrl : string option) : unit 
   match provisionerUrl with
   | Some u -> printfn "  Provisioner: %s (signup is proxied)" u
   | None   -> printfn "  Provisioner: <unset> (signup returns 503)"
-  startWebServer config (webPart wwwroot provisionerUrl)
+  match customerAuth with
+  | Some _ -> printfn "  CustomerAuth: enabled (email+password + GitHub)"
+  | None   -> printfn "  CustomerAuth: disabled (legacy anonymous signup path)"
+  match portal with
+  | Some pc ->
+    printfn "  Portal API: enabled (provisioner=%s, token=%s)"
+      pc.provisioner.baseUrl
+      (if pc.provisioner.token.IsSome then "set" else "<unset> -> 503")
+  | None    -> printfn "  Portal API: disabled"
+  startWebServer config (webPart wwwroot provisionerUrl customerAuth portal)

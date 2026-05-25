@@ -515,6 +515,16 @@ type ProvisionerConfig =
     /// its heartbeats. When `None`, workspaces still come up — they
     /// just won't heartbeat (admin portal shows them as never-seen).
     provisionerPublicUrl : string option
+    /// Apex public URL (e.g. `https://pulseboard.cloud`). When `Some`
+    /// alongside `apexHeartbeatToken`, every new workspace machine
+    /// receives `PULSE_APEX_HEARTBEAT_URL` + `PULSE_APEX_HEARTBEAT_TOKEN`
+    /// + `PULSE_WORKSPACE_SLUG` so it can ping the apex on ingest and
+    /// reset the free-tier idle counter (see Phase 10.1 in PLAN.md).
+    /// When either is `None`, the heartbeat-from-workspace path is
+    /// disabled; free workspaces will then auto-archive based purely
+    /// on age-since-create.
+    apexPublicUrl        : string option
+    apexHeartbeatToken   : string option
     /// OIDC config for the admin portal. When `Some`, the portal
     /// exposes `/admin/login` / `/admin/callback` / `/admin/logout`
     /// and `adminAuth` accepts a valid `pulse_admin` session cookie
@@ -579,6 +589,27 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
               { cfg.machineConfig with
                   envExtra = cfg.machineConfig.envExtra |> Map.add "PULSE_PROVISIONER_URL" url }
             | _ -> cfg.machineConfig
+          // Inject apex-heartbeat envs (Phase 10.1) so the workspace's
+          // HeartbeatClient can ping apex on ingest. The token must
+          // match apex's PULSE_PROVISIONER_TOKEN; in practice the
+          // operator sets both env vars to the same secret. Slug is
+          // always set per-machine here, regardless of url/token.
+          let machineCfg =
+            let withSlug =
+              if machineCfg.envExtra.ContainsKey "PULSE_WORKSPACE_SLUG" then machineCfg
+              else
+                { machineCfg with
+                    envExtra = machineCfg.envExtra |> Map.add "PULSE_WORKSPACE_SLUG" finalSlug }
+            match cfg.apexPublicUrl, cfg.apexHeartbeatToken with
+            | Some url, Some tok ->
+              let m =
+                if withSlug.envExtra.ContainsKey "PULSE_APEX_HEARTBEAT_URL" then withSlug.envExtra
+                else withSlug.envExtra |> Map.add "PULSE_APEX_HEARTBEAT_URL" url
+              let m =
+                if m.ContainsKey "PULSE_APEX_HEARTBEAT_TOKEN" then m
+                else m |> Map.add "PULSE_APEX_HEARTBEAT_TOKEN" tok
+              { withSlug with envExtra = m }
+            | _ -> withSlug
           let! ws = cfg.fly.CreateWorkspace(finalSlug, email, machineCfg)
           // Record before bootstrap so /provision/ask works as soon as
           // Caddy receives the first cert request.

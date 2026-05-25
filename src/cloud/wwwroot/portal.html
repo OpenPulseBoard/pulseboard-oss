@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Portal · PulseBoard</title>
+  <link rel="stylesheet" href="/_auth.css" />
+  <style>
+    main.portal { max-width: 1080px; margin: 2rem auto; padding: 0 1.25rem; }
+    h1 { margin-bottom: .25rem; }
+    .who { color: #9aa3b2; font-size: .9rem; margin-bottom: 1.5rem; }
+    .who a { color: #93c5fd; }
+
+    .banner { padding: .75rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
+    .banner.warn { background: #422006; color: #fcd34d; border: 1px solid #92400e; }
+    .banner.ok   { background: #052e1a; color: #86efac; border: 1px solid #166534; }
+    .banner.err  { background: #450a0a; color: #fca5a5; border: 1px solid #991b1b; }
+    .banner a { color: inherit; text-decoration: underline; }
+    .banner button.close { float: right; background: transparent; border: 0; color: inherit; cursor: pointer; font-size: 1.1rem; }
+
+    .grid { display: grid; gap: 1.25rem; grid-template-columns: 2fr 1fr; }
+    @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { background: #11151c; border: 1px solid #1f2937; border-radius: 10px; padding: 1.25rem; }
+    .card h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .5rem .65rem; border-bottom: 1px solid #1f2937; text-align: left; vertical-align: middle; }
+    th { font-weight: 600; color: #9aa3b2; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+    td.actions { white-space: nowrap; text-align: right; }
+    td.actions button, td.actions select { margin-left: .25rem; }
+
+    button.primary { background: #2563eb; color: white; border: 0; padding: .45rem .85rem; border-radius: 6px; cursor: pointer; }
+    button.primary:hover { background: #1d4ed8; }
+    button.ghost { background: transparent; color: #d1d5db; border: 1px solid #374151; padding: .35rem .65rem; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+    button.ghost:hover { background: #1f2937; }
+    button.danger { background: transparent; color: #fca5a5; border: 1px solid #7f1d1d; padding: .35rem .65rem; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+    button.danger:hover { background: #450a0a; }
+    button[disabled], select[disabled] { opacity: .5; cursor: not-allowed; }
+    select { background: #0b0e14; color: #d1d5db; border: 1px solid #374151; border-radius: 6px; padding: .3rem .4rem; }
+
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 600; letter-spacing: .02em; }
+    .pill.free     { background: #1e293b; color: #93c5fd; }
+    .pill.starter  { background: #422006; color: #fcd34d; }
+    .pill.pro      { background: #2e1065; color: #a78bfa; }
+    .pill.live     { background: #052e1a; color: #86efac; }
+    .pill.creating { background: #1e3a8a; color: #93c5fd; }
+    .pill.archived { background: #1f2937; color: #9ca3af; }
+    .pill.failed   { background: #450a0a; color: #fca5a5; }
+    .pill.active   { background: #052e1a; color: #86efac; }
+    .pill.trialing { background: #1e3a8a; color: #93c5fd; }
+    .pill.past_due { background: #422006; color: #fcd34d; }
+    .pill.canceled { background: #1f2937; color: #9ca3af; }
+    .pill.unpaid, .pill.incomplete { background: #450a0a; color: #fca5a5; }
+
+    .row { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; }
+    .row label { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; color: #9aa3b2; }
+    .row input, .row select { background: #0b0e14; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px; padding: .45rem .55rem; font: inherit; }
+    .muted { color: #6b7280; font-size: .85rem; }
+    .stack > * + * { margin-top: .5rem; }
+    .sub-row { display: flex; justify-content: space-between; gap: .5rem; padding: .55rem 0; border-bottom: 1px dashed #1f2937; font-size: .88rem; }
+    .sub-row:last-child { border-bottom: 0; }
+    .sub-row .meta { color: #9aa3b2; font-size: .78rem; }
+
+    code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: #9aa3b2; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">PulseBoard</a>
+    <nav>
+      <a href="/portal">Portal</a>
+      <a href="#" id="signout">Sign out</a>
+    </nav>
+  </header>
+
+  <main class="portal">
+    <h1>Your workspaces</h1>
+    <p class="who" id="who">…</p>
+
+    <div id="banners"></div>
+
+    <div class="grid">
+      <!-- left column: workspaces -->
+      <div class="stack">
+        <section class="card">
+          <h2>Create a workspace</h2>
+          <form id="create-form" class="row">
+            <label>
+              Slug
+              <input name="slug" required pattern="[a-z][a-z0-9-]{2,31}"
+                     placeholder="acme-prod" autocomplete="off" />
+            </label>
+            <label>
+              Plan
+              <select name="plan">
+                <option value="free">Free — 1 per account</option>
+                <option value="starter">Starter — $19/mo</option>
+                <option value="pro">Pro — $99/mo</option>
+              </select>
+            </label>
+            <button type="submit" class="primary">Create</button>
+          </form>
+          <p class="muted" style="margin-top:.65rem">
+            Paid plans send you through Stripe checkout. Free plan is provisioned immediately
+            (only one free workspace per account).
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>Existing workspaces</h2>
+          <table id="ws-table">
+            <thead>
+              <tr><th>Slug</th><th>Plan</th><th>Status</th><th>Created</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <p id="ws-empty" class="muted" hidden>No workspaces yet — create one above.</p>
+        </section>
+      </div>
+
+      <!-- right column: billing -->
+      <div class="stack">
+        <section class="card" id="billing-card">
+          <h2>Billing</h2>
+          <div id="billing-body" class="muted">Loading…</div>
+        </section>
+
+        <section class="card">
+          <h2>Account</h2>
+          <div id="account-body" class="muted">Loading…</div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    "use strict";
+    const $ = (s) => document.querySelector(s);
+    const tbody = document.querySelector("#ws-table tbody");
+
+    // ---- toast / banner helpers ---------------------------------------
+    function banner(kind, html, opts) {
+      opts = opts || {};
+      const wrap = $("#banners");
+      const el = document.createElement("div");
+      el.className = "banner " + kind;
+      el.innerHTML = html;
+      const close = document.createElement("button");
+      close.className = "close"; close.textContent = "×";
+      close.onclick = () => el.remove();
+      el.appendChild(close);
+      wrap.appendChild(el);
+      if (opts.autohide !== false) setTimeout(() => el.remove(), 6000);
+      return el;
+    }
+
+    // ---- fetch wrapper ------------------------------------------------
+    async function api(method, path, body) {
+      const opts = { method, credentials: "same-origin", headers: {} };
+      if (body !== undefined) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(path, opts);
+      const text = await r.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!r.ok) {
+        const err = new Error((json && json.error) || text || ("HTTP " + r.status));
+        err.status = r.status;
+        err.body = json;
+        throw err;
+      }
+      return json;
+    }
+
+    function pill(cls, label) {
+      const s = document.createElement("span");
+      s.className = "pill " + cls;
+      s.textContent = label;
+      return s;
+    }
+
+    // ---- handle checkout-return query string --------------------------
+    function consumeReturnParams() {
+      const url = new URL(location.href);
+      const qs = url.searchParams;
+      if (qs.get("checkout") === "success") {
+        banner("ok",
+          "Payment method attached. Your workspace will activate within a few seconds.");
+      } else if (qs.get("checkout") === "cancel") {
+        banner("warn", "Checkout cancelled — no changes were made.");
+      } else if (qs.get("billing") === "returned") {
+        banner("ok", "Returned from Stripe billing portal.");
+      }
+      ["checkout", "session_id", "billing"].forEach(k => qs.delete(k));
+      const cleaned = url.pathname + (qs.toString() ? "?" + qs.toString() : "");
+      if (cleaned !== url.pathname + url.search) history.replaceState({}, "", cleaned);
+    }
+
+    // ---- workspace row builder ---------------------------------------
+    function planSwitcher(w, subscription) {
+      const sel = document.createElement("select");
+      ["free", "starter", "pro"].forEach(p => {
+        const o = document.createElement("option");
+        o.value = p; o.textContent = p[0].toUpperCase() + p.slice(1);
+        if (p === w.plan) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = async () => {
+        const plan = sel.value;
+        if (plan === w.plan) return;
+        try {
+          // free → paid must go through Stripe checkout.
+          if (w.plan === "free" && (plan === "starter" || plan === "pro")) {
+            const r = await api("POST", `/api/portal/workspaces/${w.slug}/checkout`, { plan });
+            location.href = r.url;
+            return;
+          }
+          await api("POST", `/api/portal/workspaces/${w.slug}/plan`, { plan });
+          banner("ok", `Switched <code class="mono">${w.slug}</code> to <b>${plan}</b>.`);
+          refresh();
+        } catch (e) {
+          banner("err", "Plan switch failed: " + escapeHtml(e.message));
+          sel.value = w.plan;
+        }
+      };
+      return sel;
+    }
+
+    function escapeHtml(s) {
+      return (s == null ? "" : String(s))
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    async function renderWorkspaces(workspaces, billing) {
+      const subBySlug = new Map();
+      if (billing && billing.subscriptions) {
+        for (const s of billing.subscriptions) {
+          if (s.workspaceSlug) subBySlug.set(s.workspaceSlug, s);
+        }
+      }
+      tbody.innerHTML = "";
+      $("#ws-empty").hidden = workspaces.length > 0;
+      for (const w of workspaces) {
+        const sub = subBySlug.get(w.slug);
+        const tr = document.createElement("tr");
+
+        // slug
+        const slugCell = document.createElement("td");
+        if (w.publicUrl) {
+          const a = document.createElement("a");
+          a.href = w.publicUrl; a.textContent = w.slug; a.target = "_blank"; a.rel = "noopener";
+          slugCell.appendChild(a);
+        } else {
+          slugCell.textContent = w.slug;
+        }
+        if (sub && sub.cancelAtPeriodEnd) {
+          const note = document.createElement("div");
+          note.className = "muted";
+          note.textContent = "cancels " + new Date(sub.currentPeriodEnd).toLocaleDateString();
+          slugCell.appendChild(note);
+        }
+        tr.appendChild(slugCell);
+
+        // plan (switcher when live + billing enabled, otherwise pill)
+        const planCell = document.createElement("td");
+        if (w.status === "live" && billing && billing.billingEnabled) {
+          planCell.appendChild(planSwitcher(w, sub));
+        } else {
+          planCell.appendChild(pill(w.plan, w.plan));
+        }
+        tr.appendChild(planCell);
+
+        // status
+        const statusCell = document.createElement("td");
+        statusCell.appendChild(pill(w.status, w.status));
+        if (w.error) {
+          const e = document.createElement("div"); e.className = "muted";
+          e.textContent = w.error.slice(0, 200); statusCell.appendChild(e);
+        }
+        tr.appendChild(statusCell);
+
+        // created
+        const dateCell = document.createElement("td");
+        dateCell.textContent = new Date(w.createdAt).toLocaleDateString();
+        tr.appendChild(dateCell);
+
+        // actions
+        const actCell = document.createElement("td"); actCell.className = "actions";
+        if (w.status === "archived") {
+          const btn = document.createElement("button"); btn.className = "ghost"; btn.textContent = "Unarchive";
+          btn.onclick = async () => {
+            try { await api("POST", `/api/portal/workspaces/${w.slug}/unarchive`); refresh(); }
+            catch (e) { banner("err", "Unarchive failed: " + escapeHtml(e.message)); }
+          };
+          actCell.appendChild(btn);
+        } else if (w.status !== "failed") {
+          const btn = document.createElement("button"); btn.className = "danger"; btn.textContent = "Archive";
+          btn.onclick = async () => {
+            if (!confirm(`Archive ${w.slug}? It will become unreachable; data is retained.`)) return;
+            try { await api("POST", `/api/portal/workspaces/${w.slug}/archive`); refresh(); }
+            catch (e) { banner("err", "Archive failed: " + escapeHtml(e.message)); }
+          };
+          actCell.appendChild(btn);
+        }
+        tr.appendChild(actCell);
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ---- billing card -------------------------------------------------
+    function renderBilling(billing) {
+      const el = $("#billing-body");
+      el.innerHTML = "";
+      if (!billing.billingEnabled) {
+        el.innerHTML = '<p class="muted">Paid plans are not currently available on this deployment.</p>';
+        return;
+      }
+      if (!billing.stripeCustomerId) {
+        el.innerHTML =
+          '<p class="muted">No payment method on file. Selecting a paid plan above will start checkout.</p>';
+        return;
+      }
+      const cust = document.createElement("p");
+      cust.className = "muted";
+      cust.innerHTML = 'Stripe customer: <code class="mono">' + escapeHtml(billing.stripeCustomerId) + '</code>';
+      el.appendChild(cust);
+
+      if (!billing.subscriptions || billing.subscriptions.length === 0) {
+        const p = document.createElement("p"); p.className = "muted";
+        p.textContent = "No active subscriptions.";
+        el.appendChild(p);
+      } else {
+        const wrap = document.createElement("div");
+        billing.subscriptions.forEach(s => {
+          const row = document.createElement("div"); row.className = "sub-row";
+          const left = document.createElement("div");
+          left.innerHTML =
+            '<div><b>' + escapeHtml(s.workspaceSlug || s.id) + '</b> · ' +
+            '<span class="pill ' + s.plan + '">' + s.plan + '</span></div>' +
+            '<div class="meta">' +
+              'status <span class="pill ' + s.status + '">' + s.status + '</span>' +
+              (s.currentPeriodEnd
+                ? ' · renews ' + new Date(s.currentPeriodEnd).toLocaleDateString()
+                : '') +
+              (s.cancelAtPeriodEnd ? ' · cancels at period end' : '') +
+            '</div>';
+          row.appendChild(left);
+          wrap.appendChild(row);
+        });
+        el.appendChild(wrap);
+      }
+
+      const btn = document.createElement("button");
+      btn.className = "primary"; btn.style.marginTop = ".75rem";
+      btn.textContent = "Manage billing →";
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const r = await api("POST", "/api/portal/billing/portal", { returnTo: "/portal?billing=returned" });
+          location.href = r.url;
+        } catch (e) {
+          btn.disabled = false;
+          banner("err", "Could not open billing portal: " + escapeHtml(e.message));
+        }
+      };
+      el.appendChild(btn);
+    }
+
+    function renderAccount(me) {
+      const el = $("#account-body"); el.innerHTML = "";
+      const d = document.createElement("div"); d.className = "stack";
+      d.innerHTML =
+        '<div><b>' + escapeHtml(me.email) + '</b></div>' +
+        '<div class="muted">' +
+          (me.emailVerified ? 'email verified' : '<span style="color:#fcd34d">email not verified</span>') +
+          ' · ' + (me.hasPassword ? 'password set' : 'no password') +
+          ' · ' + (me.hasGithub ? 'GitHub linked' : 'no GitHub') +
+        '</div>' +
+        '<div class="muted">customer id <code class="mono">' + escapeHtml(me.customerId) + '</code></div>';
+      el.appendChild(d);
+    }
+
+    // ---- refresh ------------------------------------------------------
+    let refreshing = false;
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        let me;
+        try { me = await api("GET", "/api/portal/me"); }
+        catch (e) {
+          if (e.status === 401) { location.href = "/signin?returnTo=/portal"; return; }
+          throw e;
+        }
+        $("#who").innerHTML =
+          'Signed in as <b>' + escapeHtml(me.email) + '</b>' +
+          (me.emailVerified ? '' : ' · <a href="/api/auth/resend-verify">resend verification email</a>');
+        renderAccount(me);
+
+        const [wsResp, billing] = await Promise.all([
+          api("GET", "/api/portal/workspaces"),
+          api("GET", "/api/portal/billing").catch(() => ({ billingEnabled: false, subscriptions: [] }))
+        ]);
+        renderBilling(billing);
+        await renderWorkspaces(wsResp.workspaces || [], billing);
+
+        // Poll if any workspace is creating.
+        if ((wsResp.workspaces || []).some(w => w.status === "creating")) {
+          setTimeout(() => refresh(), 3000);
+        }
+      } catch (e) {
+        banner("err", "Refresh failed: " + escapeHtml(e.message));
+      } finally {
+        refreshing = false;
+      }
+    }
+
+    // ---- create form --------------------------------------------------
+    $("#create-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = ev.target;
+      const slug = f.slug.value.trim();
+      const plan = f.plan.value;
+      const submitBtn = f.querySelector("button[type=submit]");
+      submitBtn.disabled = true;
+      try {
+        // Always create the workspace at the requested plan. For
+        // paid plans, immediately push the customer into Stripe
+        // checkout — the webhook keeps `pb_customer_workspaces.plan`
+        // in sync with subscription status, and `cancelAtPeriodEnd`
+        // is what eventually downgrades on payment failure.
+        await api("POST", "/api/portal/workspaces", { slug, plan });
+        if (plan === "starter" || plan === "pro") {
+          try {
+            const r = await api("POST", `/api/portal/workspaces/${slug}/checkout`, { plan });
+            location.href = r.url;
+            return;
+          } catch (e) {
+            banner("warn",
+              `Workspace <code class="mono">${escapeHtml(slug)}</code> was created, ` +
+              `but checkout failed: ${escapeHtml(e.message)}. ` +
+              `You can retry from the plan switcher.`);
+          }
+        } else {
+          banner("ok", `Workspace <code class="mono">${escapeHtml(slug)}</code> created.`);
+        }
+        f.reset();
+        refresh();
+      } catch (e) {
+        banner("err", "Create failed: " + escapeHtml(e.message));
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    // ---- signout ------------------------------------------------------
+    $("#signout").addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      try { await api("POST", "/api/auth/signout"); } catch (_) {}
+      location.href = "/";
+    });
+
+    // ---- boot ---------------------------------------------------------
+    consumeReturnParams();
+    refresh();
+  </script>
+</body>
+</html>

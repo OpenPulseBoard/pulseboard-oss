@@ -310,3 +310,97 @@ focused on the provisioning plumbing.
   provisioner restart.
 - **Bootstrap-secret hardening** described in 6.4.
 
+---
+
+## 7. Customer portal, auth, and billing (Phase 10)
+
+Phase 10 layers a customer-facing tier on top of the §6 provisioning
+stack. The marketing host (`--site-only`) gains:
+
+- `/signup`, `/signin`, `/portal` — customer SPA pages.
+- `/api/auth/*` — email/password + GitHub OAuth, issues a
+  `pb_access` (1h HS256 JWT, `aud=pulseboard-portal`) plus a
+  `pb_refresh` (30d opaque) cookie.
+- `/api/portal/*` — customer-authenticated CRUD over their workspaces.
+- `/api/stripe/webhook` — Stripe → apex (HMAC-verified).
+- `/api/portal/internal/heartbeat` — workspace → apex, used by the
+  free-tier idle sleeper.
+
+The provisioner endpoints (§6.2) are unchanged except that
+`POST /api/provision` is now driven by the portal API, not by
+anonymous `/api/signup`.
+
+### 7.1 New environment variables
+
+| Var | Purpose | Default |
+| --- | --- | --- |
+| `PULSE_PUBLIC_BASE` | Public apex URL, e.g. `https://pulseboard.cloud`; used in OAuth + Stripe redirects | required |
+| `PULSE_AUTH_JWT_SECRET` | HS256 signing key for `pb_access` | required (no portal if unset) |
+| `PULSE_AUTH_GITHUB_CLIENT_ID` / `_SECRET` | GitHub OAuth App credentials | optional (button hidden if unset) |
+| `PULSE_AUTH_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` | Email-verification + receipt SMTP | optional (verification skipped in dev) |
+| `PULSE_STRIPE_SECRET_KEY` | `sk_live_…` or `sk_test_…` | optional (no billing if unset) |
+| `PULSE_STRIPE_WEBHOOK_SECRET` | `whsec_…` matched against `Stripe-Signature` | required if Stripe configured |
+| `PULSE_STRIPE_PRICE_STARTER_MONTHLY` | Stripe Price id, mapped to Starter plan | required if Stripe configured |
+| `PULSE_STRIPE_PRICE_STARTER_ANNUAL` | Optional annual price | optional |
+| `PULSE_STRIPE_PRICE_PRO_MONTHLY` | Stripe Price id, mapped to Pro plan | required if Stripe configured |
+| `PULSE_STRIPE_PRICE_PRO_ANNUAL` | Optional annual price | optional |
+| `PULSE_FREE_SLEEP_DAYS` | Days idle before a free workspace is auto-archived; `0` disables | `7` |
+| `PULSE_FREE_SLEEP_INTERVAL_MIN` | Sleeper sweep cadence | `60` |
+| `PULSE_FREE_SLEEP_MAX_PER_TICK` | Safety cap on archives per sweep | `50` |
+| `PULSE_PURGE_DAYS` | Days a workspace stays archived before permanent purge; `0` disables | `30` |
+| `PULSE_OVERDUE_GRACE_DAYS` | Days a non-entitled paid subscription stays live before archive; `0` disables | `3` |
+| `PULSE_PURGE_INTERVAL_MIN` | PurgeCron cadence (shared by overdue + purge passes) | `360` |
+| `PULSE_PURGE_MAX_PER_TICK` | Safety cap on each pass per tick | `20` |
+
+Equivalent CLI flags exist for every var (`--stripe-secret-key=`,
+`--free-sleep-days=`, etc.); CLI wins over env. The portal is enabled
+iff `PULSE_AUTH_JWT_SECRET` + `PULSE_PROVISIONER_TOKEN` +
+`PULSE_POSTGRES` are all set.
+
+### 7.2 Stripe webhook setup
+
+1. In the Stripe dashboard, create an endpoint pointing at
+   `${PULSE_PUBLIC_BASE}/api/stripe/webhook`.
+2. Subscribe to `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated`,
+   `customer.subscription.deleted`, `invoice.payment_failed`.
+3. Copy the signing secret into `PULSE_STRIPE_WEBHOOK_SECRET`.
+4. The webhook handler is the source of truth for plan upgrades — a
+   customer is **not** promoted to a paid plan until Stripe sends
+   `customer.subscription.created` / `.updated` with `status=active`.
+
+Pinned Stripe API version: `2024-12-18.acacia`.
+
+### 7.3 Free-tier idle sleep
+
+Free workspaces auto-archive after `PULSE_FREE_SLEEP_DAYS` days
+without ingest activity. The mechanism:
+
+1. The workspace edge posts a heartbeat to
+   `${PULSE_PUBLIC_BASE}/api/portal/internal/heartbeat` on ingest
+   (rate-limited to ~1/min per slug).
+2. The heartbeat endpoint updates
+   `pb_customer_workspaces.last_active_at` for that slug.
+3. A background sweeper on apex queries
+   `WHERE plan='free' AND status='live' AND last_active_at <= NOW() - threshold`
+   and POSTs `archive` to the provisioner, then marks the row
+   `Archived` with `error='auto-archived after N days idle'`.
+4. The customer can unarchive from `/portal` at any time, which
+   resumes the Fly machine and resets `last_active_at`.
+
+**Wiring on the workspace side:** the provisioner sets three env vars
+on every new Fly machine — `PULSE_APEX_HEARTBEAT_URL`,
+`PULSE_APEX_HEARTBEAT_TOKEN`, `PULSE_WORKSPACE_SLUG`. Apex feeds
+these from `PULSE_APEX_PUBLIC_URL` and `PULSE_APEX_HEARTBEAT_TOKEN`
+(or, if unset, `PULSE_PROVISIONER_TOKEN`). See
+[infra/runbooks/portal-and-billing.md §3](../infra/runbooks/portal-and-billing.md)
+for verification steps and failure modes.
+
+### 7.4 Operations
+
+See [infra/runbooks/portal-and-billing.md](../infra/runbooks/portal-and-billing.md)
+for day-2 operations: verifying the sleeper, inspecting idle
+workspaces, manually waking, Stripe webhook health, customer
+tear-down, and failure-mode recovery.
+
+

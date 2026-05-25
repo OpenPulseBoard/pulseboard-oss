@@ -247,6 +247,7 @@ let private streamsFromJson (raw : byte[]) : Stream[] =
 let handler (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then

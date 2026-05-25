@@ -504,6 +504,7 @@ let private partialSuccessBody = """{"partialSuccess":{}}"""
 let metrics (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
@@ -552,6 +553,7 @@ let metrics (storage : IStorageClient)
 let logs (storage : IStorageClient)
          (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
@@ -615,6 +617,7 @@ let traces (storage : IStorageClient)
            (rawTrace : PulseBoard.CloudBackends.IRawTraceBackend option)
            (spanStore : PulseBoard.Spans.ISpanStore option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then

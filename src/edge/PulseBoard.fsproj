@@ -34,6 +34,7 @@
     <Compile Include="Retention.fs" />
     <Compile Include="PgRetentionOverrides.fs" />
     <Compile Include="Gateway.fs" />
+    <Compile Include="HeartbeatClient.fs" />
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />
     <Compile Include="Spans.fs" />
@@ -66,6 +67,39 @@
     </Compile>
     <Compile Include="..\cloud\PgWorkspaceRegistry.fs">
       <Link>cloud\PgWorkspaceRegistry.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\CustomerAuth.fs">
+      <Link>cloud\CustomerAuth.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\PgCustomerStore.fs">
+      <Link>cloud\PgCustomerStore.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\EmailSender.fs">
+      <Link>cloud\EmailSender.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\GithubOAuth.fs">
+      <Link>cloud\GithubOAuth.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\CustomerAuthApi.fs">
+      <Link>cloud\CustomerAuthApi.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\PortalStore.fs">
+      <Link>cloud\PortalStore.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\StripeClient.fs">
+      <Link>cloud\StripeClient.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\StripeStore.fs">
+      <Link>cloud\StripeStore.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\PortalApi.fs">
+      <Link>cloud\PortalApi.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\FreeTierSleeper.fs">
+      <Link>cloud\FreeTierSleeper.fs</Link>
+    </Compile>
+    <Compile Include="..\cloud\PurgeCron.fs">
+      <Link>cloud\PurgeCron.fs</Link>
     </Compile>
     <Compile Include="..\cloud\SiteOnly.fs">
       <Link>cloud\SiteOnly.fs</Link>
@@ -104,6 +138,22 @@
     </None>
     <None Include="..\cloud\wwwroot\signin.html">
       <Link>wwwroot\signin.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\forgot.html">
+      <Link>wwwroot\forgot.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\reset.html">
+      <Link>wwwroot\reset.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\_auth.css">
+      <Link>wwwroot\_auth.css</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\cloud\wwwroot\portal.html">
+      <Link>wwwroot\portal.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/uPlot.iife.min.js">

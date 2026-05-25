@@ -56,6 +56,8 @@ open http://127.0.0.1:8775/
 | HTTP Basic auth gate on `/ingest/*` (per-token)         | [src/edge/Auth.fs](src/edge/Auth.fs) |
 | Single-page dark dashboard                              | [src/edge/wwwroot/index.html](src/edge/wwwroot/index.html) |
 | Query API (`/api/metrics`, `/api/metrics/<n>`, `/api/logs`) | [src/edge/Query.fs](src/edge/Query.fs) |
+| Customer signup / signin / member portal + Stripe billing | [src/cloud/PortalApi.fs](src/cloud/PortalApi.fs), [src/cloud/StripeClient.fs](src/cloud/StripeClient.fs) |
+| Free-tier idle-sleep sweeper (archives after N days idle) | [src/cloud/FreeTierSleeper.fs](src/cloud/FreeTierSleeper.fs) |
 
 ## Where it's going
 

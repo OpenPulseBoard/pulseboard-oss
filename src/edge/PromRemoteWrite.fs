@@ -147,6 +147,7 @@ let handler (storage : IStorageClient)
             (quotas : IngestQuotas option)
             (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let raw = ctx.request.rawForm
       if isNull raw || raw.Length = 0 then

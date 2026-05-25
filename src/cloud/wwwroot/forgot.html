@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PulseBoard — Forgot password</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/_auth.css" />
+</head>
+<body>
+
+<header class="nav">
+  <a href="/" class="brand">PULSEBOARD</a>
+  <span class="grow"></span>
+  <a href="/signin">Back to sign in</a>
+</header>
+
+<div class="wrap">
+
+<div class="card" id="formCard">
+  <h1>Reset your password</h1>
+  <p class="lede">Enter your email and we'll send you a reset link.</p>
+
+  <div class="banner err" id="err" style="display:none;"></div>
+
+  <form id="f" novalidate>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required
+           autocomplete="email" placeholder="you@example.com" />
+
+    <button type="submit" class="primary" id="submitBtn">Send reset link →</button>
+  </form>
+</div>
+
+<div class="card" id="successCard" style="display:none;">
+  <h1>Check your email ✓</h1>
+  <p class="lede">If an account exists for <strong id="outEmail"></strong>, we just sent a password-reset link. The link expires in 1&nbsp;hour.</p>
+  <div class="alt"><a href="/signin">Back to sign in</a></div>
+</div>
+
+</div>
+
+<script>
+const form = document.getElementById('f');
+const errEl = document.getElementById('err');
+const btn   = document.getElementById('submitBtn');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errEl.style.display = 'none';
+  const email = document.getElementById('email').value.trim();
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/auth/forgot', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    // We intentionally show the same outcome whether the email is
+    // registered or not — see CustomerAuthApi.signup/forgot, which
+    // always returns 202 to prevent enumeration.
+    if (r.status === 202 || r.ok) {
+      document.getElementById('outEmail').textContent = email;
+      document.getElementById('formCard').style.display = 'none';
+      document.getElementById('successCard').style.display = 'block';
+      return;
+    }
+    const j = await r.json().catch(() => ({}));
+    errEl.textContent = j.error || ('request failed: HTTP ' + r.status);
+    errEl.style.display = 'block';
+  } catch (e) {
+    errEl.textContent = e.message || String(e);
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send reset link →';
+  }
+});
+</script>
+
+</body>
+</html>

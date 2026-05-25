@@ -52,7 +52,263 @@ let main argv =
 
   if argv |> Array.contains "--site-only" then
     let provUrl = envOrEarly "PULSE_PROVISIONER_URL" (argValueEarly "--provisioner-url=")
-    PulseBoard.SiteOnly.run port wwwrootEarly provUrl
+    // -- Phase 10 customer-auth wiring ------------------------------------
+    // Opt-in: requires either --postgres= (real customer store) plus a
+    // public base URL. With no Postgres we fall back to an in-memory
+    // store + Console email sender so the site-only binary stays
+    // demo-able with no external deps.
+    let pgConn = envOrEarly "PULSE_POSTGRES" (argValueEarly "--postgres=")
+    let enableAuth =
+      argv |> Array.contains "--customer-auth"
+      || envOrEarly "PULSE_CUSTOMER_AUTH" None
+         |> Option.map (fun s -> s.Trim().ToLowerInvariant())
+         |> Option.exists (fun s -> s = "1" || s = "true" || s = "yes")
+    let customerAuth : PulseBoard.CustomerAuthApi.CustomerAuthConfig option =
+      if not enableAuth then None
+      else
+        let store : PulseBoard.CustomerAuth.ICustomerStore =
+          match pgConn with
+          | Some cs ->
+            try
+              PulseBoard.PgCustomerStore.ensureSchema cs
+              printfn "  CustomerStore: Postgres (schema ensured)"
+              PulseBoard.PgCustomerStore.PgCustomerStore(cs) :> _
+            with ex ->
+              eprintfn "  [ERROR] failed to initialise customer Postgres: %s" ex.Message
+              exit 2
+          | None ->
+            printfn "  CustomerStore: in-memory (ephemeral — pass --postgres=...)"
+            PulseBoard.CustomerAuth.InMemoryCustomerStore() :> _
+        // Mailgun config — opt-in. With no API key configured the
+        // binary uses the console sender (verification links print to
+        // stderr), which is the right default for dev.
+        let mailgunKey   = envOrEarly "MAILGUN_API_KEY"  (argValueEarly "--mailgun-key=")
+        let mailgunDom   = envOrEarly "MAILGUN_DOMAIN"   (argValueEarly "--mailgun-domain=")
+        let mailgunEu    =
+          argv |> Array.contains "--mailgun-eu"
+          || envOrEarly "MAILGUN_EU" None
+             |> Option.map (fun s -> s.Trim().ToLowerInvariant())
+             |> Option.exists (fun s -> s = "1" || s = "true" || s = "yes")
+        let fromAddr =
+          envOrEarly "PULSE_AUTH_FROM" (argValueEarly "--auth-from=")
+          |> Option.defaultValue "PulseBoard <no-reply@pulseboard.cloud>"
+        let sender : PulseBoard.EmailSender.IEmailSender =
+          match mailgunKey, mailgunDom with
+          | Some k, Some d ->
+            printfn "  EmailSender:   Mailgun (%s%s)" d (if mailgunEu then ", EU region" else "")
+            PulseBoard.EmailSender.MailgunEmailSender(
+              { apiKey      = k
+                domain      = d
+                euRegion    = mailgunEu
+                defaultFrom = fromAddr }) :> _
+          | _ ->
+            printfn "  EmailSender:   console (set MAILGUN_API_KEY+MAILGUN_DOMAIN for real delivery)"
+            PulseBoard.EmailSender.ConsoleEmailSender() :> _
+        let publicBase =
+          envOrEarly "PULSE_PUBLIC_BASE" (argValueEarly "--public-base=")
+          |> Option.defaultValue (sprintf "http://localhost:%d" port)
+        let secureCookies =
+          publicBase.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        let signingKey =
+          match envOrEarly "PULSE_CUSTOMER_JWT_SECRET" (argValueEarly "--customer-jwt-secret=") with
+          | Some raw ->
+            try PulseBoard.CustomerAuthApi.keyFromBase64 raw
+            with ex ->
+              eprintfn "  [ERROR] bad --customer-jwt-secret: %s" ex.Message
+              exit 2
+          | None ->
+            eprintfn "  [WARN] no --customer-jwt-secret set; generating an EPHEMERAL key (sessions die on restart)"
+            PulseBoard.CustomerAuthApi.generateKey ()
+        let publicBaseTrim = publicBase.TrimEnd '/'
+        // -- GitHub OAuth (optional) ------------------------------------
+        let ghClientId     = envOrEarly "GITHUB_OAUTH_CLIENT_ID"     (argValueEarly "--github-client-id=")
+        let ghClientSecret = envOrEarly "GITHUB_OAUTH_CLIENT_SECRET" (argValueEarly "--github-client-secret=")
+        let ghCallback =
+          envOrEarly "GITHUB_OAUTH_CALLBACK" (argValueEarly "--github-callback=")
+          |> Option.defaultValue (publicBaseTrim + "/api/auth/github/callback")
+        let github : PulseBoard.GithubOAuth.GithubConfig option =
+          match ghClientId, ghClientSecret with
+          | Some id, Some secret ->
+            printfn "  GitHubOAuth:   enabled (callback %s)" ghCallback
+            Some { clientId = id; clientSecret = secret; callbackUrl = ghCallback }
+          | _ ->
+            printfn "  GitHubOAuth:   disabled (set GITHUB_OAUTH_CLIENT_ID + GITHUB_OAUTH_CLIENT_SECRET to enable)"
+            None
+        Some
+          { store         = store
+            sender        = sender
+            signingKey    = signingKey
+            publicBase    = publicBaseTrim
+            fromAddress   = fromAddr
+            secureCookies = secureCookies
+            rateLimiter   = PulseBoard.CustomerAuthApi.AuthRateLimiter(30, 3600)
+            github        = github
+            githubStates  = PulseBoard.GithubOAuth.StateCache() }
+    // -- Phase 10 step 4: portal API wiring --------------------------------
+    // Requires the customer-auth surface above. The portal owns the
+    // `pb_customer_workspaces` table (created against the same Postgres
+    // as the customer store) and talks to the provisioner over HTTP
+    // using a service-token bearer. Without --provisioner-url the
+    // portal is still mounted but POST /api/portal/workspaces returns
+    // 503 — handy for staging the apex deploy ahead of the provisioner.
+    let portal : PulseBoard.PortalApi.PortalApiConfig option =
+      match customerAuth with
+      | None -> None
+      | Some authCfg ->
+        let workspaceStore : PulseBoard.PortalStore.ICustomerWorkspaceStore =
+          match pgConn with
+          | Some cs ->
+            try
+              PulseBoard.PortalStore.ensureSchema cs
+              printfn "  PortalStore:   Postgres (schema ensured)"
+              PulseBoard.PortalStore.PgCustomerWorkspaceStore(cs) :> _
+            with ex ->
+              eprintfn "  [ERROR] failed to initialise portal Postgres: %s" ex.Message
+              exit 2
+          | None ->
+            printfn "  PortalStore:   in-memory (ephemeral — pass --postgres=...)"
+            PulseBoard.PortalStore.InMemoryCustomerWorkspaceStore() :> _
+        let provToken =
+          envOrEarly "PULSE_PROVISIONER_TOKEN" (argValueEarly "--provisioner-token=")
+        let rootDom =
+          envOrEarly "PULSE_ROOT_DOMAIN" (argValueEarly "--root-domain=")
+          |> Option.defaultValue "pulseboard.cloud"
+        let provBase = provUrl |> Option.defaultValue ""
+        // -- Phase 10 step 5: Stripe billing wiring --------------------------
+        // Opt-in: requires `--stripe-secret=` / `STRIPE_SECRET_KEY` and a
+        // Postgres connection (subscriptions need durable persistence —
+        // we'd lose payment state on restart with an in-memory store).
+        // The webhook secret is independent: without it the webhook
+        // route returns 503 (signature can't be verified).
+        let stripeSecret =
+          envOrEarly "STRIPE_SECRET_KEY" (argValueEarly "--stripe-secret=")
+        let billing : PulseBoard.PortalApi.BillingDeps option =
+          match stripeSecret with
+          | None -> None
+          | Some sk ->
+            let stripeStore : PulseBoard.StripeStore.IStripeStore =
+              match pgConn with
+              | Some cs ->
+                try
+                  PulseBoard.StripeStore.ensureSchema cs
+                  printfn "  StripeStore:   Postgres (schema ensured)"
+                  PulseBoard.StripeStore.PgStripeStore(cs) :> _
+                with ex ->
+                  eprintfn "  [ERROR] failed to initialise stripe Postgres: %s" ex.Message
+                  exit 2
+              | None ->
+                printfn "  StripeStore:   in-memory (ephemeral — pass --postgres=...)"
+                PulseBoard.StripeStore.InMemoryStripeStore() :> _
+            let webhookSecret =
+              envOrEarly "STRIPE_WEBHOOK_SECRET" (argValueEarly "--stripe-webhook-secret=")
+            let priceStarter =
+              envOrEarly "STRIPE_PRICE_STARTER" (argValueEarly "--stripe-price-starter=")
+            let priceStarterAnnual =
+              envOrEarly "STRIPE_PRICE_STARTER_ANNUAL" (argValueEarly "--stripe-price-starter-annual=")
+            let priceProMonthly =
+              envOrEarly "STRIPE_PRICE_PRO" (argValueEarly "--stripe-price-pro=")
+            let priceProAnnual =
+              envOrEarly "STRIPE_PRICE_PRO_ANNUAL" (argValueEarly "--stripe-price-pro-annual=")
+            printfn "  Stripe:        enabled (webhook=%s, starter=%s, pro=%s)"
+              (if webhookSecret.IsSome then "set" else "<unset>")
+              (if priceStarter.IsSome   then "set" else "<unset>")
+              (if priceProMonthly.IsSome then "set" else "<unset>")
+            Some
+              { stripe =
+                  { secretKey          = sk
+                    webhookSecret      = webhookSecret
+                    publicBase         = authCfg.publicBase
+                    priceStarter       = priceStarter
+                    priceStarterAnnual = priceStarterAnnual
+                    priceProMonthly    = priceProMonthly
+                    priceProAnnual     = priceProAnnual }
+                stripeStore = stripeStore }
+        Some
+          { auth        = authCfg
+            store       = workspaceStore
+            provisioner =
+              { baseUrl    = provBase
+                token      = provToken
+                rootDomain = rootDom }
+            billing     = billing }
+    // -- Phase 10 step 7: free-tier idle sleeper -------------------------
+    // Optional; only runs when both the provisioner URL and token are
+    // configured (otherwise it has no way to issue archive calls).
+    // `--free-sleep-days=0` disables it explicitly even if creds exist.
+    portal
+    |> Option.iter (fun (p : PulseBoard.PortalApi.PortalApiConfig) ->
+      let sleepDays =
+        envOrEarly "PULSE_FREE_SLEEP_DAYS" (argValueEarly "--free-sleep-days=")
+        |> Option.bind (fun s ->
+          match System.Int32.TryParse s with true, n -> Some n | _ -> None)
+        |> Option.defaultValue 7
+      let sweepMinutes =
+        envOrEarly "PULSE_FREE_SLEEP_INTERVAL_MIN" (argValueEarly "--free-sleep-interval-min=")
+        |> Option.bind (fun s ->
+          match System.Int32.TryParse s with true, n -> Some n | _ -> None)
+        |> Option.defaultValue 60
+      let maxPerTick =
+        envOrEarly "PULSE_FREE_SLEEP_MAX_PER_TICK" (argValueEarly "--free-sleep-max-per-tick=")
+        |> Option.bind (fun s ->
+          match System.Int32.TryParse s with true, n -> Some n | _ -> None)
+        |> Option.defaultValue 50
+      match p.provisioner.token with
+      | None ->
+        printfn "  Sleeper:       disabled (no provisioner token)"
+      | Some tok when sleepDays <= 0 ->
+        ignore tok
+        printfn "  Sleeper:       disabled (--free-sleep-days=0)"
+      | Some tok ->
+        PulseBoard.FreeTierSleeper.start
+          { store            = p.store
+            provisionerUrl   = p.provisioner.baseUrl
+            provisionerToken = tok
+            idleThreshold    = System.TimeSpan.FromDays (float sleepDays)
+            interval         = System.TimeSpan.FromMinutes (float sweepMinutes)
+            maxPerTick       = maxPerTick }
+        |> ignore)
+    // -- Phase 10 step 10: archive→purge + payment_overdue cron ----------
+    // Same gating story as the sleeper: needs a provisioner token to
+    // issue purge/archive admin calls. `PULSE_PURGE_DAYS=0` disables
+    // the purge pass; `PULSE_OVERDUE_GRACE_DAYS=0` disables the
+    // overdue pass. Both default to operator-friendly values
+    // (30 / 3 days) so the cron does the right thing out of the box.
+    portal
+    |> Option.iter (fun (p : PulseBoard.PortalApi.PortalApiConfig) ->
+      let parseInt (s : string) =
+        match System.Int32.TryParse s with true, n -> Some n | _ -> None
+      let purgeDays =
+        envOrEarly "PULSE_PURGE_DAYS" (argValueEarly "--purge-days=")
+        |> Option.bind parseInt
+        |> Option.defaultValue 30
+      let overdueDays =
+        envOrEarly "PULSE_OVERDUE_GRACE_DAYS" (argValueEarly "--overdue-grace-days=")
+        |> Option.bind parseInt
+        |> Option.defaultValue 3
+      let intervalMin =
+        envOrEarly "PULSE_PURGE_INTERVAL_MIN" (argValueEarly "--purge-interval-min=")
+        |> Option.bind parseInt
+        |> Option.defaultValue 360
+      let maxPerTick =
+        envOrEarly "PULSE_PURGE_MAX_PER_TICK" (argValueEarly "--purge-max-per-tick=")
+        |> Option.bind parseInt
+        |> Option.defaultValue 20
+      match p.provisioner.token with
+      | None ->
+        printfn "  PurgeCron:     disabled (no provisioner token)"
+      | Some _ when purgeDays <= 0 && overdueDays <= 0 ->
+        printfn "  PurgeCron:     disabled (purge-days=0 and overdue-grace-days=0)"
+      | Some tok ->
+        PulseBoard.PurgeCron.start
+          { store            = p.store
+            provisionerUrl   = p.provisioner.baseUrl
+            provisionerToken = tok
+            purgeThreshold   = System.TimeSpan.FromDays (float purgeDays)
+            overdueGrace     = System.TimeSpan.FromDays (float overdueDays)
+            interval         = System.TimeSpan.FromMinutes (float intervalMin)
+            maxPerTick       = maxPerTick }
+        |> ignore)
+    PulseBoard.SiteOnly.run port wwwrootEarly provUrl customerAuth portal
     exit 0
 
   if argv |> Array.exists (fun a -> a = "--mode=provisioner") then
@@ -158,6 +414,16 @@ let main argv =
         postgresConn  = provPgConn
         heartbeats    = provHeartbeats
         provisionerPublicUrl = provPublicUrl
+        apexPublicUrl =
+          envOrEarly "PULSE_APEX_PUBLIC_URL" (argValueEarly "--apex-public-url=")
+        apexHeartbeatToken =
+          // Defaults to the same value as PULSE_PROVISIONER_TOKEN since
+          // apex's /api/portal/internal/heartbeat is gated by it.
+          // Operators can override with PULSE_APEX_HEARTBEAT_TOKEN if
+          // they want to mint a separate secret.
+          (envOrEarly "PULSE_APEX_HEARTBEAT_TOKEN" (argValueEarly "--apex-heartbeat-token="))
+          |> Option.orElseWith (fun () ->
+            envOrEarly "PULSE_PROVISIONER_TOKEN" (argValueEarly "--provisioner-token="))
         adminOidc     =
           // OIDC config for the admin portal. All four core fields must
           // be present for OIDC to activate; missing any one leaves the
@@ -701,6 +967,33 @@ let main argv =
   metricStore.SetExtraNames segments.KnownNames
 
   printfn "PulseBoard persisting metric history under %s" dataDir
+
+  // -- Apex heartbeat (Phase 10.1) ----------------------------------------
+  // When this binary runs as a per-customer workspace under
+  // hosted PulseBoard, the provisioner sets these three env vars so
+  // the workspace can ping the apex on ingest and avoid being
+  // auto-archived by the free-tier sleeper. In self-hosted /
+  // single-tenant deployments they are unset and the heartbeat is
+  // a no-op.
+  let heartbeatCfg : PulseBoard.HeartbeatClient.Config option =
+    let url   = envOrEarly "PULSE_APEX_HEARTBEAT_URL"   (argValueEarly "--apex-heartbeat-url=")
+    let token = envOrEarly "PULSE_APEX_HEARTBEAT_TOKEN" (argValueEarly "--apex-heartbeat-token=")
+    let slug  = envOrEarly "PULSE_WORKSPACE_SLUG"        (argValueEarly "--workspace-slug=")
+    let intervalMin =
+      envOrEarly "PULSE_APEX_HEARTBEAT_INTERVAL_MIN"
+        (argValueEarly "--apex-heartbeat-interval-min=")
+      |> Option.bind (fun s ->
+        match System.Int32.TryParse s with true, n when n > 0 -> Some n | _ -> None)
+      |> Option.defaultValue 1
+    match url, token, slug with
+    | Some u, Some t, Some s ->
+      Some
+        { apexUrl  = u
+          token    = t
+          slug     = s
+          interval = System.TimeSpan.FromMinutes (float intervalMin) }
+    | _ -> None
+  PulseBoard.HeartbeatClient.init heartbeatCfg
 
   // -- Alerting pipeline (PLAN.md Phase 5) --------------------------------
   // 1. Rule engine: persisted PromQL/LogQL rule groups under

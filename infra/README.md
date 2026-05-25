@@ -30,6 +30,9 @@ The deployment architecture for HA topology and TLS is documented in
 - [`runbooks/tls-rotation.md`](runbooks/tls-rotation.md) — routine
   leaf renewal, intermediate / root rotation, and emergency
   compromise response.
+- [`runbooks/portal-and-billing.md`](runbooks/portal-and-billing.md) —
+  Phase 10 customer portal, Stripe webhook setup, free-tier idle
+  sleeper, and per-customer tear-down.
 
 Helm charts, Terraform modules, and Dockerfiles will land in the
 folders above as Phase 6 #1/#2 move from designed to implemented.

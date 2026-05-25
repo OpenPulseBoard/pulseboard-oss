@@ -106,6 +106,7 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
             (costs : PulseBoard.Costs.ICostTracker option)
             (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let body = readBody ctx
       let items =
@@ -193,6 +194,7 @@ let logs (storage : IStorageClient) (quotas : IngestQuotas option)
          (meter : PulseBoard.Billing.IBillingMeter option)
          (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
+    PulseBoard.HeartbeatClient.bump ()
     try
       let body = readBody ctx
       let tenantId =

@@ -992,11 +992,261 @@ Still to do:
   slug, kill provisioner, restart, `/provision/ask` still 200 and
   `/provision/route` returns the same upstream.
 - Workspace teardown (cancel-on-failed-payment, evict-on-inactive,
-  scale-to-zero behaviour).
+  scale-to-zero behaviour). **Folded into Phase 10** — the member
+  portal owns the create/destroy lifecycle and the billing webhook
+  drives the cancel-on-failed-payment path.
 - Real Stripe linkage on signup (plan selection, payment method).
+  **Folded into Phase 10** — payment method is collected against the
+  *customer*, not the workspace, before any paid workspace is
+  provisioned.
 - Multi-region: today every workspace lands in one Fly region
   (`--fly-region=`); customer-chosen region needs marketing-side UI.
-- Hardening of the bootstrap call (item 3 above).
+- Hardening of the bootstrap call (item 3 above). **Tightened by Phase
+  10** — `POST /api/provision` requires a signed customer-account JWT,
+  so anonymous internet traffic can no longer mint workspaces even if
+  the bootstrap secret leaks.
+
+> Phase 9 closes the *infrastructure* loop (apex → provisioner →
+> per-customer machine). It deliberately does **not** answer "who is
+> allowed to press the button." That question is Phase 10.
+
+---
+
+## Phase 10 — Customer accounts & member portal
+
+**Problem.** Phase 7 #3 and Phase 9 left `POST /api/signup` (and its
+proxy `POST /api/provision`) open to anyone on the public internet. A
+drive-by visitor can mint an unlimited number of Free workspaces,
+each one a real Fly Machine with non-zero COGS. We need an identity
+layer *above* the workspace so:
+
+- workspaces are owned by a **customer account**, not an anonymous
+  slug+email tuple;
+- the **Free plan is capped at one workspace per customer** (with
+  shorter retention + tighter quotas than the documented Free caps in
+  Phase 8 #5 — a self-serve tier, not the previous "Free = generous
+  OSS-friendly limits" framing);
+- create / destroy / plan-change / billing all happen in a single
+  member portal on `pulseboard.cloud`, not on the workspace itself.
+
+This is a new top-level surface on the apex host. Workspaces stay
+exactly as they are — the change is what sits in front of them.
+
+### Decisions
+
+| Topic                  | Decision                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Identity scope         | **Customer ≠ tenant.** A customer (person) owns N workspaces (tenants). Existing `users` / `memberships` tables in Phase 1 stay workspace-scoped; this is a new `customers` table on the *apex / provisioner* database. |
+| Authentication         | Email + password (Argon2id) **and** GitHub OAuth. Google/Microsoft/Okta are Phase 10.1 (the existing `Oidc.fs` already speaks the protocol — just needs a second consumer keyed on `customers`, not workspace users). |
+| Session                | Short-lived JWT in an `HttpOnly; Secure; SameSite=Lax` cookie scoped to `*.pulseboard.cloud`. Refresh-token rotation; logout revokes server-side. |
+| Free-tier rule         | Exactly one Free workspace per customer, enforced at `POST /api/provision`. Second Free attempt returns `409 free-workspace-limit-reached` with a deep-link to the upgrade page. |
+| Paid-workspace gate    | A workspace can only be created on Pro/Enterprise if the customer has a Stripe customer-id with a valid payment method. Otherwise `402 payment-method-required`. |
+| Stripe linkage         | Stripe Customer per **customer account**, Stripe Subscription per **workspace** (one subscription = one tenant on a paid plan). Failed-payment webhook → workspace archived (Phase 9 teardown path). |
+| Data residency         | Customer record + auth state live in the provisioner Postgres only. No copy on the workspace. Workspace only knows its `customerId` (opaque) for audit log enrichment. |
+
+### Data model (provisioner Postgres)
+
+```
+customers              (id, email UNIQUE, email_verified_at, argon2_hash NULLABLE,
+                        github_user_id NULLABLE UNIQUE, created_at, …)
+customer_sessions      (id, customer_id, refresh_token_hash, created_at,
+                        expires_at, revoked_at, user_agent, ip)
+customer_email_tokens  (token_hash, customer_id, purpose ENUM(verify|reset),
+                        expires_at, consumed_at)
+customer_stripe_links  (customer_id PK, stripe_customer_id UNIQUE,
+                        default_payment_method, …)
+pb_workspaces          (… existing columns …,
+                        customer_id NOT NULL REFERENCES customers(id),
+                        plan TEXT NOT NULL DEFAULT 'free')  -- migration adds the FK
+```
+
+Argon2id parameters: `m=64MB, t=3, p=1` (OWASP 2024 baseline). Password
+hashes are nullable so a GitHub-only customer record has no password to
+leak; password set / reset adds one later.
+
+### New surface — three modules
+
+1. **`src/cloud/CustomerAuth.fs`** — `ICustomerStore` (Postgres-backed,
+   in-memory fallback for dev), the password + GitHub OAuth WebParts,
+   JWT cookie issuance/verification, email-verification + password-
+   reset token flows. Mounted on the apex host *and* the provisioner
+   (the provisioner needs to verify the JWT on every `/api/provision`
+   call).
+
+2. **`src/cloud/MemberPortal.fs`** — authenticated REST surface under
+   `/api/portal/*`:
+   - `GET  /api/portal/me`                          — current customer + plan summary
+   - `GET  /api/portal/workspaces`                  — list owned workspaces
+   - `POST /api/portal/workspaces`                  — create (requires payment method for paid plans; enforces 1-free rule)
+   - `PATCH /api/portal/workspaces/<slug>/plan`     — change plan (Stripe subscription create/update/cancel)
+   - `DELETE /api/portal/workspaces/<slug>`         — archive (soft) → 7-day grace → purge
+   - `GET  /api/portal/billing`                     — invoices, current usage, payment method
+   - `POST /api/portal/billing/payment-method`      — returns a Stripe SetupIntent client secret
+   - `POST /api/portal/billing/portal-session`      — Stripe Customer Portal deep-link (manage payment method, view invoices)
+
+3. **`src/cloud/wwwroot/members/`** — five new static pages: `signup.html`
+   (now collects email + password, not slug), `signin.html` (now a real
+   credential form, not an API-key paste-box), `verify.html`,
+   `forgot.html`, and the authenticated SPA shell `portal.html` (lists
+   workspaces, shows usage from each workspace's `/api/admin/tenants/<id>/usage`
+   proxied through the portal, exposes plan/destroy/billing actions).
+
+The existing `signin.html` (paste-API-key) stays under `/operator-signin`
+as a break-glass for support / on-call work; it is unlinked from the
+public nav.
+
+### Free-tier caps (concrete numbers — closes Open Question #3)
+
+A Free workspace gets:
+
+- **1 GiB ingest / month** (vs. Phase 8 #5 Free = 5 GiB)
+- **256 MiB logs / month**
+- **2 500 active series** (vs. 10 000)
+- **100 k trace spans / month** (vs. 1 M)
+- **1 M alert evals / month**
+- **1 seat** (the owning customer only)
+- **7-day retention** for all three pillars (vs. Pro/Enterprise contract-defined)
+- **Sleeps after 7 days of zero ingest**; Fly Machine scale-to-zero, woken by next ingest or portal visit.
+
+Hard cap (1.5× soft, per Phase 7 #2) returns 429 with a clear
+"upgrade to Pro" pointer in the response body and a banner in the
+workspace UI. These numbers are tight on purpose: Free is a try-it
+sandbox, not a free production tier.
+
+### Auth-gated provisioner
+
+`POST /api/provision` changes shape:
+
+- **Before:** `{slug, email}` → workspace.
+- **After:** `Authorization: Bearer <customer-jwt>` + `{slug, plan, region?}` → workspace.
+  - JWT signature verified against the apex's signing key (rotation:
+    JWKS-style, two active keys at a time).
+  - `slug` still regex-validated + reserved-list checked
+    (`Signup.slugErr` lives on, just behind auth).
+  - `plan = "free"` and customer already owns a Free workspace → 409.
+  - `plan ∈ {"pro","enterprise"}` and no payment method → 402.
+  - On success: row in `pb_workspaces` records `customer_id`, plus the
+    Stripe subscription id when paid.
+
+The site-only proxy in `SiteOnly.fs` updates accordingly: it no longer
+forwards `/api/signup` blindly — it forwards `/api/portal/*` only when
+the request carries a valid session cookie. Unauthenticated POSTs to
+`/api/signup` redirect to `/signup` (the new account-creation page).
+
+### Workspace teardown (closes Phase 9 deferred item)
+
+Three states: **live**, **archived**, **purged**.
+
+- `DELETE /api/portal/workspaces/<slug>` → `archivedAt = now`. The
+  provisioner suspends the Fly app (existing `IFlyClient.SuspendApp`);
+  the router returns `410 Gone` for incoming ingest / query / admin
+  traffic; the workspace is invisible in `GET /api/portal/workspaces`
+  unless `?include=archived=true`.
+- After 7 days archived → background job calls
+  `IFlyClient.DestroyApp` + drops the `pb_<slug>` Postgres schema +
+  `DELETE FROM pb_workspaces WHERE slug=<>`. Irreversible.
+- Stripe `invoice.payment_failed` webhook → mark workspace
+  `payment_overdue`; 3-day grace with email reminders; then auto-archive
+  (same path as user-initiated delete).
+
+### Implementation order
+
+1. `customers` schema migration + `ICustomerStore` + Argon2id password
+   hashing (no UI yet; verified with a smoke test against the
+   Postgres-backed impl). **Done.**
+2. Email/password signup + signin + JWT cookie + email verification
+   token (loopback SMTP in dev, SendGrid in prod — env-driven). **Done.**
+3. GitHub OAuth flow (App registration outside this repo; client-id /
+   client-secret via env). **Done.**
+4. `MemberPortal.fs` v1: list / create / archive workspaces. Plan
+   change still manual (operator-only) at this step. **Done** — landed
+   as `src/cloud/PortalApi.fs`.
+5. Free-workspace counter enforcement at `POST /api/provision`.
+   Existing `/api/signup` route deleted from the apex host;
+   `Signup.fs` on the *workspace* binary stays (the provisioner's
+   internal bootstrap still calls it once over flycast). **Done.**
+6. Stripe linkage: SetupIntent → payment method → subscription create
+   on `PATCH .../plan` → webhook handler for `invoice.payment_failed`
+   and `customer.subscription.deleted`. **Done** — `src/cloud/StripeClient.fs`
+   (direct REST, pinned `2024-12-18.acacia`) and `src/cloud/StripeStore.fs`.
+7. Portal SPA polish + per-workspace usage panel. **Done** —
+   `src/cloud/wwwroot/portal.html` (two-column dashboard, plan switcher,
+   billing card).
+8. Free-tier idle sleep policy. **Done** —
+   `src/cloud/FreeTierSleeper.fs` archives free workspaces idle past
+   `PULSE_FREE_SLEEP_DAYS` (default 7) via the provisioner admin API.
+   Apex exposes `POST /api/portal/internal/heartbeat` (provisioner-token-
+   authed) for the workspace edge to bump `last_active_at` on ingest.
+   Quota enforcement itself is satisfied by the existing Free-tier
+   defaults in `src/edge/Plans.fs`.
+9. **Phase 10.1 — DONE:** workspace-side heartbeat caller.
+   `src/edge/HeartbeatClient.fs` runs in workspace mode and POSTs
+   `{"slug":"…"}` to `${PULSE_APEX_HEARTBEAT_URL}/api/portal/internal/heartbeat`
+   (rate-limited via `Interlocked.CompareExchange` on a process-global
+   `lastSentTicks`, default 1/min). Wired into `Ingest.fs`, `Otlp.fs`
+   (metrics/logs/traces), `PromRemoteWrite.fs`, `LokiPush.fs`. The
+   provisioner injects `PULSE_APEX_HEARTBEAT_URL`,
+   `PULSE_APEX_HEARTBEAT_TOKEN`, and `PULSE_WORKSPACE_SLUG` into every
+   new Fly machine; missing any one makes the heartbeat a no-op
+   (self-hosted / single-tenant deploys). Documented in
+   [infra/runbooks/portal-and-billing.md §3](infra/runbooks/portal-and-billing.md).
+10. **Phase 10.1 — DONE:** archive→purge cron + `payment_overdue`
+    grace period. `src/cloud/PurgeCron.fs` runs a single periodic
+    loop on apex (default 6h cadence) with two passes. **Overdue
+    pass:** when a Stripe webhook clears entitlement
+    (`canceled` / `unpaid` / `incomplete_expired`),
+    `PortalApi.reconcileWorkspacePlan` stamps
+    `pb_customer_workspaces.overdue_since` but keeps the workspace
+    on its paid plan; after `PULSE_OVERDUE_GRACE_DAYS` (default 3)
+    the cron POSTs `admin/workspaces/<slug>/archive` to the
+    provisioner and marks the row archived. A subsequent paid
+    invoice clears `overdue_since` and resumes the app via
+    `IFlyClient.ResumeApp` (already wired in step 8). **Purge
+    pass:** archived rows older than `PULSE_PURGE_DAYS` (default 30)
+    are permanently destroyed via `admin/workspaces/<slug>/purge`
+    (Fly app + per-workspace schema + registry row) and the
+    `pb_customer_workspaces` row is hard-deleted. Both passes
+    share `PULSE_PURGE_INTERVAL_MIN` / `PULSE_PURGE_MAX_PER_TICK`
+    and either disables with a `0` threshold. Cron is auto-disabled
+    when the apex has no provisioner token. Schema migration adds
+    `overdue_since TIMESTAMPTZ` plus two partial indexes
+    (`pb_customer_workspaces_purge`, `pb_customer_workspaces_overdue`).
+    Documented in
+    [infra/runbooks/portal-and-billing.md §4](infra/runbooks/portal-and-billing.md)
+    and [docs/DEPLOYMENT.md §7](docs/DEPLOYMENT.md).
+
+### Verification (P10 acceptance test)
+
+- Anonymous `POST /api/provision` returns 401. Anonymous `POST /api/signup`
+  returns 404 on the apex host.
+- A customer signs up with email/password, verifies email, creates a
+  Free workspace, attempts a second Free workspace → 409. Upgrades
+  workspace #1 to Pro after attaching a payment method via Stripe
+  test-mode → can now create workspace #2 on Free.
+- A customer signs in with GitHub OAuth, gets the same set of
+  workspaces as the email-equivalent account (account-merge happens
+  on verified-email match).
+- Stripe test-mode failed payment → workspace marked overdue, then
+  archived after 3 days (cron clock-stubbed in tests). Customer
+  pays-now → workspace resumes (`IFlyClient.ResumeApp`).
+- Workspace audit log on the *workspace* binary shows the customer id
+  attached to every mutation, not just the api-key id (provisioner
+  injects `X-PulseBoard-Customer-Id` over flycast; the workspace's
+  `Audit.fs` records it).
+
+### Out of scope for Phase 10
+
+- Team accounts / multi-customer-per-workspace. The
+  `memberships` table on the *workspace* (Phase 1) already covers
+  multi-user-per-tenant; cross-customer ownership transfer is a
+  separate feature.
+- SSO providers beyond GitHub. Google/Microsoft/Okta are Phase 10.1
+  and reuse the existing `Oidc.fs`.
+- SOC 2 controls on the customer database — those live in Phase 6
+  and apply uniformly across apex + workspace Postgres.
+- Self-serve workspace region selection (Phase 9 deferred item) —
+  Phase 10 ships single-region; region picker is purely a marketing-
+  side UI change layered on top.
 
 ---
 
@@ -1032,6 +1282,7 @@ Still to do:
 | P6    | Chaos test kills storage replica → no query errors > 1s; SOC 2 readiness audit clean; TLS scan A+; secrets rotation drill green.                                      |
 | P7    | End-to-end signup → ingest → upgrade to Pro → Stripe test-mode invoice generated with correct metered usage.                                                          |
 | P8    | Ship one moat feature; measure delta in trial-to-paid conversion vs. control cohort.                                                                                  |
+| P10   | Anonymous `/api/provision` → 401. Customer signs up (password + GitHub), creates Free workspace, second Free → 409. Pro upgrade with Stripe test card; failed-payment webhook archives workspace after 3-day grace. |
 
 ---
 
@@ -1045,7 +1296,11 @@ Still to do:
    Multi-region from day one (cost + complexity)? Data-residency
    requirements drive Phase 6 timeline.
 3. **Free-tier generosity** — Cheap acquisition vs. fixed COGS floor.
-   Concrete numbers needed before Phase 7 build.
+   ~~Concrete numbers needed before Phase 7 build.~~ **Resolved by
+   Phase 10:** 1 GiB ingest / 256 MiB logs / 2 500 series / 100 k
+   spans / 1 seat / 7-day retention, one workspace per customer,
+   sleeps after 7 days idle. Phase 8 #5 pricing-page Free row needs
+   updating to match.
 4. **OSS edition license** — MIT (max adoption, weakest moat),
    Apache-2.0, AGPL (forces hosted competitors to share), BSL with
    delayed open-sourcing à la Sentry. Decision drives community
