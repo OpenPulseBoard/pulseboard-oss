@@ -162,6 +162,17 @@
     <None Include="wwwroot/uPlot.min.css">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- Brand assets: full wordmark (dark- and light-bg variants) plus
+         icon-only favicon. Served as static files from wwwroot/. -->
+    <None Include="wwwroot/favicon.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/pulse-board-logo.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/pulse-board-logo-dark.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.23.3" />
