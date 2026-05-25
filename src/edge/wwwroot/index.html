@@ -621,7 +621,7 @@ async function renderPanel(p) {
   const prev = state.panels.get(p.id);
   state.panels.set(p.id, { dom: el, uplot: prev && prev.uplot });
   const body = el.querySelector(".body");
-  body.className = "body " + p.panelType;
+  body.className = "body " + p.type;
   body.innerHTML = '<div class="empty">loading…</div>';
 
   const now = Date.now();
@@ -640,13 +640,13 @@ async function renderPanel(p) {
   }
 
   body.innerHTML = "";
-  if (p.panelType === "timeseries") {
+  if (p.type === "timeseries") {
     renderTimeseries(body, result, p);
-  } else if (p.panelType === "stat") {
+  } else if (p.type === "stat") {
     renderStat(body, result, p);
-  } else if (p.panelType === "logs") {
+  } else if (p.type === "logs") {
     renderLogs(body, result, p);
-  } else if (p.panelType === "table") {
+  } else if (p.type === "table") {
     renderTable(body, result, p);
   }
 }
@@ -857,7 +857,7 @@ function openEditor(panelId) {
   if (!p) return;
   $("editor-title").textContent = "Edit panel · " + p.title;
   $("ed-title").value = p.title;
-  $("ed-type").value  = p.panelType;
+  $("ed-type").value  = p.type;
   $("ed-lang").value  = p.queryLang;
   $("ed-expr").value  = p.expr;
   $("ed-w").value     = p.w;
@@ -888,7 +888,7 @@ function readEditorPanel() {
   return {
     ...base,
     title:     $("ed-title").value || "untitled",
-    panelType: $("ed-type").value,
+    type: $("ed-type").value,
     queryLang: $("ed-lang").value,
     expr:      $("ed-expr").value,
     w:         Math.max(1, Math.min(12, +$("ed-w").value || base.w)),
@@ -915,9 +915,9 @@ async function previewEditor() {
   try {
     const r = await runQuery(p.queryLang, p.expr, start, now, step);
     host.innerHTML = "";
-    if (p.panelType === "timeseries") renderTimeseries(host, r, p);
-    else if (p.panelType === "stat") renderStat(host, r, p);
-    else if (p.panelType === "logs") renderLogs(host, r, p);
+    if (p.type === "timeseries") renderTimeseries(host, r, p);
+    else if (p.type === "stat") renderStat(host, r, p);
+    else if (p.type === "logs") renderLogs(host, r, p);
     else renderTable(host, r, p);
   } catch (err) {
     host.innerHTML = `<div class="err" style="padding:8px;">${err.message}</div>`;
@@ -943,7 +943,7 @@ function addPanel() {
   const p = {
     id: "p-" + uuid(),
     title: "New panel",
-    panelType: "timeseries",
+    type: "timeseries",
     queryLang: "promql",
     expr: "",
     x: 0, y: maxY, w: 6, h: 3,
@@ -1051,7 +1051,7 @@ async function runExplore() {
       host.style.height = "60vh"; host.style.background = "var(--panel)";
       host.style.borderRadius = "6px"; host.style.padding = "8px";
       out.appendChild(host);
-      renderTimeseries(host, r, { panelType: "timeseries", id: "explore", options: {} });
+      renderTimeseries(host, r, { type: "timeseries", id: "explore", options: {} });
     }
   } catch (err) {
     meta.textContent = "error";
