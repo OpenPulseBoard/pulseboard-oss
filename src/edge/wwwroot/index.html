@@ -614,6 +614,12 @@ async function renderPanel(p) {
     el = panelChrome(p);
     $("dash-grid").appendChild(el);
   }
+  // Register the DOM in the cache up front so refreshAll() reuses the
+  // same element for every panel type (stat/logs/table renderers don't
+  // touch state.panels themselves; without this we'd append duplicates
+  // on every refresh tick).
+  const prev = state.panels.get(p.id);
+  state.panels.set(p.id, { dom: el, uplot: prev && prev.uplot });
   const body = el.querySelector(".body");
   body.className = "body " + p.panelType;
   body.innerHTML = '<div class="empty">loading…</div>';
