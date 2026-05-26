@@ -134,10 +134,12 @@ let private workspaceJson (w : PortalWorkspace) : string =
     match v with Some x -> JsonSerializer.Serialize x | None -> "null"
   let d (v : DateTimeOffset option) =
     match v with Some x -> JsonSerializer.Serialize (x.ToString("o")) | None -> "null"
+  // NB: keep this as ONE logical sprintf line. Triple-quoted strings
+  // in F# do NOT treat `\<newline>` as a line continuation — the
+  // backslash + newline end up literal in the output, producing
+  // invalid JSON that fails JSON.parse on the client.
   sprintf
-    """{"slug":%s,"customerId":%s,"plan":%s,"status":%s,"publicUrl":%s,\
-"upstreamUrl":%s,"createdAt":%s,"updatedAt":%s,"archivedAt":%s,\
-"lastActiveAt":%s,"overdueSince":%s,"error":%s}"""
+    """{"slug":%s,"customerId":%s,"plan":%s,"status":%s,"publicUrl":%s,"upstreamUrl":%s,"createdAt":%s,"updatedAt":%s,"archivedAt":%s,"lastActiveAt":%s,"overdueSince":%s,"error":%s}"""
     (JsonSerializer.Serialize w.slug)
     (JsonSerializer.Serialize cid)
     (JsonSerializer.Serialize (PortalPlan.toString w.plan))
@@ -495,8 +497,7 @@ let private subscriptionJson (s : StripeSubscription) : string =
     | Some x -> JsonSerializer.Serialize (x.ToString("o"))
     | None   -> "null"
   sprintf
-    """{"id":%s,"customerId":%s,"workspaceSlug":%s,"priceId":%s,"plan":%s,\
-"status":%s,"currentPeriodEnd":%s,"cancelAtPeriodEnd":%b}"""
+    """{"id":%s,"customerId":%s,"workspaceSlug":%s,"priceId":%s,"plan":%s,"status":%s,"currentPeriodEnd":%s,"cancelAtPeriodEnd":%b}"""
     (JsonSerializer.Serialize s.id)
     (JsonSerializer.Serialize cid)
     (sOpt s.workspaceSlug)
