@@ -177,6 +177,18 @@
       return json;
     }
 
+    async function tryRefreshSession() {
+      try {
+        const r = await fetch("/api/auth/refresh", {
+          method: "POST",
+          credentials: "same-origin"
+        });
+        return r.ok;
+      } catch (_) {
+        return false;
+      }
+    }
+
     function pill(cls, label) {
       const s = document.createElement("span");
       s.className = "pill " + cls;
@@ -394,8 +406,17 @@
         let me;
         try { me = await api("GET", "/api/portal/me"); }
         catch (e) {
-          if (e.status === 401) { location.href = "/signin?returnTo=/portal"; return; }
-          throw e;
+          if (e.status === 401) {
+            const recovered = await tryRefreshSession();
+            if (recovered) {
+              me = await api("GET", "/api/portal/me");
+            } else {
+              location.href = "/signin?returnTo=/portal";
+              return;
+            }
+          } else {
+            throw e;
+          }
         }
         $("#who").innerHTML =
           'Signed in as <b>' + escapeHtml(me.email) + '</b>' +

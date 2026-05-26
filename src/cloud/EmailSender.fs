@@ -119,7 +119,8 @@ let fireAndForget (sender : IEmailSender) (msg : EmailMessage) : unit =
     try
       let! r = sender.Send msg
       match r with
-      | Ok () -> ()
+      | Ok () ->
+        eprintfn "  [email] sent to %s :: %s" msg.toAddress msg.subject
       | Error (TransportError m) ->
         eprintfn "  [email] transport error to %s: %s" msg.toAddress m
       | Error (ProviderError (code, body)) ->

@@ -468,6 +468,7 @@ let private signin (cfg : CustomerAuthConfig) : WebPart =
     let ip = clientIp ctx
     match cfg.rateLimiter.TryConsume ip with
     | Result.Error _ ->
+      eprintfn "  [auth] signin rate-limited from ip=%s" ip
       return! errJson 429 "too many signin attempts; try again later" ctx
     | Result.Ok () ->
       match tryParseJson (readBody ctx.request) with
@@ -483,6 +484,7 @@ let private signin (cfg : CustomerAuthConfig) : WebPart =
           | None ->
             // Constant-time dummy hash to defeat timing oracles.
             verifyDummy p
+            eprintfn "  [auth] signin failed email=%s ip=%s reason=no_customer" e ip
             return! errJson 401 "invalid email or password" ctx
           | Some c ->
             let ok =
@@ -493,12 +495,15 @@ let private signin (cfg : CustomerAuthConfig) : WebPart =
                 verifyDummy p
                 false
             if not ok then
+              eprintfn "  [auth] signin failed email=%s ip=%s reason=bad_password_or_no_password" e ip
               return! errJson 401 "invalid email or password" ctx
             elif c.emailVerifiedAt.IsNone then
+              eprintfn "  [auth] signin blocked email=%s ip=%s reason=email_unverified" e ip
               return! errJson 403 "email not verified yet" ctx
             else
               let setCookies, _ = issueSession cfg ctx c
               let (CustomerId cid) = c.id
+              eprintfn "  [auth] signin ok customerId=%s email=%s ip=%s" cid c.email ip
               let body =
                 sprintf
                   """{"customerId":%s,"email":%s,"emailVerified":true}"""
@@ -541,6 +546,7 @@ let private forgot (cfg : CustomerAuthConfig) : WebPart =
     let ip = clientIp ctx
     match cfg.rateLimiter.TryConsume ip with
     | Result.Error _ ->
+      eprintfn "  [auth] forgot rate-limited from ip=%s" ip
       return! errJson 429 "too many reset requests; try again later" ctx
     | Result.Ok () ->
       match tryParseJson (readBody ctx.request) with
@@ -564,8 +570,11 @@ let private forgot (cfg : CustomerAuthConfig) : WebPart =
                 consumedAt = None }
             try cfg.store.InsertEmailToken tok
             with ex -> eprintfn "  [auth] insert reset token failed: %s" ex.Message
+            let (CustomerId cid) = c.id
+            eprintfn "  [auth] forgot token created customerId=%s email=%s ip=%s" cid e ip
             fireAndForget cfg.sender (resetEmail cfg e tokenPlain)
-          | _ -> ()
+          | _ ->
+            eprintfn "  [auth] forgot no eligible password account email=%s ip=%s" e ip
           // Always 202 — same response regardless of existence.
           return! jsonResp 202 """{"status":"check your email"}""" ctx
   }
