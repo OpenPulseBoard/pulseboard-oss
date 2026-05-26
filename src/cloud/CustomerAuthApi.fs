@@ -183,7 +183,10 @@ let private jsonResp (status : int) (body : string) : WebPart =
       | 201 -> Suave.Successful.CREATED
       | 202 -> Suave.Successful.ACCEPTED
       | 400 -> BAD_REQUEST
-      | 401 -> UNAUTHORIZED
+      // See PortalApi.jsonResp: Suave's UNAUTHORIZED writer sets a
+      // `WWW-Authenticate: Basic` header that triggers the browser's
+      // native basic-auth dialog. We use cookies, so emit a bare 401.
+      | 401 -> fun b -> OK b >=> Writers.setStatus HTTP_401
       | 403 -> FORBIDDEN
       | 404 -> NOT_FOUND
       | 409 -> Suave.RequestErrors.CONFLICT

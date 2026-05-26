@@ -81,7 +81,12 @@ let private jsonResp (status : int) (body : string) : WebPart =
       | 201 -> Suave.Successful.CREATED
       | 202 -> Suave.Successful.ACCEPTED
       | 400 -> BAD_REQUEST
-      | 401 -> UNAUTHORIZED
+      // Don't use Suave's UNAUTHORIZED here — it attaches a
+      // `WWW-Authenticate: Basic realm="protected"` header which
+      // makes browsers pop a native basic-auth dialog when the SPA
+      // probes /api/portal/me without a cookie. We're a cookie-based
+      // API, so emit a bare 401 instead.
+      | 401 -> fun b -> OK b >=> Writers.setStatus HTTP_401
       | 403 -> FORBIDDEN
       | 404 -> NOT_FOUND
       | 409 -> Suave.RequestErrors.CONFLICT
