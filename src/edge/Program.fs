@@ -1575,8 +1575,13 @@ let main argv =
       // single-tenant mode the same routes are also unnecessary. The
       // POST /api/signup endpoint stays mounted (above) because the
       // cloud Provisioner calls it once during workspace bootstrap.
-      GET >=> path "/signin"       >=> Files.browseFile wwwroot "signin.html"
-      GET >=> path "/signin.html"  >=> Files.browseFile wwwroot "signin.html"
+      // Workspace edge: /signin is the operator API-key paste form.
+      // The apex email/password customer portal lives at
+      // pulseboard.cloud/signin (served from SiteOnly.fs, also from
+      // signin.html). Two different audiences, two different files.
+      GET >=> path "/signin"           >=> Files.browseFile wwwroot "operator-signin.html"
+      GET >=> path "/signin.html"      >=> Files.browseFile wwwroot "operator-signin.html"
+      GET >=> path "/operator-signin"  >=> Files.browseFile wwwroot "operator-signin.html"
       GET >=> path "/app"          >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/app.html"     >=> Files.browseFile wwwroot "index.html"
       GET >=> path "/dashboard"    >=> Files.browseFile wwwroot "index.html"

@@ -140,6 +140,10 @@
       <Link>wwwroot\signin.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\cloud\wwwroot\operator-signin.html">
+      <Link>wwwroot\operator-signin.html</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="..\cloud\wwwroot\forgot.html">
       <Link>wwwroot\forgot.html</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
