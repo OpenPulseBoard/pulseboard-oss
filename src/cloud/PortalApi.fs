@@ -177,8 +177,24 @@ let private http = new HttpClient(Timeout = TimeSpan.FromMinutes 5.0)
 
 [<NoComparison>]
 type private ProvisionResult =
-  | Ok of slug:string * publicUrl:string * upstreamUrl:string
+  | Ok of slug:string * publicUrl:string * upstreamUrl:string * tenantId:string * apiKeyId:string * apiKey:string
   | Error of status:int * msg:string
+
+let private workspaceCreateJson (w : PortalWorkspace)
+                                (tenantId : string) (apiKeyId : string) (apiKey : string) : string =
+  sprintf
+    """{"workspace":%s,"bootstrap":{"tenantId":%s,"apiKeyId":%s,"apiKey":%s,"warning":"plaintext apiKey is shown once and cannot be recovered"}}"""
+    (workspaceJson w)
+    (JsonSerializer.Serialize tenantId)
+    (JsonSerializer.Serialize apiKeyId)
+    (JsonSerializer.Serialize apiKey)
+
+let private issuedKeyJson (tenantId : string) (apiKeyId : string) (apiKey : string) : string =
+  sprintf
+    """{"tenantId":%s,"apiKeyId":%s,"apiKey":%s,"warning":"plaintext apiKey is shown once and cannot be recovered"}"""
+    (JsonSerializer.Serialize tenantId)
+    (JsonSerializer.Serialize apiKeyId)
+    (JsonSerializer.Serialize apiKey)
 
 let private callProvisionerCreate (cfg : ProvisionerClient)
                                   (slug : string) (email : string)
@@ -215,10 +231,13 @@ let private callProvisionerCreate (cfg : ProvisionerClient)
           let finalSlug =
             match str "slug" with "" -> slug | s -> s
           let publicUrl = str "url"
+          let tenantId = str "tenantId"
+          let apiKeyId = str "apiKeyId"
+          let apiKey = str "apiKey"
           // The provisioner doesn't surface upstream_url in its 201
           // response (it's an internal detail), so we leave it None
           // until the heartbeat sweeper fills it in.
-          return ProvisionResult.Ok (finalSlug, publicUrl, "")
+          return ProvisionResult.Ok (finalSlug, publicUrl, "", tenantId, apiKeyId, apiKey)
       with ex ->
         return ProvisionResult.Error (502, ex.Message)
   }
@@ -237,6 +256,28 @@ let private callProvisionerAdmin (cfg : ProvisionerClient)
             (Uri.EscapeDataString slug) action
         use req = new HttpRequestMessage(HttpMethod.Post, url)
         req.Headers.Authorization <- AuthenticationHeaderValue("Bearer", tok)
+        use! resp = http.SendAsync req |> Async.AwaitTask
+        let! text = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+        return (int resp.StatusCode, text)
+      with ex ->
+        return (502, ex.Message)
+  }
+
+let private callProvisionerIssueKey (cfg : ProvisionerClient)
+                                    (slug : string) (label : string) : Async<int * string> =
+  async {
+    match cfg.token with
+    | None -> return (503, "provisioner service token not configured")
+    | Some tok ->
+      try
+        let url =
+          sprintf "%s/admin/workspaces/%s/keys"
+            (cfg.baseUrl.TrimEnd '/')
+            (Uri.EscapeDataString slug)
+        let body = sprintf """{"label":%s}""" (JsonSerializer.Serialize label)
+        use req = new HttpRequestMessage(HttpMethod.Post, url)
+        req.Headers.Authorization <- AuthenticationHeaderValue("Bearer", tok)
+        req.Content <- new StringContent(body, Encoding.UTF8, "application/json")
         use! resp = http.SendAsync req |> Async.AwaitTask
         let! text = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
         return (int resp.StatusCode, text)
@@ -310,7 +351,7 @@ let private createWorkspace (cfg : PortalApiConfig) : WebPart =
               // and can retry with a different slug.
               let! r = callProvisionerCreate cfg.provisioner slug c.email plan
               match r with
-              | ProvisionResult.Ok (finalSlug, publicUrl, upstreamUrl) ->
+              | ProvisionResult.Ok (finalSlug, publicUrl, upstreamUrl, tenantId, apiKeyId, apiKey) ->
                 // If the provisioner picked a different slug, we
                 // re-key the row. Simplest impl: insert the new
                 // row, mark the old one failed. (The legitimate
@@ -332,7 +373,7 @@ let private createWorkspace (cfg : PortalApiConfig) : WebPart =
                           (if upstreamUrl = "" then None else Some upstreamUrl)
                         updatedAt = DateTimeOffset.UtcNow }
                   try cfg.store.Insert real with _ -> ()
-                  return! jsonResp 201 (workspaceJson real) ctx
+                  return! jsonResp 201 (workspaceCreateJson real tenantId apiKeyId apiKey) ctx
                 else
                   let updated =
                     cfg.store.Update slug (fun w ->
@@ -344,7 +385,7 @@ let private createWorkspace (cfg : PortalApiConfig) : WebPart =
                             (if upstreamUrl = "" then None else Some upstreamUrl)
                           updatedAt = DateTimeOffset.UtcNow })
                   match updated with
-                  | Some w -> return! jsonResp 201 (workspaceJson w) ctx
+                  | Some w -> return! jsonResp 201 (workspaceCreateJson w tenantId apiKeyId apiKey) ctx
                   | None   -> return! errJson 500 "row vanished" ctx
               | ProvisionResult.Error (status, msg) ->
                 cfg.store.Update slug (fun w ->
@@ -355,6 +396,35 @@ let private createWorkspace (cfg : PortalApiConfig) : WebPart =
                 |> ignore
                 eprintfn "  [portal] provisioner failed for %s: HTTP %d %s" slug status msg
                 return! errJson 502 (sprintf "provisioner: %s" msg) ctx
+  })
+
+let private issueWorkspaceKeyPortal (cfg : PortalApiConfig) (slug : string) : WebPart =
+  requireAuth cfg (fun c -> fun ctx -> async {
+    match cfg.store.TryGet slug with
+    | None -> return! errJson 404 "workspace not found" ctx
+    | Some w when w.customerId <> c.id -> return! errJson 404 "workspace not found" ctx
+    | Some w ->
+      let label =
+        match tryParseJson (readBody ctx.request) with
+        | Some doc ->
+          use _ = doc
+          tryGetString doc.RootElement "label"
+          |> Option.defaultValue (sprintf "customer portal (%s)" c.email)
+        | None -> sprintf "customer portal (%s)" c.email
+      let! status, body = callProvisionerIssueKey cfg.provisioner w.slug label
+      if status <> 201 && status <> 200 then
+        return! errJson 502 (sprintf "provisioner: %s" body) ctx
+      else
+        try
+          use doc = JsonDocument.Parse body
+          let root = doc.RootElement
+          let str (name : string) =
+            match root.TryGetProperty name with
+            | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+            | _ -> ""
+          return! jsonResp 201 (issuedKeyJson (str "tenantId") (str "apiKeyId") (str "apiKey")) ctx
+        with ex ->
+          return! errJson 502 (sprintf "bad provisioner response: %s" ex.Message) ctx
   })
 
 let private archive (cfg : PortalApiConfig) (slug : string) : WebPart =
@@ -872,6 +942,7 @@ let webPart (cfg : PortalApiConfig) : WebPart =
     GET  >=> path "/api/portal/plans"       >=> plans
     GET  >=> path "/api/portal/workspaces"  >=> listWorkspaces cfg
     POST >=> path "/api/portal/workspaces"  >=> createWorkspace cfg
+    POST >=> pathScan "/api/portal/workspaces/%s/keys"      (fun s -> issueWorkspaceKeyPortal cfg s)
     POST >=> pathScan "/api/portal/workspaces/%s/archive"   (fun s -> archive   cfg s)
     POST >=> pathScan "/api/portal/workspaces/%s/unarchive" (fun s -> unarchive cfg s)
     POST >=> pathScan "/api/portal/workspaces/%s/plan"      (fun s -> switchPlan cfg s)

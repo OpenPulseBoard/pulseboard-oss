@@ -15,6 +15,7 @@ open Suave.Filters
 open Suave.Successful
 open Suave.RequestErrors
 open Suave.ServerErrors
+open PulseBoard.Tenancy
 
 // Phase 9 — per-customer workspace provisioner.
 //
@@ -532,11 +533,47 @@ type ProvisionerConfig =
     /// the portal is bearer-only (the original behaviour).
     adminOidc            : AdminOidc.Config option }
 
+let private workspaceSchemaConn (adminCs : string) (slug : string) : string =
+  let schema = "pb_" + slug.Replace('-', '_')
+  let csb = NpgsqlConnectionStringBuilder(adminCs)
+  csb.SearchPath <- schema
+  csb.ConnectionString
+
+let private issueWorkspaceKey (cfg : ProvisionerConfig) (slug : string)
+                              (label : string) : Result<BootstrapResult, string> =
+  match cfg.registry.TryGetBySlug slug with
+  | None -> Result.Error "workspace not found"
+  | Some row ->
+    match row.tenantId, cfg.postgresConn with
+    | None, _ -> Result.Error "workspace tenant is not recorded yet"
+    | _, None -> Result.Error "workspace key minting requires postgres-backed workspaces"
+    | Some tenantId, Some adminCs ->
+      try
+        let cs = workspaceSchemaConn adminCs slug
+        let store = PulseBoard.PgTenantStore.PgTenantStore(cs) :> ITenantStore
+        let issued =
+          store.IssueApiKey(
+            TenantId tenantId,
+            label,
+            Admin,
+            Scope.Ingest ||| Scope.Query ||| Scope.Admin)
+        let (ApiKeyId kid) = issued.record.id
+        cfg.registry.Update slug (fun cur -> { cur with apiKeyId = Some kid })
+        Result.Ok { tenantId = tenantId; apiKeyId = kid; apiKey = issued.plaintext }
+      with ex ->
+        Result.Error ex.Message
+
 // -- HTTP surface -----------------------------------------------------------
 
 let private readBody (req : HttpRequest) =
   if isNull req.rawForm || req.rawForm.Length = 0 then ""
   else Encoding.UTF8.GetString req.rawForm
+
+let private tryParseJson (body : string) : JsonDocument option =
+  if String.IsNullOrWhiteSpace body then None
+  else
+    try Some (JsonDocument.Parse body)
+    with _ -> None
 
 let private jsonResp (status : int) (body : string) : WebPart =
   let writer =
@@ -638,6 +675,36 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
           return! jsonResp 201 resp ctx
     with ex ->
       eprintfn "  [provisioner] %s" ex.Message
+      return! errJson 500 ex.Message ctx
+  }
+
+/// POST /admin/workspaces/<slug>/keys — mint a fresh admin API key for an
+/// existing workspace and return the plaintext once.
+let private issueWorkspaceKeyHandler (cfg : ProvisionerConfig) (slug : string) : WebPart =
+  fun ctx -> async {
+    try
+      let label =
+        match tryParseJson (readBody ctx.request) with
+        | Some doc ->
+          use _ = doc
+          match doc.RootElement.TryGetProperty "label" with
+          | true, v when v.ValueKind = JsonValueKind.String ->
+            let s = v.GetString()
+            if String.IsNullOrWhiteSpace s then "customer portal" else s.Trim()
+          | _ -> "customer portal"
+        | None -> "customer portal"
+      match issueWorkspaceKey cfg slug label with
+      | Result.Ok issued ->
+        let body =
+          sprintf
+            """{"tenantId":%s,"apiKeyId":%s,"apiKey":%s,"warning":"plaintext apiKey is shown once and cannot be recovered"}"""
+            (JsonSerializer.Serialize issued.tenantId)
+            (JsonSerializer.Serialize issued.apiKeyId)
+            (JsonSerializer.Serialize issued.apiKey)
+        return! jsonResp 201 body ctx
+      | Result.Error msg ->
+        return! errJson 503 msg ctx
+    with ex ->
       return! errJson 500 ex.Message ctx
   }
 
@@ -1368,6 +1435,8 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
                                       (fun slug -> adminAuth cfg (archiveWorkspace cfg slug))
     POST >=> pathScan "/admin/workspaces/%s/unarchive"
                                       (fun slug -> adminAuth cfg (unarchiveWorkspace cfg slug))
+    POST >=> pathScan "/admin/workspaces/%s/keys"
+                      (fun slug -> adminAuth cfg (issueWorkspaceKeyHandler cfg slug))
     POST >=> pathScan "/admin/workspaces/%s/purge"
                                       (fun slug -> adminAuth cfg (purgeWorkspace cfg slug))
   ]

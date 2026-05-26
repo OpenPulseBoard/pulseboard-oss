@@ -31,10 +31,10 @@
     td.actions { white-space: nowrap; text-align: right; }
     td.actions button, td.actions select { margin-left: .25rem; }
 
-    button.primary { background: #2563eb; color: white; border: 0; padding: .45rem .85rem; border-radius: 6px; cursor: pointer; }
-    button.primary:hover { background: #1d4ed8; }
-    button.ghost { background: transparent; color: #d1d5db; border: 1px solid #374151; padding: .35rem .65rem; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-    button.ghost:hover { background: #1f2937; }
+    button.primary, a.primary { background: #2563eb; color: white; border: 0; padding: .45rem .85rem; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+    button.primary:hover, a.primary:hover { background: #1d4ed8; text-decoration: none; }
+    button.ghost, a.ghost { background: transparent; color: #d1d5db; border: 1px solid #374151; padding: .35rem .65rem; border-radius: 6px; cursor: pointer; font-size: .85rem; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+    button.ghost:hover, a.ghost:hover { background: #1f2937; text-decoration: none; }
     button.danger { background: transparent; color: #fca5a5; border: 1px solid #7f1d1d; padding: .35rem .65rem; border-radius: 6px; cursor: pointer; font-size: .85rem; }
     button.danger:hover { background: #450a0a; }
     button[disabled], select[disabled] { opacity: .5; cursor: not-allowed; }
@@ -62,6 +62,11 @@
     .sub-row { display: flex; justify-content: space-between; gap: .5rem; padding: .55rem 0; border-bottom: 1px dashed #1f2937; font-size: .88rem; }
     .sub-row:last-child { border-bottom: 0; }
     .sub-row .meta { color: #9aa3b2; font-size: .78rem; }
+    .secret-panel { display: grid; gap: .8rem; }
+    .secret-field { width: 100%; background: #0b0e14; color: #e5e7eb; border: 1px solid #374151; border-radius: 6px; padding: .6rem .7rem; font: .84rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .secret-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .inline-spinner { display: inline-block; width: 14px; height: 14px; margin-right: .45rem; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 999px; animation: spin .8s linear infinite; vertical-align: -2px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: #9aa3b2; }
   </style>
@@ -132,6 +137,11 @@
           <h2>Account</h2>
           <div id="account-body" class="muted">Loading…</div>
         </section>
+
+        <section class="card" id="key-card" hidden>
+          <h2>Workspace access</h2>
+          <div id="key-body" class="muted">Create or rotate a key to sign in to a workspace.</div>
+        </section>
       </div>
     </div>
   </main>
@@ -140,6 +150,7 @@
     "use strict";
     const $ = (s) => document.querySelector(s);
     const tbody = document.querySelector("#ws-table tbody");
+    const accessStorageKey = "pb.latestWorkspaceAccess";
 
     // ---- toast / banner helpers ---------------------------------------
     function banner(kind, html, opts) {
@@ -194,6 +205,86 @@
       s.className = "pill " + cls;
       s.textContent = label;
       return s;
+    }
+
+    function setBusyButton(btn, text) {
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>' + escapeHtml(text);
+      return () => {
+        btn.disabled = false;
+        btn.innerHTML = original;
+      };
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "readonly");
+      ta.style.position = "absolute";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+
+    function workspaceSignInUrl(workspace, apiKey) {
+      if (!workspace || !workspace.publicUrl || !apiKey) return "";
+      return workspace.publicUrl.replace(/\/$/, "") + "/signin#key=" + encodeURIComponent(apiKey);
+    }
+
+    function rememberAccessInfo(title, workspace, keyInfo) {
+      sessionStorage.setItem(accessStorageKey, JSON.stringify({ title, workspace, keyInfo }));
+    }
+
+    function showAccessPanel(title, workspace, keyInfo) {
+      if (!workspace || !keyInfo || !keyInfo.apiKey) return;
+      const card = $("#key-card");
+      const body = $("#key-body");
+      const signInUrl = workspaceSignInUrl(workspace, keyInfo.apiKey);
+      card.hidden = false;
+      body.className = "secret-panel";
+      body.innerHTML =
+        '<div><b>' + escapeHtml(title || "Workspace key ready") + '</b><div class="muted" style="margin-top:.3rem">' +
+        'This plaintext key is shown once. Store it now; it cannot be recovered later.</div></div>' +
+        '<div><div class="muted" style="margin-bottom:.35rem">Workspace</div><div><code class="mono">' + escapeHtml(workspace.slug) + '</code></div></div>' +
+        '<div><div class="muted" style="margin-bottom:.35rem">API key</div><input class="secret-field" id="access-key-value" type="text" readonly value="' + escapeHtml(keyInfo.apiKey) + '" /></div>' +
+        '<div class="secret-actions">' +
+          '<button type="button" class="primary" id="copy-access-key">Copy key</button>' +
+          (signInUrl ? '<a class="ghost" id="open-access-signin" href="' + signInUrl + '">Open workspace sign-in</a>' : '') +
+          (workspace.publicUrl ? '<a class="ghost" href="' + workspace.publicUrl + '" target="_blank" rel="noopener">Open workspace</a>' : '') +
+        '</div>' +
+        (keyInfo.warning ? '<div class="muted">' + escapeHtml(keyInfo.warning) + '</div>' : '');
+      const copyBtn = $("#copy-access-key");
+      if (copyBtn) {
+        copyBtn.onclick = async () => {
+          try {
+            await copyText(keyInfo.apiKey);
+            banner("ok", "Workspace key copied to the clipboard.");
+          } catch (e) {
+            banner("err", "Could not copy the workspace key: " + escapeHtml(e.message || String(e)));
+          }
+        };
+      }
+      const keyField = $("#access-key-value");
+      if (keyField) keyField.focus();
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function restoreAccessPanel() {
+      const raw = sessionStorage.getItem(accessStorageKey);
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.workspace && parsed.keyInfo) {
+          showAccessPanel(parsed.title, parsed.workspace, parsed.keyInfo);
+        }
+      } catch (_) {}
     }
 
     // ---- handle checkout-return query string --------------------------
@@ -325,6 +416,27 @@
     }
 
     // ---- billing card -------------------------------------------------
+        } else if (w.status === "live") {
+          const keyBtn = document.createElement("button");
+          keyBtn.className = "ghost";
+          keyBtn.textContent = "Create key";
+          keyBtn.onclick = async () => {
+            const reset = setBusyButton(keyBtn, "Creating key…");
+            try {
+              const keyInfo = await api("POST", `/api/portal/workspaces/${w.slug}/keys`, {
+                label: `customer portal ${new Date().toISOString()}`
+              });
+              rememberAccessInfo("Workspace key created", w, keyInfo);
+              showAccessPanel("Workspace key created", w, keyInfo);
+              banner("ok", `Created a new sign-in key for <code class="mono">${escapeHtml(w.slug)}</code>.`, { autohide: false });
+            } catch (e) {
+              banner("err", "Key creation failed: " + escapeHtml(e.message));
+            } finally {
+              reset();
+            }
+          };
+          actCell.appendChild(keyBtn);
+
     function renderBilling(billing) {
       const el = $("#billing-body");
       el.innerHTML = "";
@@ -448,34 +560,41 @@
       const slug = f.slug.value.trim();
       const plan = f.plan.value;
       const submitBtn = f.querySelector("button[type=submit]");
-      submitBtn.disabled = true;
+      const resetSubmit = setBusyButton(submitBtn, "Creating…");
       try {
         // Always create the workspace at the requested plan. For
         // paid plans, immediately push the customer into Stripe
         // checkout — the webhook keeps `pb_customer_workspaces.plan`
         // in sync with subscription status, and `cancelAtPeriodEnd`
         // is what eventually downgrades on payment failure.
-        await api("POST", "/api/portal/workspaces", { slug, plan });
+        const created = await api("POST", "/api/portal/workspaces", { slug, plan });
+        const createdWs = created && created.workspace ? created.workspace : null;
+        const createdKey = created && created.bootstrap ? created.bootstrap : null;
+        if (createdWs && createdKey) {
+          rememberAccessInfo("Workspace created", createdWs, createdKey);
+          showAccessPanel("Workspace created", createdWs, createdKey);
+        }
+        const createdSlug = createdWs && createdWs.slug ? createdWs.slug : slug;
         if (plan === "starter" || plan === "pro") {
           try {
-            const r = await api("POST", `/api/portal/workspaces/${slug}/checkout`, { plan });
+            const r = await api("POST", `/api/portal/workspaces/${createdSlug}/checkout`, { plan });
             location.href = r.url;
             return;
           } catch (e) {
             banner("warn",
-              `Workspace <code class="mono">${escapeHtml(slug)}</code> was created, ` +
+              `Workspace <code class="mono">${escapeHtml(createdSlug)}</code> was created, ` +
               `but checkout failed: ${escapeHtml(e.message)}. ` +
               `You can retry from the plan switcher.`);
           }
         } else {
-          banner("ok", `Workspace <code class="mono">${escapeHtml(slug)}</code> created.`);
+          banner("ok", `Workspace <code class="mono">${escapeHtml(createdSlug)}</code> created.`);
         }
         f.reset();
         refresh();
       } catch (e) {
         banner("err", "Create failed: " + escapeHtml(e.message));
       } finally {
-        submitBtn.disabled = false;
+        resetSubmit();
       }
     });
 
@@ -488,6 +607,7 @@
 
     // ---- boot ---------------------------------------------------------
     consumeReturnParams();
+    restoreAccessPanel();
     refresh();
   </script>
 </body>

@@ -82,10 +82,10 @@
 <script>
 const form = document.getElementById('f');
 const errEl = document.getElementById('err');
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
+const keyInput = document.getElementById('key');
+
+async function submitKey(key) {
   errEl.style.display = 'none';
-  const key = document.getElementById('key').value.trim();
   if (!key.startsWith('pk_')) {
     errEl.textContent = 'API keys start with "pk_". Check that you pasted the full secret.';
     errEl.style.display = 'block'; return;
@@ -106,7 +106,22 @@ form.addEventListener('submit', async (e) => {
     errEl.textContent = e.message || String(e);
     errEl.style.display = 'block';
   }
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await submitKey(keyInput.value.trim());
 });
+
+(function tryHashKey() {
+  const raw = location.hash.startsWith('#') ? location.hash.substring(1) : '';
+  const hash = new URLSearchParams(raw);
+  const key = hash.get('key');
+  if (!key) return;
+  keyInput.value = key;
+  history.replaceState({}, '', location.pathname + location.search);
+  submitKey(key);
+})();
 </script>
 
 </body>
