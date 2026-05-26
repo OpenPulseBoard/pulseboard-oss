@@ -401,27 +401,12 @@
             catch (e) { banner("err", "Unarchive failed: " + escapeHtml(e.message)); }
           };
           actCell.appendChild(btn);
-        } else if (w.status !== "failed") {
-          const btn = document.createElement("button"); btn.className = "danger"; btn.textContent = "Archive";
-          btn.onclick = async () => {
-            if (!confirm(`Archive ${w.slug}? It will become unreachable; data is retained.`)) return;
-            try { await api("POST", `/api/portal/workspaces/${w.slug}/archive`); refresh(); }
-            catch (e) { banner("err", "Archive failed: " + escapeHtml(e.message)); }
-          };
-          actCell.appendChild(btn);
-        }
-        tr.appendChild(actCell);
-        tbody.appendChild(tr);
-      }
-    }
-
-    // ---- billing card -------------------------------------------------
         } else if (w.status === "live") {
           const keyBtn = document.createElement("button");
           keyBtn.className = "ghost";
           keyBtn.textContent = "Create key";
           keyBtn.onclick = async () => {
-            const reset = setBusyButton(keyBtn, "Creating key…");
+            const reset = setBusyButton(keyBtn, "Creating key...");
             try {
               const keyInfo = await api("POST", `/api/portal/workspaces/${w.slug}/keys`, {
                 label: `customer portal ${new Date().toISOString()}`
@@ -437,6 +422,28 @@
           };
           actCell.appendChild(keyBtn);
 
+          const btn = document.createElement("button"); btn.className = "danger"; btn.textContent = "Archive";
+          btn.onclick = async () => {
+            if (!confirm(`Archive ${w.slug}? It will become unreachable; data is retained.`)) return;
+            try { await api("POST", `/api/portal/workspaces/${w.slug}/archive`); refresh(); }
+            catch (e) { banner("err", "Archive failed: " + escapeHtml(e.message)); }
+          };
+          actCell.appendChild(btn);
+        } else if (w.status !== "failed") {
+          const btn = document.createElement("button"); btn.className = "danger"; btn.textContent = "Archive";
+          btn.onclick = async () => {
+            if (!confirm(`Archive ${w.slug}? It will become unreachable; data is retained.`)) return;
+            try { await api("POST", `/api/portal/workspaces/${w.slug}/archive`); refresh(); }
+            catch (e) { banner("err", "Archive failed: " + escapeHtml(e.message)); }
+          };
+          actCell.appendChild(btn);
+        }
+        tr.appendChild(actCell);
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ---- billing card -------------------------------------------------
     function renderBilling(billing) {
       const el = $("#billing-body");
       el.innerHTML = "";
