@@ -23,7 +23,7 @@ ENV PULSE_BIND_ADDR=::,0.0.0.0
 VOLUME /data
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "PulseBoard.dll"]
-# argv (--site-only, --mode=provisioner, --multi-tenant …) is set by
-# each Fly app's [processes].app line.
+# argv (--multi-tenant, --role=storage, --role=edge …) is set by the
+# workspace deploy that consumes this image.
 
 

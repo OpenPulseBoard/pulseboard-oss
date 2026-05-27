@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseBoard Cloud Docs</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f2e8;
+      --panel: #fffaf0;
+      --ink: #1f1a14;
+      --muted: #6b6256;
+      --accent: #b44c2f;
+      --line: #d9ccb7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", serif;
+      background: linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 48px 24px 72px;
+    }
+    nav a {
+      color: var(--accent);
+      text-decoration: none;
+      margin-right: 16px;
+      font-weight: 600;
+    }
+    .panel {
+      margin-top: 28px;
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 14px 40px rgba(31, 26, 20, 0.08);
+    }
+    h1 { font-size: clamp(2.2rem, 5vw, 4rem); margin: 0 0 12px; }
+    h2 { margin: 0 0 10px; font-size: 1.2rem; }
+    p, li { color: var(--muted); line-height: 1.65; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(180, 76, 47, 0.08);
+      color: var(--ink);
+    }
+    ul { padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/signup">Sign up</a>
+      <a href="/signin">Sign in</a>
+    </nav>
+    <section class="panel">
+      <h1>PulseBoard Cloud docs</h1>
+      <p>
+        This standalone cloud build serves the hosted control-plane surface.
+        Workspace product docs still live with the OSS workspace runtime.
+      </p>
+    </section>
+    <section class="panel">
+      <h2>What lives here</h2>
+      <ul>
+        <li>Customer auth under <code>/api/auth/*</code></li>
+        <li>Portal APIs under <code>/api/portal/*</code></li>
+        <li>Provisioner-facing signup flow on the apex host</li>
+      </ul>
+    </section>
+    <section class="panel">
+      <h2>What does not live here</h2>
+      <p>
+        Ingest, query, dashboards, alerts, retention, and the operator UI stay
+        on each workspace runtime. Those are part of the OSS product surface.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

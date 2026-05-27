@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseBoard OSS</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f2;
+      --card: #ffffff;
+      --ink: #17211d;
+      --muted: #5f6d66;
+      --accent: #1f7a57;
+      --line: #d8e2db;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: radial-gradient(circle at top left, #eef8f1, var(--bg) 60%);
+      color: var(--ink);
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 56px 24px 72px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 18px 45px rgba(23, 33, 29, 0.08);
+    }
+    h1 { margin: 0 0 12px; font-size: clamp(2.4rem, 6vw, 4.4rem); }
+    p { color: var(--muted); line-height: 1.65; }
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 24px;
+    }
+    a {
+      text-decoration: none;
+      color: white;
+      background: var(--accent);
+      padding: 11px 16px;
+      border-radius: 999px;
+      font-weight: 700;
+    }
+    a.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>PulseBoard OSS</h1>
+      <p>
+        This build is the self-hosted workspace runtime: ingest, query,
+        dashboards, alerts, retention, traces, admin APIs, and operator UI.
+        Hosted customer accounts, signup, and provisioning live in the cloud
+        control plane, not in this binary.
+      </p>
+      <div class="links">
+        <a href="/app">Open App</a>
+        <a class="secondary" href="/docs">Read Docs</a>
+        <a class="secondary" href="/signin">Operator Sign-in</a>
+        <a class="secondary" href="/pricing">Pricing API</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

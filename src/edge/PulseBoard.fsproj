@@ -55,55 +55,6 @@
     <Compile Include="Rum.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="Signup.fs" />
-    <!-- Cloud-only code: hosted control plane (provisioner, site-only proxy,
-         workspace registry). Lives in src/cloud/ to keep the OSS/SaaS
-         boundary visible; will move to a private repo before the OSS
-         release. See src/cloud/README.md. -->
-    <Compile Include="..\cloud\AdminOidc.fs">
-      <Link>cloud\AdminOidc.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\Provisioner.fs">
-      <Link>cloud\Provisioner.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\PgWorkspaceRegistry.fs">
-      <Link>cloud\PgWorkspaceRegistry.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\CustomerAuth.fs">
-      <Link>cloud\CustomerAuth.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\PgCustomerStore.fs">
-      <Link>cloud\PgCustomerStore.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\EmailSender.fs">
-      <Link>cloud\EmailSender.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\GithubOAuth.fs">
-      <Link>cloud\GithubOAuth.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\CustomerAuthApi.fs">
-      <Link>cloud\CustomerAuthApi.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\PortalStore.fs">
-      <Link>cloud\PortalStore.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\StripeClient.fs">
-      <Link>cloud\StripeClient.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\StripeStore.fs">
-      <Link>cloud\StripeStore.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\PortalApi.fs">
-      <Link>cloud\PortalApi.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\FreeTierSleeper.fs">
-      <Link>cloud\FreeTierSleeper.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\PurgeCron.fs">
-      <Link>cloud\PurgeCron.fs</Link>
-    </Compile>
-    <Compile Include="..\cloud\SiteOnly.fs">
-      <Link>cloud\SiteOnly.fs</Link>
-    </Compile>
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -117,47 +68,16 @@
     <None Include="wwwroot/docs.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <!-- Cloud-only marketing pages. Linked into output wwwroot/ so the
-         single binary still serves them today; when src/cloud/ moves to
-         the private repo these four entries go with it. -->
-    <None Include="..\cloud\wwwroot\home.html">
-      <Link>wwwroot\home.html</Link>
+    <None Include="wwwroot/home.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\cloud\wwwroot\workspace.html">
-      <Link>wwwroot\workspace.html</Link>
+    <None Include="wwwroot/workspace.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\cloud\wwwroot\pricing.html">
-      <Link>wwwroot\pricing.html</Link>
+    <None Include="wwwroot/pricing.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\cloud\wwwroot\signup.html">
-      <Link>wwwroot\signup.html</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\signin.html">
-      <Link>wwwroot\signin.html</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\operator-signin.html">
-      <Link>wwwroot\operator-signin.html</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\forgot.html">
-      <Link>wwwroot\forgot.html</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\reset.html">
-      <Link>wwwroot\reset.html</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\_auth.css">
-      <Link>wwwroot\_auth.css</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\cloud\wwwroot\portal.html">
-      <Link>wwwroot\portal.html</Link>
+    <None Include="wwwroot/operator-signin.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/uPlot.iife.min.js">

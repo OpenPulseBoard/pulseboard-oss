@@ -2,6 +2,7 @@ module PulseBoard.Signup
 
 open System
 open System.Collections.Concurrent
+open System.Security.Cryptography
 open System.Text
 open System.Text.Json
 open System.Text.RegularExpressions
@@ -60,6 +61,21 @@ let private tryGetString (el : JsonElement) (name : string) : string option =
     let s = v.GetString()
     if String.IsNullOrWhiteSpace s then None else Some (s.Trim())
   | _ -> None
+
+let private ctEq (a : string) (b : string) =
+  let ab = Encoding.UTF8.GetBytes (if isNull a then "" else a)
+  let bb = Encoding.UTF8.GetBytes (if isNull b then "" else b)
+  CryptographicOperations.FixedTimeEquals(ab, bb)
+
+let private tryBearer (req : HttpRequest) : string option =
+  match req.header "authorization" with
+  | Choice1Of2 raw ->
+    let s = raw.Trim()
+    if s.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) then
+      let token = s.Substring(7).Trim()
+      if token = "" then None else Some token
+    else None
+  | Choice2Of2 _ -> None
 
 // -- slug validation --------------------------------------------------------
 
@@ -200,6 +216,52 @@ let private signup (store : ITenantStore) (limiter : SignupRateLimiter)
                 return! errJson 500 ex.Message ctx
   }
 
+// -- POST /api/bootstrap/keys ----------------------------------------------
+
+let private issueBootstrapKey (store : ITenantStore) (secret : string) : WebPart =
+  fun ctx -> async {
+    match tryBearer ctx.request with
+    | None -> return! errJson 401 "missing bearer token" ctx
+    | Some token when not (ctEq token secret) ->
+      return! errJson 401 "invalid bearer token" ctx
+    | Some _ ->
+      match tryParseJson (readBody ctx.request) with
+      | None ->
+        return! errJson 400 "invalid JSON body" ctx
+      | Some doc ->
+        use _ = doc
+        let root = doc.RootElement
+        match tryGetString root "tenantId" with
+        | None ->
+          return! errJson 400 "field 'tenantId' is required" ctx
+        | Some tenantId ->
+          match store.TryGetTenant (TenantId tenantId) with
+          | None ->
+            return! errJson 404 "tenant not found" ctx
+          | Some t ->
+            let label =
+              tryGetString root "label"
+              |> Option.defaultValue "customer portal"
+            try
+              let issued =
+                store.IssueApiKey(
+                  t.id,
+                  label,
+                  Admin,
+                  Scope.Ingest ||| Scope.Query ||| Scope.Admin)
+              let (ApiKeyId kid) = issued.record.id
+              let (TenantId tid) = t.id
+              let body =
+                sprintf
+                  """{"tenantId":%s,"apiKeyId":%s,"apiKey":%s,"warning":"plaintext apiKey is shown once and cannot be recovered"}"""
+                  (JsonSerializer.Serialize tid)
+                  (JsonSerializer.Serialize kid)
+                  (JsonSerializer.Serialize issued.plaintext)
+              return! jsonResp 201 body ctx
+            with ex ->
+              return! errJson 400 ex.Message ctx
+  }
+
 // -- GET /api/wizard/snippets ----------------------------------------------
 //
 // Returns a per-language batch of copy-paste blocks. We bake host + key
@@ -305,8 +367,11 @@ let defaultLimiter () = SignupRateLimiter(5, 3600)
 /// Public onboarding routes. Mount BEFORE any tenant gate so the
 /// unauthenticated front door is reachable.
 let webPart (store : ITenantStore) (limiter : SignupRateLimiter)
-            (log : IAuditLog) : WebPart =
+            (log : IAuditLog) (bootstrapToken : string option) : WebPart =
   choose [
     POST >=> path "/api/signup"           >=> signup store limiter log
+    (match bootstrapToken with
+     | Some token -> POST >=> path "/api/bootstrap/keys" >=> issueBootstrapKey store token
+     | None -> fun _ -> async { return None })
     GET  >=> path "/api/wizard/snippets"  >=> wizardSnippets
   ]

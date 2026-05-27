@@ -15,7 +15,6 @@ open Suave.Filters
 open Suave.Successful
 open Suave.RequestErrors
 open Suave.ServerErrors
-open PulseBoard.Tenancy
 
 // Phase 9 — per-customer workspace provisioner.
 //
@@ -516,6 +515,11 @@ type ProvisionerConfig =
     /// its heartbeats. When `None`, workspaces still come up — they
     /// just won't heartbeat (admin portal shows them as never-seen).
     provisionerPublicUrl : string option
+    /// Shared bearer injected into every new workspace as
+    /// `PULSE_BOOTSTRAP_TOKEN` and used by the provisioner to call the
+    /// workspace-owned `/api/bootstrap/keys` endpoint. This replaces the
+    /// old direct Postgres key issuance path.
+    workspaceBootstrapToken : string option
     /// Apex public URL (e.g. `https://pulseboard.cloud`). When `Some`
     /// alongside `apexHeartbeatToken`, every new workspace machine
     /// receives `PULSE_APEX_HEARTBEAT_URL` + `PULSE_APEX_HEARTBEAT_TOKEN`
@@ -533,35 +537,42 @@ type ProvisionerConfig =
     /// the portal is bearer-only (the original behaviour).
     adminOidc            : AdminOidc.Config option }
 
-let private workspaceSchemaConn (adminCs : string) (slug : string) : string =
-  let schema = "pb_" + slug.Replace('-', '_')
-  let csb = NpgsqlConnectionStringBuilder(adminCs)
-  csb.SearchPath <- schema
-  csb.ConnectionString
-
-let private issueWorkspaceKey (cfg : ProvisionerConfig) (slug : string)
-                              (label : string) : Result<BootstrapResult, string> =
+let private issueWorkspaceKey (cfg : ProvisionerConfig) (http : HttpClient)
+                              (slug : string) (label : string)
+                              : Async<Result<BootstrapResult, string>> = async {
   match cfg.registry.TryGetBySlug slug with
-  | None -> Result.Error "workspace not found"
+  | None -> return Result.Error "workspace not found"
   | Some row ->
-    match row.tenantId, cfg.postgresConn with
-    | None, _ -> Result.Error "workspace tenant is not recorded yet"
-    | _, None -> Result.Error "workspace key minting requires postgres-backed workspaces"
-    | Some tenantId, Some adminCs ->
+    match row.tenantId, cfg.workspaceBootstrapToken with
+    | None, _ -> return Result.Error "workspace tenant is not recorded yet"
+    | _, None -> return Result.Error "workspace bootstrap token is not configured"
+    | Some tenantId, Some token ->
       try
-        let cs = workspaceSchemaConn adminCs slug
-        let store = PulseBoard.PgTenantStore.PgTenantStore(cs) :> ITenantStore
-        let issued =
-          store.IssueApiKey(
-            TenantId tenantId,
-            label,
-            Admin,
-            Scope.Ingest ||| Scope.Query ||| Scope.Admin)
-        let (ApiKeyId kid) = issued.record.id
-        cfg.registry.Update slug (fun cur -> { cur with apiKeyId = Some kid })
-        Result.Ok { tenantId = tenantId; apiKeyId = kid; apiKey = issued.plaintext }
+        let url = row.upstreamUrl.TrimEnd('/') + "/api/bootstrap/keys"
+        let body =
+          sprintf """{"tenantId":%s,"label":%s}"""
+            (JsonSerializer.Serialize tenantId)
+            (JsonSerializer.Serialize label)
+        use req = new HttpRequestMessage(HttpMethod.Post, url)
+        req.Headers.Authorization <- AuthenticationHeaderValue("Bearer", token)
+        req.Content <- new StringContent(body, Encoding.UTF8, "application/json")
+        let! resp = http.SendAsync req |> Async.AwaitTask
+        let! txt = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+        if not resp.IsSuccessStatusCode then
+          return Result.Error (sprintf "workspace key issue %s -> %d: %s" url (int resp.StatusCode) txt)
+        else
+          use doc = JsonDocument.Parse txt
+          let root = doc.RootElement
+          let g (name : string) = root.GetProperty(name).GetString()
+          let issued =
+            { tenantId = g "tenantId"
+              apiKeyId = g "apiKeyId"
+              apiKey = g "apiKey" }
+          cfg.registry.Update slug (fun cur -> { cur with apiKeyId = Some issued.apiKeyId })
+          return Result.Ok issued
       with ex ->
-        Result.Error ex.Message
+        return Result.Error ex.Message
+}
 
 // -- HTTP surface -----------------------------------------------------------
 
@@ -647,6 +658,12 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
                 else m |> Map.add "PULSE_APEX_HEARTBEAT_TOKEN" tok
               { withSlug with envExtra = m }
             | _ -> withSlug
+          let machineCfg =
+            match cfg.workspaceBootstrapToken with
+            | Some tok when not (machineCfg.envExtra.ContainsKey "PULSE_BOOTSTRAP_TOKEN") ->
+              { machineCfg with
+                  envExtra = machineCfg.envExtra |> Map.add "PULSE_BOOTSTRAP_TOKEN" tok }
+            | _ -> machineCfg
           let! ws = cfg.fly.CreateWorkspace(finalSlug, email, machineCfg)
           // Record before bootstrap so /provision/ask works as soon as
           // Caddy receives the first cert request.
@@ -682,7 +699,8 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
 /// for an existing workspace and return the plaintext once. Unauthenticated
 /// at HTTP layer; safe because the provisioner listens on Fly's private
 /// flycast network only (same security model as /api/provision).
-let private issueWorkspaceKeyHandler (cfg : ProvisionerConfig) (slug : string) : WebPart =
+let private issueWorkspaceKeyHandler (cfg : ProvisionerConfig) (http : HttpClient)
+                                    (slug : string) : WebPart =
   fun ctx -> async {
     try
       let label =
@@ -695,7 +713,8 @@ let private issueWorkspaceKeyHandler (cfg : ProvisionerConfig) (slug : string) :
             if String.IsNullOrWhiteSpace s then "customer portal" else s.Trim()
           | _ -> "customer portal"
         | None -> "customer portal"
-      match issueWorkspaceKey cfg slug label with
+      let! issuedR = issueWorkspaceKey cfg http slug label
+      match issuedR with
       | Result.Ok issued ->
         let body =
           sprintf
@@ -1417,7 +1436,7 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
        >=> Writers.setMimeType "application/json")
     POST >=> path "/api/provision" >=> provision cfg http
     POST >=> pathScan "/api/provision/workspaces/%s/keys"
-                      (fun slug -> issueWorkspaceKeyHandler cfg slug)
+                      (fun slug -> issueWorkspaceKeyHandler cfg http slug)
     GET  >=> path "/provision/ask"   >=> askOrRoute cfg true
     GET  >=> path "/provision/route" >=> askOrRoute cfg false
     POST >=> path "/provision/heartbeat" >=> heartbeat cfg

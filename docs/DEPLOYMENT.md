@@ -77,14 +77,14 @@ CI and the smoke tests.
 
 ### 2.4 Hosted product (Fly Machines + Caddy)
 
-Three logical tiers, all from the same binary. See §6 for the full
-details.
+Three logical tiers, built from two .NET entrypoints. See §6 for the
+full details.
 
 | Tier | Binary | Hostname | What it does |
 | --- | --- | --- | --- |
-| Marketing | `pulseboard --site-only` | `pulseboard.cloud` | Serves only `/`, `/docs`, `/pricing`, `/signup`, `/signin`. Proxies `POST /api/signup` to the provisioner. |
-| Provisioner | `pulseboard --mode=provisioner` | internal (e.g. `provisioner.flycast`) | Allocates a subdomain, spawns a Fly Machine, bootstraps the first API key, answers Caddy's on-demand TLS questions. |
-| Workspace | `pulseboard --multi-tenant` (one Fly app per customer) | `<slug>.pulseboard.cloud` | Real ingest + dashboard + admin. |
+| Marketing | `dotnet PulseBoard.Cloud.dll --site-only` | `pulseboard.cloud` | Serves only `/`, `/docs`, `/pricing`, `/signup`, `/signin`. Proxies `POST /api/signup` to the provisioner. |
+| Provisioner | `dotnet PulseBoard.Cloud.dll --mode=provisioner` | internal (e.g. `provisioner.flycast`) | Allocates a subdomain, spawns a Fly Machine, bootstraps the first API key, answers Caddy's on-demand TLS questions. |
+| Workspace | `dotnet PulseBoard.dll --multi-tenant` (one Fly app per customer) | `<slug>.pulseboard.cloud` | Real ingest + dashboard + admin. |
 
 ---
 
@@ -154,7 +154,17 @@ CLI flags worth knowing:
 
 ---
 
-## 5. Docker (illustrative)
+## 5. Container images
+
+PulseBoard now ships two application images plus the Caddy front door:
+
+| Image | Dockerfile | Entrypoint | Used for |
+| --- | --- | --- | --- |
+| Workspace image | [`../Dockerfile`](../Dockerfile) | `dotnet PulseBoard.dll` | Self-hosted OSS deployments and each provisioned customer workspace. Published as `registry.fly.io/pulseboard1`. |
+| Cloud image | [`../cloud.Dockerfile`](../cloud.Dockerfile) | `dotnet PulseBoard.Cloud.dll` | Hosted `--site-only` marketing host and `--mode=provisioner` control plane. Published as `registry.fly.io/pulseboard-cloud`. |
+| Caddy image | [`../caddy.Dockerfile`](../caddy.Dockerfile) | `caddy run ...` | Public TLS terminator for `pulseboard.cloud` and `*.pulseboard.cloud`. |
+
+### 5.1 Workspace image
 
 ```dockerfile
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
@@ -178,20 +188,55 @@ docker run --rm -p 8080:8080 -v pulse-data:/data \
   pulseboard:latest --multi-tenant
 ```
 
+### 5.2 Cloud image
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet publish src/cloud/PulseBoard.Cloud.fsproj -c Release -o /out \
+    /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /out .
+ENV PULSE_BIND_ADDR=::,0.0.0.0
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "PulseBoard.Cloud.dll"]
+```
+
+Run the hosted marketing site locally:
+
+```bash
+docker build -f cloud.Dockerfile -t pulseboard-cloud:latest .
+docker run --rm -p 8080:8080 \
+  -e PULSE_PROVISIONER_URL=http://host.docker.internal:19001 \
+  pulseboard-cloud:latest --site-only
+```
+
+Run the provisioner locally:
+
+```bash
+docker run --rm -p 19001:8080 \
+  pulseboard-cloud:latest --mode=provisioner --dry-run
+```
+
 ---
 
 ## 6. Provisioning per-customer subdomains
 
 Implemented on **Fly Machines** + **Caddy on-demand TLS**. Three moving
-pieces, all from the same binary:
+pieces, with the hosted control plane built from `src/cloud/` and each
+workspace built from `src/edge/`:
 
 ```
                   pulseboard.cloud (Caddy in front)
                           │
               ┌───────────┴───────────┐
               ▼                       ▼
-     pulseboard --site-only    pulseboard --mode=provisioner
-     (apex marketing host)     (slug → Fly Machine registry)
+ dotnet PulseBoard.Cloud.dll   dotnet PulseBoard.Cloud.dll
+        --site-only               --mode=provisioner
+   (apex marketing host)       (slug → Fly Machine registry)
               │                       │ POST Fly Machines API
               │ POST /api/signup      ▼
               └──── proxied ────►  spawns pb-<slug> Fly app
@@ -199,23 +244,23 @@ pieces, all from the same binary:
                                   on https://pb-<slug>.fly.dev
 ```
 
-### 6.1 Marketing host — `pulseboard --site-only`
+### 6.1 Marketing host — `dotnet PulseBoard.Cloud.dll --site-only`
 
 Serves only `/`, `/home`, `/docs`, `/pricing`, `/signup`, `/signin`. Has
 no tenant store, no quota state, no ingest or query routes. POST
 `/api/signup` is forwarded verbatim to `--provisioner-url=…`.
 
 ```bash
-dotnet PulseBoard.dll --site-only \
+dotnet PulseBoard.Cloud.dll --site-only \
   --port=8080 \
   --provisioner-url=http://provisioner.internal:8080
-# or: PULSE_PROVISIONER_URL=http://… dotnet PulseBoard.dll --site-only
+# or: PULSE_PROVISIONER_URL=http://… dotnet PulseBoard.Cloud.dll --site-only
 ```
 
 If `--provisioner-url` is not set the static pages still work; signup
 attempts return HTTP 503 with a clear error.
 
-### 6.2 Provisioner — `pulseboard --mode=provisioner`
+### 6.2 Provisioner — `dotnet PulseBoard.Cloud.dll --mode=provisioner`
 
 Three endpoints:
 
@@ -241,7 +286,7 @@ Run live:
 
 ```bash
 FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard \
-  dotnet PulseBoard.dll --mode=provisioner --port=8080 \
+  dotnet PulseBoard.Cloud.dll --mode=provisioner --port=8080 \
     --root-domain=pulseboard.cloud \
     --workspace-image=registry.fly.io/pulseboard1:latest
 ```
@@ -249,9 +294,9 @@ FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard \
 Run dry (no credentials needed, useful for testing the marketing flow):
 
 ```bash
-dotnet PulseBoard.dll --mode=provisioner --dry-run --port=19001
+dotnet PulseBoard.Cloud.dll --mode=provisioner --dry-run --port=19001
 # In another shell:
-dotnet PulseBoard.dll --site-only --port=19002 \
+dotnet PulseBoard.Cloud.dll --site-only --port=19002 \
   --provisioner-url=http://127.0.0.1:19001
 curl -X POST http://127.0.0.1:19002/api/signup \
   -H 'content-type: application/json' \
@@ -315,7 +360,7 @@ focused on the provisioning plumbing.
 ## 7. Customer portal, auth, and billing (Phase 10)
 
 Phase 10 layers a customer-facing tier on top of the §6 provisioning
-stack. The marketing host (`--site-only`) gains:
+stack. The marketing host (`dotnet PulseBoard.Cloud.dll --site-only`) gains:
 
 - `/signup`, `/signin`, `/portal` — customer SPA pages.
 - `/api/auth/*` — email/password + GitHub OAuth, issues a

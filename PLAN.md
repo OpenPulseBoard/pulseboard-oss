@@ -1326,19 +1326,17 @@ Three states: **live**, **archived**, **purged**.
   contract.
 - [`infra/cloud/Caddyfile`](infra/cloud/Caddyfile) — hosted edge TLS +
   dynamic upstream config.
-- The unified `src/edge/PulseBoard.fsproj` links the cloud files in
-  via `<Compile Include="..\cloud\…">` / `<None …><Link>wwwroot\…`
-  so today's single binary continues to ship both surfaces. Build +
-  smoke verified clean.
+- `src/edge/PulseBoard.fsproj` is now workspace-only, and hosted modes
+  live behind `src/cloud/PulseBoard.Cloud.fsproj`. The edge entrypoint
+  fails fast on `--site-only` / `--mode=provisioner`; build verified
+  clean on both projects.
 
 **Step 2 (deferred).** Extract `src/cloud/` and `infra/cloud/` into a
-private `pulseboard/cloud` repo via `git filter-repo`, drop the four
-`..\cloud\…` items from the OSS fsproj, drop the `--mode=provisioner`
-and `--site-only` early-dispatch branches from `Program.fs`, and add a
-minimal `src/edge/wwwroot/home.html` self-host stub. Cloud repo builds
-its own provisioner/site-only binary and uses the OSS docker image as
-the workspace image. Trigger: when we're ready to flip the OSS repo
-public.
+private `pulseboard/cloud` repo via `git filter-repo`. The remaining
+work is packaging and repo separation: keep the bootstrap contracts
+stable, publish the hosted image from `cloud.Dockerfile`, and let the
+cloud repo consume the OSS workspace image strictly as the workspace
+artifact when we're ready to flip the OSS repo public.
 
 ---
 

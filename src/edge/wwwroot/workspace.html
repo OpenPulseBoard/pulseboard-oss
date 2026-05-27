@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseBoard Workspace</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f1eb;
+      --panel: #fffdf9;
+      --ink: #201a14;
+      --muted: #72675b;
+      --accent: #9d4f2e;
+      --line: #ddd1c2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, serif;
+      background: linear-gradient(180deg, #fcfaf6, var(--bg));
+      color: var(--ink);
+    }
+    main { max-width: 960px; margin: 0 auto; padding: 56px 24px 72px; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--panel);
+      padding: 30px;
+      box-shadow: 0 20px 55px rgba(32, 26, 20, 0.08);
+    }
+    h1 { margin: 0 0 12px; font-size: clamp(2.2rem, 5vw, 4rem); }
+    p { color: var(--muted); line-height: 1.7; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+    a {
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: transparent;
+    }
+    a.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>Your self-hosted PulseBoard workspace</h1>
+      <p>
+        Use the app for dashboards and exploration, the admin UI for tenant and
+        API-key management, and the operator sign-in page when you need a manual
+        entry path. Public workspace creation belongs to the hosted apex, not to
+        an existing workspace.
+      </p>
+      <div class="actions">
+        <a class="primary" href="/app">Open App</a>
+        <a href="/admin">Admin</a>
+        <a href="/signin">Operator Sign-in</a>
+        <a href="/docs">Docs</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

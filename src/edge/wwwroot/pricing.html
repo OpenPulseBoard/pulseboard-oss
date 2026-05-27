@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseBoard Pricing</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef3f8;
+      --card: #ffffff;
+      --ink: #18212d;
+      --muted: #637183;
+      --accent: #295ea8;
+      --line: #d8e1ec;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f7faff, var(--bg));
+      color: var(--ink);
+      padding: 40px 20px 60px;
+    }
+    main { max-width: 980px; margin: 0 auto; }
+    .hero, .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: 0 18px 50px rgba(24, 33, 45, 0.08);
+    }
+    .card { margin-top: 20px; }
+    h1 { margin: 0 0 10px; font-size: clamp(2rem, 5vw, 3.4rem); }
+    p { color: var(--muted); line-height: 1.65; }
+    pre {
+      overflow: auto; padding: 16px; border-radius: 16px;
+      background: #0f1722; color: #e5edf8;
+    }
+    button {
+      margin-top: 14px; border: 0; border-radius: 999px;
+      padding: 11px 16px; background: var(--accent); color: white;
+      font-weight: 700; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>Pricing surface</h1>
+      <p>
+        The OSS workspace keeps the public pricing API so the billing math is
+        inspectable. Hosted marketing presentation belongs to the cloud apex;
+        this page is the self-hosted fallback.
+      </p>
+      <button id="load">Load /api/pricing</button>
+    </section>
+    <section class="card">
+      <pre id="out">Click “Load /api/pricing” to fetch the current rate card.</pre>
+    </section>
+  </main>
+  <script>
+    document.getElementById('load').addEventListener('click', async () => {
+      const out = document.getElementById('out');
+      out.textContent = 'Loading...';
+      try {
+        const res = await fetch('/api/pricing');
+        const text = await res.text();
+        out.textContent = text;
+      } catch (err) {
+        out.textContent = 'Request failed: ' + String(err);
+      }
+    });
+  </script>
+</body>
+</html>

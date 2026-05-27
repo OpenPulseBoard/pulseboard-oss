@@ -1,4 +1,4 @@
-# fly.toml — pulseboard --mode=provisioner (control plane)
+# fly.toml — dotnet PulseBoard.Cloud.dll --mode=provisioner (control plane)
 #
 # Allocates per-customer slugs, spawns Fly Machines via the Fly API,
 # and answers Caddy's on-demand TLS questions (/provision/ask,
@@ -20,21 +20,22 @@
 #   PULSE_WORKSPACE_IMAGE  (default registry.fly.io/pulseboard1:latest)
 #
 # Deploy:
+#   fly apps create pulseboard-cloud      # backs registry.fly.io/pulseboard-cloud
 #   fly apps create pulseboard-provisioner
 #   fly postgres create --name pulseboard-pg --region iad   # or use external PG
 #   fly postgres attach pulseboard-pg -a pulseboard-provisioner
 #   fly secrets set -a pulseboard-provisioner \
 #       FLY_API_TOKEN=fo1_… FLY_ORG_SLUG=pulseboard
-#   fly deploy -a pulseboard-provisioner --config provisioner.toml
+#   fly deploy -a pulseboard-provisioner --config infra/cloud/fly/provisioner.toml
 
 app            = "pulseboard-provisioner"
 primary_region = "iad"
 
 [build]
-  image = "registry.fly.io/pulseboard1:latest"
+  image = "registry.fly.io/pulseboard-cloud:latest"
 
 [processes]
-  app = "dotnet PulseBoard.dll --mode=provisioner --port=8080"
+  app = "dotnet PulseBoard.Cloud.dll --mode=provisioner --port=8080"
 
 [env]
   PULSE_ROOT_DOMAIN     = "pulseboard.cloud"

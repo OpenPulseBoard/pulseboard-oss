@@ -32,6 +32,7 @@
 #   PULSE_NOTIFY_SMTP_HOST, PULSE_NOTIFY_SMTP_USER, PULSE_NOTIFY_SMTP_PASS
 #
 # Manual deploy (for debugging / canary slug):
+#   fly apps create pulseboard1           # backs registry.fly.io/pulseboard1
 #   fly apps create pb-canary --org pulseboard
 #   fly volumes create pulse_data --size 10 --region iad -a pb-canary
 #   fly secrets set -a pb-canary \

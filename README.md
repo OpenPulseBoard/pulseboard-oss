@@ -6,6 +6,13 @@ PulseBoard started as a single-binary F#/Suave demo and is on its way to a
 full SaaS observability product. The roadmap, decisions, and acceptance
 tests are in [PLAN.md](PLAN.md).
 
+Today there are two operator-facing build targets in-tree:
+
+| Target | Project / image | Used for |
+| --- | --- | --- |
+| OSS workspace runtime | [`src/edge/PulseBoard.fsproj`](src/edge/PulseBoard.fsproj), [`Dockerfile`](Dockerfile) | Self-hosted PulseBoard and the per-customer `pb-<slug>` workspaces in the hosted product. CI publishes `registry.fly.io/pulseboard1`. |
+| Hosted control plane | [`src/cloud/PulseBoard.Cloud.fsproj`](src/cloud/PulseBoard.Cloud.fsproj), [`cloud.Dockerfile`](cloud.Dockerfile) | `--site-only` marketing/signup host and `--mode=provisioner` control-plane service. CI publishes `registry.fly.io/pulseboard-cloud`. |
+
 | | |
 | --- | --- |
 | **Status** | Pre-alpha. APIs and storage formats can change without notice. |
@@ -16,6 +23,11 @@ tests are in [PLAN.md](PLAN.md).
 ---
 
 ## Quick start
+
+The commands below are for the OSS workspace runtime. If you are deploying
+the hosted marketing site or provisioner, use
+[`src/cloud/PulseBoard.Cloud.fsproj`](src/cloud/PulseBoard.Cloud.fsproj)
+instead; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ```bash
 # Build
@@ -84,6 +96,14 @@ sub-second alerts.
 The edge service code now lives under [src/edge/](src/edge/). The
 sibling `src/control-plane/` and `src/ui/` trees are still stubs to be
 filled per [PLAN.md](PLAN.md).
+
+For operators, the practical split today is simpler than the target tree:
+
+- [src/edge/](src/edge/) is the OSS/runtime product.
+- [src/cloud/](src/cloud/) is the hosted-only control plane that will move
+  to its own private repo.
+- [Dockerfile](Dockerfile) packages the workspace runtime.
+- [cloud.Dockerfile](cloud.Dockerfile) packages the hosted site/provisioner runtime.
 
 ## Contributing
 

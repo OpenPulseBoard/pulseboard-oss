@@ -14,8 +14,8 @@ open System.Text
 //
 // This first cut intentionally ships:
 //   * the core record types (`Customer`, `EmailToken`, `CustomerSession`),
-//   * password hashing / verification (Argon2id, reusing the same params
-//     as `Tenancy.argon2idHash`),
+//   * password hashing / verification (Argon2id, cloud-owned but kept
+//     wire-compatible with the workspace-side algorithm tags),
 //   * an `ICustomerStore` interface,
 //   * an in-memory implementation suitable for dev + tests.
 //
@@ -122,27 +122,48 @@ type PasswordHash =
     salt : byte[]
     algo : string }
 
+// Keep the cloud-side password hashing tags byte-for-byte compatible with
+// the workspace-side tenant/api-key hashing tags so future migrations can
+// reason about one shared on-disk shape even after the repo split.
+let private argon2DefaultTime  = 3
+let private argon2DefaultMemKb = 65_536
+let private argon2DefaultPara  = 2
+
+let private argon2idTag (time : int) (memKb : int) (para : int) =
+  sprintf "argon2id:t=%d,m=%d,p=%d" time memKb para
+
+let private argon2idHash (secret : string) (salt : byte[])
+                         (time : int) (memKb : int) (para : int) : byte[] =
+  use a =
+    new Konscious.Security.Cryptography.Argon2id(
+      Encoding.UTF8.GetBytes secret,
+      Salt = salt,
+      Iterations = time,
+      MemorySize = memKb,
+      DegreeOfParallelism = para)
+  a.GetBytes 32
+
 /// Hash a fresh password under the current Argon2id parameters
-/// (`Tenancy.argon2DefaultTime/MemKb/Para` — OWASP 2024 baseline).
+/// (OWASP 2024 baseline).
 /// Generates a fresh random salt. The plaintext is never retained.
 let hashPassword (plaintext : string) : PasswordHash =
   if isNull plaintext then
     nullArg "plaintext"
   let salt = newSalt ()
   let hash =
-    Tenancy.argon2idHash
+    argon2idHash
       plaintext
       salt
-      Tenancy.argon2DefaultTime
-      Tenancy.argon2DefaultMemKb
-      Tenancy.argon2DefaultPara
+      argon2DefaultTime
+      argon2DefaultMemKb
+      argon2DefaultPara
   { hash = hash
     salt = salt
     algo =
-      Tenancy.argon2idTag
-        Tenancy.argon2DefaultTime
-        Tenancy.argon2DefaultMemKb
-        Tenancy.argon2DefaultPara }
+      argon2idTag
+        argon2DefaultTime
+        argon2DefaultMemKb
+        argon2DefaultPara }
 
 /// Verify `plaintext` against a stored hash in constant time. Dispatches
 /// on the algorithm tag so a future parameter bump (e.g. m=128 MiB)
@@ -155,16 +176,14 @@ let verifyPassword (plaintext : string) (salt : byte[]) (algo : string)
   if isNull plaintext || isNull salt || isNull algo || isNull expected then
     false
   else
-    // Parse the algo tag the same way `Tenancy.parseArgon2Params` does.
-    // (That helper is `private`; we re-implement the half-dozen lines
-    // here to keep the boundary clean rather than widening the
-    // Tenancy surface for a single caller.)
+    // Parse the self-describing algo tag so parameter bumps keep
+    // verifying historical hashes without widening the public surface.
     if not (algo.StartsWith("argon2id", StringComparison.OrdinalIgnoreCase)) then
       false
     else
-      let mutable t = Tenancy.argon2DefaultTime
-      let mutable m = Tenancy.argon2DefaultMemKb
-      let mutable p = Tenancy.argon2DefaultPara
+      let mutable t = argon2DefaultTime
+      let mutable m = argon2DefaultMemKb
+      let mutable p = argon2DefaultPara
       let payload =
         let i = algo.IndexOf ':'
         if i < 0 then "" else algo.Substring(i + 1)
@@ -178,7 +197,7 @@ let verifyPassword (plaintext : string) (salt : byte[]) (algo : string)
             | "m" -> m <- !v
             | "p" -> p <- !v
             | _   -> ()
-      let candidate = Tenancy.argon2idHash plaintext salt t m p
+      let candidate = argon2idHash plaintext salt t m p
       CryptographicOperations.FixedTimeEquals(
         ReadOnlySpan candidate, ReadOnlySpan expected)
 
@@ -187,12 +206,12 @@ let verifyPassword (plaintext : string) (salt : byte[]) (algo : string)
 /// Uses a constant dummy salt and the default parameters.
 let verifyDummy (plaintext : string) : unit =
   let salt = Array.zeroCreate 16  // all-zero is fine — we discard the result
-  Tenancy.argon2idHash
+  argon2idHash
     (if isNull plaintext then "" else plaintext)
     salt
-    Tenancy.argon2DefaultTime
-    Tenancy.argon2DefaultMemKb
-    Tenancy.argon2DefaultPara
+    argon2DefaultTime
+    argon2DefaultMemKb
+    argon2DefaultPara
   |> ignore
 
 // -- email + refresh token helpers ------------------------------------------

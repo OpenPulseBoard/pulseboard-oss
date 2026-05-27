@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseBoard Operator Sign-in</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f0f4f4;
+      --card: #ffffff;
+      --ink: #182122;
+      --muted: #617071;
+      --accent: #0e6e78;
+      --line: #d4dfe0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f8fbfb, var(--bg));
+      color: var(--ink);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(560px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(24, 33, 34, 0.08);
+    }
+    h1 { margin: 0 0 10px; font-size: 2rem; }
+    p { color: var(--muted); line-height: 1.6; }
+    label { display: block; margin: 18px 0 8px; font-weight: 700; }
+    textarea {
+      width: 100%; min-height: 118px; resize: vertical;
+      border-radius: 14px; border: 1px solid var(--line); padding: 14px;
+      font: inherit;
+    }
+    button {
+      margin-top: 18px; border: 0; border-radius: 999px;
+      padding: 12px 18px; background: var(--accent); color: white;
+      font-weight: 700; cursor: pointer;
+    }
+    .note { margin-top: 16px; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <h1>Operator sign-in</h1>
+    <p>
+      Paste an admin-scoped API key. This page is for break-glass and local
+      operator access on a self-hosted workspace; customer account sign-in lives
+      on the hosted apex.
+    </p>
+    <label for="key">API key</label>
+    <textarea id="key" placeholder="pk_..." spellcheck="false"></textarea>
+    <button id="continue">Continue to admin</button>
+    <p class="note" id="msg"></p>
+  </section>
+  <script>
+    const key = document.getElementById('key');
+    const msg = document.getElementById('msg');
+    document.getElementById('continue').addEventListener('click', async () => {
+      const token = key.value.trim();
+      if (!token) {
+        msg.textContent = 'Paste an API key first.';
+        return;
+      }
+      try {
+        const res = await fetch('/auth/me', {
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        if (!res.ok) {
+          msg.textContent = 'Key rejected by /auth/me.';
+          return;
+        }
+        sessionStorage.setItem('pb.bearer', token);
+        window.location.href = '/admin';
+      } catch (err) {
+        msg.textContent = 'Request failed: ' + String(err);
+      }
+    });
+  </script>
+</body>
+</html>

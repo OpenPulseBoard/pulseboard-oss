@@ -1,4 +1,4 @@
-# fly.toml — pulseboard --site-only (apex marketing host)
+# fly.toml — dotnet PulseBoard.Cloud.dll --site-only (apex marketing host)
 #
 # Serves /, /home, /docs, /pricing, /signup, /signin and proxies
 # POST /api/signup to the provisioner. No tenant data, no ingest.
@@ -7,19 +7,20 @@
 # Reached only from pulseboard-caddy over flycast (no public IP).
 #
 # Deploy:
+#   fly apps create pulseboard-cloud      # backs registry.fly.io/pulseboard-cloud
 #   fly apps create pulseboard-site
 #   fly secrets set -a pulseboard-site \
 #       PULSE_PROVISIONER_URL=http://pulseboard-provisioner.flycast
-#   fly deploy -a pulseboard-site --config site.toml
+#   fly deploy -a pulseboard-site --config infra/cloud/fly/site.toml
 
 app            = "pulseboard-site"
 primary_region = "iad"
 
 [build]
-  image = "registry.fly.io/pulseboard1:latest"
+  image = "registry.fly.io/pulseboard-cloud:latest"
 
 [processes]
-  app = "dotnet PulseBoard.dll --site-only --port=8080"
+  app = "dotnet PulseBoard.Cloud.dll --site-only --port=8080"
 
 [env]
   # PULSE_PROVISIONER_URL is set via `fly secrets set`.
