@@ -271,7 +271,7 @@ let private callProvisionerIssueKey (cfg : ProvisionerClient)
     | Some tok ->
       try
         let url =
-          sprintf "%s/admin/workspaces/%s/keys"
+          sprintf "%s/api/provision/workspaces/%s/keys"
             (cfg.baseUrl.TrimEnd '/')
             (Uri.EscapeDataString slug)
         let body = sprintf """{"label":%s}""" (JsonSerializer.Serialize label)

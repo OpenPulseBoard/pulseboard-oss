@@ -678,8 +678,10 @@ let private provision (cfg : ProvisionerConfig) (httpForBootstrap : HttpClient) 
       return! errJson 500 ex.Message ctx
   }
 
-/// POST /admin/workspaces/<slug>/keys — mint a fresh admin API key for an
-/// existing workspace and return the plaintext once.
+/// POST /api/provision/workspaces/<slug>/keys — mint a fresh admin API key
+/// for an existing workspace and return the plaintext once. Unauthenticated
+/// at HTTP layer; safe because the provisioner listens on Fly's private
+/// flycast network only (same security model as /api/provision).
 let private issueWorkspaceKeyHandler (cfg : ProvisionerConfig) (slug : string) : WebPart =
   fun ctx -> async {
     try
@@ -1414,6 +1416,8 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
       (OK """{"status":"ok","role":"provisioner"}"""
        >=> Writers.setMimeType "application/json")
     POST >=> path "/api/provision" >=> provision cfg http
+    POST >=> pathScan "/api/provision/workspaces/%s/keys"
+                      (fun slug -> issueWorkspaceKeyHandler cfg slug)
     GET  >=> path "/provision/ask"   >=> askOrRoute cfg true
     GET  >=> path "/provision/route" >=> askOrRoute cfg false
     POST >=> path "/provision/heartbeat" >=> heartbeat cfg
@@ -1435,8 +1439,6 @@ let webPart (cfg : ProvisionerConfig) : WebPart =
                                       (fun slug -> adminAuth cfg (archiveWorkspace cfg slug))
     POST >=> pathScan "/admin/workspaces/%s/unarchive"
                                       (fun slug -> adminAuth cfg (unarchiveWorkspace cfg slug))
-    POST >=> pathScan "/admin/workspaces/%s/keys"
-                      (fun slug -> adminAuth cfg (issueWorkspaceKeyHandler cfg slug))
     POST >=> pathScan "/admin/workspaces/%s/purge"
                                       (fun slug -> adminAuth cfg (purgeWorkspace cfg slug))
   ]
