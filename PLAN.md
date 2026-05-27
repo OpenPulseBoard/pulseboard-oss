@@ -1336,23 +1336,57 @@ private `pulseboard/cloud` repo via `git filter-repo`. The remaining
 work is packaging and repo separation: keep the bootstrap contracts
 stable, publish the hosted image from `cloud.Dockerfile`, and let the
 cloud repo consume the OSS workspace image strictly as the workspace
-artifact when we're ready to flip the OSS repo public.
+artifact when we're ready to flip the OSS repo public. The current
+cross-repo surface is frozen in `docs/CONTRACT.md`.
 
 ---
 
 ## Repository extraction checklist (next step)
 
-To move PulseBoard into its own tree + GitHub repo:
+The code is now ready for a two-repo split. The remaining work is a
+disciplined extraction and cutover, not more architecture work.
 
-1. Decide repo name + org (suggest `pulseboard/pulseboard`).
-2. Copy `examples/PulseBoard/` to the new repo root as `src/edge/`
-   (rename to make room for `src/storage/`, `src/control-plane/`,
-   `infra/`, `docs/`, etc.).
-3. Vendor or paket-publish the small slice of Suave we actually use, or
-   pin to upstream Suave 3.x via NuGet — drop the in-tree
-   `ProjectReference` to `../../src/Suave/Suave.fsproj`.
-4. Add: `LICENSE`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-   `SECURITY.md`, `.github/workflows/ci.yml` (dotnet build/test +
-   lint), Dependabot config, issue + PR templates.
-5. Carry this `PLAN.md` to the repo root.
-6. Stand up project board mirroring the phases above.
+### Pre-split freeze
+
+1. Freeze the HTTP and image boundary in `docs/CONTRACT.md` and treat it
+  as the only supported cloud <-> workspace interface.
+2. Keep `registry.fly.io/pulseboard1` as the workspace image and
+  `registry.fly.io/pulseboard-cloud` as the cloud image.
+3. Keep the current combined image workflow only until the split branch
+  lands; after that, the OSS repo publishes the workspace image and the
+  cloud repo publishes the cloud image.
+
+### Extract the private cloud repo
+
+1. Create a new private repo, e.g. `pulseboard-cloud`.
+2. Extract history with `git filter-repo` using the hosted paths:
+  `src/cloud/`, `infra/cloud/`, and hosted-only runbooks such as
+  `infra/runbooks/portal-and-billing.md`.
+3. In the extracted repo, keep `cloud.Dockerfile`, hosted deployment
+  docs, Fly configs, and the cloud image publication workflow.
+4. Update the extracted repo so it references the OSS workspace image as
+  an external artifact rather than assuming same-repo source access.
+
+### Clean the OSS repo after extraction
+
+1. Remove `src/cloud/`, `infra/cloud/`, `cloud.Dockerfile`, and cloud
+  image publication logic from the OSS repo.
+2. Keep `src/edge/`, `Dockerfile`, OSS docs, and self-hosted assets.
+3. Trim `docs/DEPLOYMENT.md` down to OSS/self-host guidance and move
+  hosted deployment details into the private cloud repo.
+4. Update `README.md` so public users see only the OSS product and a
+  high-level note that hosted control-plane code lives in a separate
+  private repo.
+
+### Post-split verification
+
+1. OSS CI builds `src/edge/PulseBoard.fsproj` and publishes only
+  `registry.fly.io/pulseboard1`.
+2. Cloud CI builds `src/cloud/PulseBoard.Cloud.fsproj` and publishes only
+  `registry.fly.io/pulseboard-cloud`.
+3. A dry-run provision flow succeeds with the cloud repo consuming a
+  pinned workspace image tag from the OSS repo.
+4. No repo contains source files owned by the other side.
+
+Use `docs/REPO_SPLIT.md` as the executable command checklist for the
+actual extraction and cleanup.

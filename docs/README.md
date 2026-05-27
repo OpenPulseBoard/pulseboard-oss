@@ -20,3 +20,9 @@ docs/
 ```
 
 Nothing here yet — track progress in PLAN.md phase 7 (Commercial surface).
+
+Current hand-maintained docs in this folder:
+
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — operator deployment guide
+- [`CONTRACT.md`](CONTRACT.md) — cloud/workspace split contract used for the repo split
+- [`REPO_SPLIT.md`](REPO_SPLIT.md) — exact extraction and cleanup commands for the two-repo split

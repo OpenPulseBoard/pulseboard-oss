@@ -6,12 +6,15 @@ PulseBoard started as a single-binary F#/Suave demo and is on its way to a
 full SaaS observability product. The roadmap, decisions, and acceptance
 tests are in [PLAN.md](PLAN.md).
 
-Today there are two operator-facing build targets in-tree:
+This repository is the OSS workspace/runtime product.
 
 | Target | Project / image | Used for |
 | --- | --- | --- |
-| OSS workspace runtime | [`src/edge/PulseBoard.fsproj`](src/edge/PulseBoard.fsproj), [`Dockerfile`](Dockerfile) | Self-hosted PulseBoard and the per-customer `pb-<slug>` workspaces in the hosted product. CI publishes `registry.fly.io/pulseboard1`. |
-| Hosted control plane | [`src/cloud/PulseBoard.Cloud.fsproj`](src/cloud/PulseBoard.Cloud.fsproj), [`cloud.Dockerfile`](cloud.Dockerfile) | `--site-only` marketing/signup host and `--mode=provisioner` control-plane service. CI publishes `registry.fly.io/pulseboard-cloud`. |
+| OSS workspace runtime | [`src/edge/PulseBoard.fsproj`](src/edge/PulseBoard.fsproj), [`Dockerfile`](Dockerfile) | Self-hosted PulseBoard and the workspace image used by the hosted product. CI publishes `registry.fly.io/pulseboard1`. |
+
+Hosted control-plane code now lives outside this repo. The public OSS
+repo exposes the workspace/runtime only; the hosted cloud side consumes
+the published workspace image and the documented HTTP contract.
 
 | | |
 | --- | --- |
@@ -24,10 +27,7 @@ Today there are two operator-facing build targets in-tree:
 
 ## Quick start
 
-The commands below are for the OSS workspace runtime. If you are deploying
-the hosted marketing site or provisioner, use
-[`src/cloud/PulseBoard.Cloud.fsproj`](src/cloud/PulseBoard.Cloud.fsproj)
-instead; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The commands below are for the OSS workspace runtime.
 
 ```bash
 # Build
@@ -68,8 +68,7 @@ open http://127.0.0.1:8775/
 | HTTP Basic auth gate on `/ingest/*` (per-token)         | [src/edge/Auth.fs](src/edge/Auth.fs) |
 | Single-page dark dashboard                              | [src/edge/wwwroot/index.html](src/edge/wwwroot/index.html) |
 | Query API (`/api/metrics`, `/api/metrics/<n>`, `/api/logs`) | [src/edge/Query.fs](src/edge/Query.fs) |
-| Customer signup / signin / member portal + Stripe billing | [src/cloud/PortalApi.fs](src/cloud/PortalApi.fs), [src/cloud/StripeClient.fs](src/cloud/StripeClient.fs) |
-| Free-tier idle-sleep sweeper (archives after N days idle) | [src/cloud/FreeTierSleeper.fs](src/cloud/FreeTierSleeper.fs) |
+| Self-host landing, operator sign-in, pricing page        | [src/edge/wwwroot/home.html](src/edge/wwwroot/home.html), [src/edge/wwwroot/operator-signin.html](src/edge/wwwroot/operator-signin.html), [src/edge/wwwroot/pricing.html](src/edge/wwwroot/pricing.html) |
 
 ## Where it's going
 
@@ -97,13 +96,12 @@ The edge service code now lives under [src/edge/](src/edge/). The
 sibling `src/control-plane/` and `src/ui/` trees are still stubs to be
 filled per [PLAN.md](PLAN.md).
 
-For operators, the practical split today is simpler than the target tree:
+For operators, the practical ownership in this repo is straightforward:
 
 - [src/edge/](src/edge/) is the OSS/runtime product.
-- [src/cloud/](src/cloud/) is the hosted-only control plane that will move
-  to its own private repo.
 - [Dockerfile](Dockerfile) packages the workspace runtime.
-- [cloud.Dockerfile](cloud.Dockerfile) packages the hosted site/provisioner runtime.
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers self-host and workspace-image usage.
+- [docs/CONTRACT.md](docs/CONTRACT.md) documents the HTTP/image contract the hosted control plane consumes.
 
 ## Contributing
 
