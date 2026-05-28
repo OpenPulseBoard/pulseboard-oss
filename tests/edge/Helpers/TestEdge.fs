@@ -12,6 +12,9 @@ open PulseBoard.Tenancy
 open PulseBoard.Quotas
 open PulseBoard.TimeSeries
 open PulseBoard.Audit
+open PulseBoard.Hub
+open PulseBoard.Storage
+open PulseBoard.Gateway
 
 // ---------------------------------------------------------------------------
 // TestEdge — an in-process Suave host for integration tests.
@@ -38,7 +41,8 @@ type TestStores =
     QuotaStore  : QuotaStore
     Limiter     : Limiter
     MetricStore : MetricStore
-    LogStore    : LogStore }
+    LogStore    : LogStore
+    Storage     : IStorageClient }
 
 /// A running test environment. Dispose to stop the Suave server.
 [<NoComparison; NoEquality>]
@@ -67,12 +71,18 @@ let makeStores () : TestStores =
   let limiter     = Limiter(quotaStore)
   let metricStore = MetricStore(capacityPerMetric = 4096)
   let logStore    = LogStore(capacity = 4096)
+  let hub         = Broadcaster()
+  let metricBack  = EmbeddedMetricBackend(metricStore, None) :> IMetricBackend
+  let logBack     = EmbeddedLogBackend(logStore)             :> ILogBackend
+  let traceBack   = EmbeddedTraceBackend()                   :> ITraceBackend
+  let storage     = InProcessStorageClient(metricBack, logBack, traceBack, hub) :> IStorageClient
   { TenantStore = tenantStore
     AuditLog    = auditLog
     QuotaStore  = quotaStore
     Limiter     = limiter
     MetricStore = metricStore
-    LogStore    = logStore }
+    LogStore    = logStore
+    Storage     = storage }
 
 /// Pick a free TCP port by binding briefly to port 0.
 let private freePort () =
@@ -90,11 +100,15 @@ let start (stores : TestStores) : TestEnv =
   let baseUrl = sprintf "http://127.0.0.1:%d" port
   let cts = new CancellationTokenSource()
 
-  // Minimal WebPart: health check only.
-  // Phase 11.4 will thread stores into Ingest / Query / Auth / Admin WebParts.
+  // Minimal WebPart: health check, ingest, and query routes.
+  // Ingest and Query WebParts are wired with no quotas / secrets / meters
+  // so tests exercise the storage path without multi-tenant overhead.
   let app =
     choose [
-      GET >=> path "/api/healthz" >=> OK """{"ok":true}"""
+      GET  >=> path "/api/healthz" >=> OK """{"ok":true}"""
+      pathStarts "/ingest" >=>
+        PulseBoard.Ingest.webPart stores.Storage None None None None None
+      PulseBoard.Query.webPart stores.MetricStore stores.LogStore None None
     ]
 
   let suaveCfg =

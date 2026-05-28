@@ -31,6 +31,11 @@
     <Compile Include="Properties/PlansPropertyTests.fs" />
     <Compile Include="Properties/SpansPropertyTests.fs" />
     <Compile Include="Properties/TenancyPropertyTests.fs" />
+    <!-- Integration tests (Category=Postgres requires Docker; Category=Integration runs in-process) -->
+    <Compile Include="Integration/PgTenantStoreTests.fs" />
+    <Compile Include="Integration/PgAuditLogTests.fs" />
+    <Compile Include="Integration/PgOverridesTests.fs" />
+    <Compile Include="Integration/HttpApiTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
