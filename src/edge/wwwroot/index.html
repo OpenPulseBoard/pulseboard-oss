@@ -385,6 +385,41 @@
     /* Leaflet dark-mode overrides */
     .geomap .leaflet-tile-pane { filter:brightness(.7) saturate(.8); }
     .geomap .leaflet-control-attribution { font-size:9px; opacity:.5; }
+  /* ── Phase 12.3 Dashboard Ergonomics ──────────────────────────────────── */
+  .vars-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px;
+              padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--border);
+              min-height:36px; }
+  .vars-bar.hidden { display:none; }
+  .var-chip { display:inline-flex; align-items:center; gap:5px; }
+  .var-chip label { font-size:11px; color:var(--muted); white-space:nowrap; }
+  .var-chip select, .var-chip input[type=text] {
+    background:var(--panel-2); border:1px solid var(--border); color:var(--fg);
+    border-radius:4px; padding:2px 6px; font-size:12px; min-width:70px; }
+  .var-chip select[multiple] { min-height:28px; max-height:90px; }
+  .btn-active { background:var(--accent) !important; color:#fff !important; }
+  .panel.has-links .title::after { content:" ↗"; font-size:10px; opacity:.5; cursor:pointer; }
+  /* ergonomics modals */
+  .ergn-back { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:200;
+               display:flex; align-items:center; justify-content:center; }
+  .ergn-back.hidden { display:none; }
+  .ergn-modal { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:20px; width:min(700px,94vw); max-height:82vh;
+    display:flex; flex-direction:column; gap:12px; }
+  .ergn-modal h3 { margin:0; font-size:14px; }
+  .ergn-modal-body { overflow-y:auto; flex:1; }
+  .ergn-modal-foot { display:flex; gap:8px; justify-content:flex-end; align-items:center; }
+  .rev-row { display:flex; align-items:center; gap:10px; padding:7px 0;
+             border-bottom:1px solid var(--border); }
+  .rev-ts  { font-size:11px; color:var(--muted); flex-shrink:0; white-space:nowrap; }
+  .rev-lbl { flex:1; font-size:12px; }
+  .share-ta { width:100%; height:120px; background:var(--bg); border:1px solid var(--border);
+              color:var(--fg); border-radius:4px; padding:6px; font-size:11px;
+              font-family:monospace; resize:vertical; box-sizing:border-box; }
+  .var-row { display:grid; grid-template-columns:130px 90px 1fr auto; gap:6px;
+             padding:6px 0; border-bottom:1px solid var(--border); align-items:center; }
+  .var-row input, .var-row select {
+    background:var(--panel-2); border:1px solid var(--border); color:var(--fg);
+    border-radius:4px; padding:2px 6px; font-size:11px; width:100%; }
   </style>
 </head>
 <body>
@@ -433,13 +468,81 @@
         <option value="30">30s</option>
         <option value="60">60s</option>
       </select>
-      <button id="refresh-now">⟳</button>
+      <button id="refresh-now" title="Refresh now">⟳</button>
+      <select id="saved-views" title="Saved views" style="max-width:110px;">
+        <option value="">— Views —</option>
+      </select>
+      <button id="save-view-btn" title="Save current time range + variables as a named view">+ View</button>
+      <button id="compare-toggle" title="Overlay the same query shifted 7 days into the past">⚭ Compare</button>
+      <button id="live-toggle" title="WS-driven live streaming (sub-second refresh)">⦿ Live</button>
+      <button id="share-btn" title="Export, snapshot URL, or import dashboard">Share</button>
+      <button id="history-btn" title="Browse and restore past revisions">History</button>
       <button id="edit-toggle">✎ Edit</button>
+      <button id="vars-edit-btn" class="hidden" title="Edit template variables">Variables</button>
       <button id="add-panel" class="hidden">+ Panel</button>
       <button id="save-dash" class="primary hidden">Save</button>
     </div>
   </div>
+  <div id="vars-bar" class="vars-bar hidden"></div>
   <div class="grid" id="dash-grid"></div>
+</div>
+
+<!-- History modal (Phase 12.3) -->
+<div class="ergn-back hidden" id="history-modal">
+  <div class="ergn-modal">
+    <h3>Dashboard history <span id="hist-count" style="color:var(--muted);font-size:11px;"></span></h3>
+    <div class="ergn-modal-body" id="hist-body"></div>
+    <div class="ergn-modal-foot"><button id="hist-close">Close</button></div>
+  </div>
+</div>
+
+<!-- Share modal (Phase 12.3) -->
+<div class="ergn-back hidden" id="share-modal">
+  <div class="ergn-modal">
+    <h3>Share / Export</h3>
+    <div class="ergn-modal-body">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Snapshot URL — encodes the full dashboard; anyone with the link can view it read-only</label>
+          <div style="display:flex;gap:6px;">
+            <input id="share-url-inp" readonly style="flex:1;background:var(--panel-2);border:1px solid var(--border);color:var(--fg);border-radius:4px;padding:4px 8px;font-size:11px;font-family:monospace;" placeholder="Click Generate…" />
+            <button id="share-gen-btn">Generate</button>
+            <button id="share-copy-url-btn">Copy</button>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Embed &lt;iframe&gt;</label>
+          <input id="share-embed-inp" readonly style="width:100%;background:var(--panel-2);border:1px solid var(--border);color:var(--fg);border-radius:4px;padding:4px 8px;font-size:11px;font-family:monospace;box-sizing:border-box;" />
+          <button id="share-copy-embed-btn" style="margin-top:4px;">Copy embed code</button>
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Export / Download JSON</label>
+          <div style="display:flex;gap:6px;">
+            <button id="share-export-btn">Copy JSON to clipboard</button>
+            <button id="share-download-btn">Download .json</button>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;">Import JSON — paste a previously exported dashboard</label>
+          <textarea class="share-ta" id="share-import-ta" placeholder="Paste dashboard JSON here…"></textarea>
+          <button id="share-import-btn" class="primary" style="margin-top:4px;">Import as new dashboard</button>
+        </div>
+      </div>
+    </div>
+    <div class="ergn-modal-foot"><button id="share-close">Close</button></div>
+  </div>
+</div>
+
+<!-- Variables editor modal (Phase 12.3) -->
+<div class="ergn-back hidden" id="vars-modal">
+  <div class="ergn-modal">
+    <h3>Template variables</h3>
+    <div class="ergn-modal-body" id="vars-modal-body"></div>
+    <div class="ergn-modal-foot">
+      <button id="vars-add-btn">+ Add variable</button>
+      <button id="vars-modal-close" style="margin-left:auto;">Done</button>
+    </div>
+  </div>
 </div>
 
 <!-- Explore view -->
@@ -553,6 +656,9 @@
     <div class="field"><label>Options (key=value per line)</label>
       <textarea id="ed-opts" placeholder="unit=bytes&#10;tail=200"></textarea>
     </div>
+    <div class="field"><label>Drilldown links (title|url per line; use $var, ${__value}, ${__series})</label>
+      <textarea id="ed-links" placeholder="Open traces|/traces?service=${__series}&#10;Dashboard|/d/abc?service=$service"></textarea>
+    </div>
     <div class="field"><label>Preview</label>
       <div id="ed-preview" style="height: 160px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; position: relative;"></div>
     </div>
@@ -660,6 +766,10 @@ const state = {
   panels: new Map(),       // panelId -> { dom, uplot, data, raf }
   refreshTimer: null,
   ws: null,
+  compareMode:   false,    // 12.3 — compare-time overlay
+  compareOffset: 7 * 86400, // seconds (default: 7 days)
+  liveMode:      false,    // 12.3 — WS-driven sub-second refresh
+  history:       [],       // 12.3 — [{ts, title, snap}] ring buffer
 };
 
 function showView(name) {
@@ -683,6 +793,7 @@ function uuid() {
 // Query layer — one place that knows how to fetch any panel/explore source
 // =====================================================================
 async function runQuery(lang, expr, startMs, endMs, stepSec) {
+  expr = applyVars(expr);  // substitute template variables before sending
   const startSec = Math.floor(startMs / 1000);
   const endSec   = Math.floor(endMs / 1000);
   if (lang === "promql") {
@@ -808,6 +919,19 @@ function panelChrome(p) {
     e.stopPropagation();
     openEditor(p.id);
   });
+  // Drilldown links: Cmd+click (Mac) or Ctrl+click anywhere on the panel body.
+  const links = p.links || [];
+  if (links.length) {
+    el.classList.add("has-links");
+    el.querySelector(".body").addEventListener("click", (ev) => {
+      if (!state.editMode && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        const url = resolveLink(links[0].url, "", null);
+        if (links[0].newTab !== false) window.open(url, "_blank", "noopener,noreferrer");
+        else location.href = url;
+      }
+    });
+  }
   return el;
 }
 
@@ -840,6 +964,20 @@ async function renderPanel(p) {
   let result;
   try {
     result = await runQuery(p.queryLang, p.expr, start, now, step);
+    // Compare-time overlay: run the same query shifted backwards by compareOffset.
+    if (state.compareMode && !p.expr.startsWith("__")) {
+      try {
+        const off = state.compareOffset * 1000;
+        const cr  = await runQuery(p.queryLang, p.expr, start - off, now - off, step);
+        const lbl = formatCompareOffset(state.compareOffset);
+        if (cr.kind === "series" && cr.series.length && result.series) {
+          for (const s of cr.series) s.name += ` (${lbl})`;
+          result = { ...result, series: [...result.series, ...cr.series] };
+        } else if (cr.kind === "stat" && result.kind === "stat") {
+          result = { ...result, _compareStat: cr.value, _compareLabel: lbl };
+        }
+      } catch { /* compare is best-effort */ }
+    }
   } catch (err) {
     body.innerHTML = "";
     const e = document.createElement("div");
@@ -922,7 +1060,14 @@ function renderStat(body, result, p) {
     value = last.ys.length ? last.ys[last.ys.length - 1] : null;
   } else value = null;
   const unit = (p.options || {}).unit || "";
-  body.innerHTML = `<div class="v">${value == null ? "—" : fmtNum(value)}</div><div class="u">${unit}</div>`;
+  let delta = "";
+  if (result._compareStat != null && value != null && result._compareStat !== 0) {
+    const pct = ((value - result._compareStat) / Math.abs(result._compareStat)) * 100;
+    const sign = pct >= 0 ? "+" : "";
+    const cls  = pct >= 0 ? "color:#5cd97a" : "color:#f25f5c";
+    delta = `<div style="font-size:11px;${cls};margin-top:2px;">${sign}${pct.toFixed(1)}% vs ${result._compareLabel || "prev"}</div>`;
+  }
+  body.innerHTML = `<div class="v">${value == null ? "—" : fmtNum(value)}</div><div class="u">${unit}</div>${delta}`;
 }
 
 function renderLogs(body, result, p) {
@@ -1839,6 +1984,9 @@ async function renderNews(body, result, p) {
     body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
 }
+
+PulseBoard.registerPanel({
+  type: "timeseries",
   label: "Time series",
   queryShape: "matrix",
   render(el, frame, opts, p) { renderTimeseries(el, frame, p); },
@@ -2454,6 +2602,348 @@ PulseBoard.registerPanel({
 });
 
 // =====================================================================
+// Phase 12.3 — Dashboard Ergonomics helpers
+// =====================================================================
+
+// ── 1. Template variables ─────────────────────────────────────────────
+// Replace $varName and ${varName} in an expression with the current value
+// of the matching dashboard variable.  Multi-select values are joined
+// with "|" (Prometheus alternation); "$__all" expands to ".+" (match all).
+function applyVars(expr) {
+  const vars = (state.current && state.current.vars) || [];
+  for (const v of vars) {
+    const val = Array.isArray(v.current)
+      ? (v.allOption && v.current.includes("$__all") ? ".+" : v.current.join("|"))
+      : (v.current === "$__all" ? ".+" : (v.current || ""));
+    expr = expr.replace(new RegExp(`\\$\\{${v.name}\\}`, "g"), val);
+    expr = expr.replace(new RegExp(`\\$${v.name}(?![a-zA-Z0-9_])`, "g"), val);
+  }
+  return expr;
+}
+
+// Fetch value options for a query-type variable.
+// Supports: label_values(metric, label)  label_names()  metrics()
+async function fetchVarOptions(query, regex) {
+  let values = [];
+  const lv = query.match(/^label_values\((.+),\s*([^)]+)\)$/);
+  try {
+    if (lv) {
+      const r = await authFetch(`/api/prom/api/v1/label/${encodeURIComponent(lv[2].trim())}/values`);
+      if (r.ok) { const j = await r.json(); values = j.data || []; }
+    } else if (/^label_names\(\)$/.test(query)) {
+      const r = await authFetch(`/api/prom/api/v1/labels`);
+      if (r.ok) { const j = await r.json(); values = j.data || []; }
+    } else if (/^metrics\(\)$/.test(query)) {
+      const r = await authFetch(`/api/prom/api/v1/label/__name__/values`);
+      if (r.ok) { const j = await r.json(); values = j.data || []; }
+    }
+  } catch { /* leave values empty */ }
+  if (regex) {
+    try { const re = new RegExp(regex); values = values.filter(v => re.test(v)); } catch {}
+  }
+  return values;
+}
+
+// Build / refresh the variable picker bar below the dashboard toolbar.
+async function renderVarsBar(dashboard) {
+  const bar = $("vars-bar");
+  bar.innerHTML = "";
+  const vars = (dashboard.vars || []).filter(v => !v.hide);
+  if (!vars.length) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  for (const v of vars) {
+    const chip = document.createElement("div"); chip.className = "var-chip";
+    const lbl  = document.createElement("label"); lbl.textContent = (v.label || v.name) + ":";
+    chip.appendChild(lbl);
+    if (v.type === "textbox") {
+      const inp = document.createElement("input"); inp.type = "text"; inp.value = v.current || "";
+      inp.addEventListener("change", () => { v.current = inp.value; refreshAll(); });
+      chip.appendChild(inp);
+    } else if (v.type === "interval") {
+      const sel = document.createElement("select");
+      for (const opt of ["1m","5m","15m","30m","1h","6h","24h"]) {
+        const o = document.createElement("option"); o.value = opt; o.textContent = opt; sel.appendChild(o);
+      }
+      sel.value = v.current || "5m";
+      sel.addEventListener("change", () => { v.current = sel.value; refreshAll(); });
+      chip.appendChild(sel);
+    } else {
+      let options = [];
+      if (v.type === "custom")     options = (v.options || "").split(",").map(s => s.trim()).filter(Boolean);
+      else if (v.type === "query") options = await fetchVarOptions(v.query || "", v.regex || "").catch(() => []);
+      if (v.allOption) options = ["$__all", ...options];
+      const sel = document.createElement("select"); if (v.multi) sel.multiple = true;
+      for (const opt of options) {
+        const o = document.createElement("option"); o.value = opt;
+        o.textContent = opt === "$__all" ? "All" : opt; sel.appendChild(o);
+      }
+      if (v.multi && Array.isArray(v.current)) {
+        for (const o of sel.options) o.selected = v.current.includes(o.value);
+      } else if (v.current) {
+        sel.value = v.current;
+        if (!sel.value && sel.options.length) { sel.selectedIndex = 0; v.current = sel.value; }
+      } else if (sel.options.length) { sel.selectedIndex = 0; v.current = sel.value; }
+      sel.addEventListener("change", () => {
+        v.current = v.multi ? Array.from(sel.selectedOptions).map(o => o.value) : sel.value;
+        refreshAll();
+      });
+      chip.appendChild(sel);
+    }
+    bar.appendChild(chip);
+  }
+}
+
+// ── 2. Variables editor modal ─────────────────────────────────────────
+function openVarsEditor() {
+  if (!state.current) return;
+  if (!state.current.vars) state.current.vars = [];
+  renderVarsEditorModal();
+  $("vars-modal").classList.remove("hidden");
+}
+
+function renderVarsEditorModal() {
+  const body = $("vars-modal-body");
+  body.innerHTML = "";
+  const vars = state.current.vars || [];
+  if (!vars.length) {
+    const p = document.createElement("p");
+    p.style.cssText = "color:var(--muted);font-size:12px;padding:8px 0;";
+    p.textContent = "No variables yet. Click + Add variable.";
+    body.appendChild(p); return;
+  }
+  // Header row
+  const hdr = document.createElement("div"); hdr.className = "var-row";
+  hdr.style.fontWeight = "600"; hdr.style.borderBottom = "2px solid var(--border)";
+  hdr.innerHTML = "<span>Name</span><span>Type</span><span>Options / Query / Regex</span><span></span>";
+  body.appendChild(hdr);
+  vars.forEach((v, i) => {
+    const row = document.createElement("div"); row.className = "var-row";
+    const nameInp = document.createElement("input");
+    nameInp.value = v.name || ""; nameInp.placeholder = "var_name";
+    nameInp.addEventListener("change", () => { v.name = nameInp.value.replace(/[^a-zA-Z0-9_]/g, ""); });
+    const typeSel = document.createElement("select");
+    for (const t of ["custom","query","interval","textbox"]) {
+      const o = document.createElement("option"); o.value = t; o.textContent = t; typeSel.appendChild(o);
+    }
+    typeSel.value = v.type || "custom";
+    typeSel.addEventListener("change", () => { v.type = typeSel.value; });
+    const optInp = document.createElement("input");
+    optInp.value = v.query || v.options || ""; optInp.placeholder = "val1,val2 or label_values(m,l)";
+    optInp.addEventListener("change", () => {
+      if (v.type === "query") v.query = optInp.value; else v.options = optInp.value;
+    });
+    const del = document.createElement("button"); del.textContent = "✕"; del.className = "danger";
+    del.addEventListener("click", () => {
+      state.current.vars = state.current.vars.filter((_, j) => j !== i);
+      renderVarsEditorModal();
+    });
+    row.appendChild(nameInp); row.appendChild(typeSel); row.appendChild(optInp); row.appendChild(del);
+    body.appendChild(row);
+  });
+}
+
+// ── 3. Compare-time overlay ───────────────────────────────────────────
+// Shows the same query offset by compareOffset seconds (default 7d).
+// For series panels: appends the older series with a "(7d ago)" label.
+// For stat panels: shows a delta badge.
+function formatCompareOffset(sec) {
+  if (sec % 86400 === 0) return `${sec / 86400}d ago`;
+  if (sec % 3600 === 0)  return `${sec / 3600}h ago`;
+  return `${Math.round(sec / 60)}m ago`;
+}
+
+async function toggleCompare() {
+  state.compareMode = !state.compareMode;
+  $("compare-toggle").classList.toggle("btn-active", state.compareMode);
+  $("compare-toggle").textContent = state.compareMode ? "\u26ad Compare ON" : "\u26ad Compare";
+  await refreshAll();
+}
+
+// ── 4. Saved views (per-dashboard, localStorage) ──────────────────────
+function savedViewsKey() { return "pb.views." + (state.current && state.current.id || "?"); }
+function loadSavedViews() {
+  try { return JSON.parse(localStorage.getItem(savedViewsKey()) || "[]"); } catch { return []; }
+}
+function saveSavedViews(v) { localStorage.setItem(savedViewsKey(), JSON.stringify(v)); }
+
+function updateSavedViewsDropdown() {
+  const sel = $("saved-views"); if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">\u2014 Views \u2014</option>';
+  for (const v of loadSavedViews()) {
+    const o = document.createElement("option"); o.value = v.name; o.textContent = v.name; sel.appendChild(o);
+  }
+  sel.value = cur;
+}
+
+function saveCurrentView() {
+  const name = prompt("View name (saves time range + variable values):");
+  if (!name) return;
+  const views = loadSavedViews();
+  const vars = {};
+  for (const v of (state.current.vars || [])) vars[v.name] = v.current;
+  const entry = { name, timeRangeSec: state.current.timeRangeSec, vars };
+  const i = views.findIndex(x => x.name === name);
+  if (i >= 0) views[i] = entry; else views.push(entry);
+  saveSavedViews(views); updateSavedViewsDropdown();
+}
+
+function applyView(name) {
+  const v = loadSavedViews().find(x => x.name === name);
+  if (!v) return;
+  state.current.timeRangeSec = v.timeRangeSec;
+  $("time-range").value = String(v.timeRangeSec);
+  for (const [vn, val] of Object.entries(v.vars || {})) {
+    const vd = (state.current.vars || []).find(x => x.name === vn);
+    if (vd) vd.current = val;
+  }
+  renderVarsBar(state.current).then(() => refreshAll());
+}
+
+// ── 5. Version history (client-side ring buffer, last 15 saves) ───────
+function pushHistory(dashboard) {
+  const snap = JSON.parse(JSON.stringify(dashboard));
+  state.history.unshift({ ts: Date.now(), title: dashboard.title || "untitled", snap });
+  if (state.history.length > 15) state.history.length = 15;
+}
+
+function openHistory() {
+  const body = $("hist-body"); body.innerHTML = "";
+  $("hist-count").textContent = `(${state.history.length})`;
+  if (!state.history.length) {
+    body.innerHTML = '<p style="color:var(--muted);font-size:12px;padding:8px 0;">No history yet \u2014 revisions accumulate as you save.</p>';
+    $("history-modal").classList.remove("hidden"); return;
+  }
+  for (let i = 0; i < state.history.length; i++) {
+    const h = state.history[i];
+    const row = document.createElement("div"); row.className = "rev-row";
+    const ts  = document.createElement("span"); ts.className = "rev-ts";
+    ts.textContent = new Date(h.ts).toLocaleString();
+    const lbl = document.createElement("span"); lbl.className = "rev-lbl";
+    lbl.textContent = `${h.title}  \u00b7  ${(h.snap.panels || []).length} panels`;
+    const btn = document.createElement("button"); btn.textContent = "Restore";
+    btn.addEventListener("click", async () => {
+      if (!confirm(`Restore revision from ${ts.textContent}?`)) return;
+      try {
+        const r = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id), h.snap);
+        state.current = r || h.snap;
+        await openDashboard(state.current.id);
+      } catch (e) { alert("Restore failed: " + e.message); }
+      $("history-modal").classList.add("hidden");
+    });
+    row.appendChild(ts); row.appendChild(lbl); row.appendChild(btn);
+    body.appendChild(row);
+  }
+  $("history-modal").classList.remove("hidden");
+}
+
+// ── 6. Sharing — snapshot URL + export/import ─────────────────────────
+// Snapshot URL encodes the full dashboard JSON (deflate-raw compressed,
+// base64url encoded) in the hash so anyone can view it read-only.
+// Falls back to plain base64 on browsers without CompressionStream (<2023).
+async function compressToBase64url(str) {
+  const bytes = new TextEncoder().encode(str);
+  if (typeof CompressionStream !== "undefined") {
+    const cs = new CompressionStream("deflate-raw");
+    const w = cs.writable.getWriter(); w.write(bytes); w.close();
+    const chunks = []; const r = cs.readable.getReader();
+    for (;;) { const { done, value } = await r.read(); if (done) break; chunks.push(value); }
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let p = 0; for (const c of chunks) { out.set(c, p); p += c.length; }
+    return btoa(String.fromCharCode(...out)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+  return btoa(unescape(encodeURIComponent(str))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+async function decompressFromBase64url(b64) {
+  const raw = b64.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(raw);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (typeof DecompressionStream !== "undefined") {
+    try {
+      const ds = new DecompressionStream("deflate-raw");
+      const w = ds.writable.getWriter(); w.write(bytes); w.close();
+      const chunks = []; const r = ds.readable.getReader();
+      for (;;) { const { done, value } = await r.read(); if (done) break; chunks.push(value); }
+      const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+      let p = 0; for (const c of chunks) { out.set(c, p); p += c.length; }
+      return new TextDecoder().decode(out);
+    } catch { /* fall through to plain base64 */ }
+  }
+  return decodeURIComponent(escape(atob(raw)));
+}
+
+function openShare() {
+  if (!state.current) return;
+  $("share-url-inp").value = ""; $("share-embed-inp").value = ""; $("share-import-ta").value = "";
+  $("share-modal").classList.remove("hidden");
+}
+
+// Handles #/snapshot/... in the router — renders a read-only snapshot.
+async function loadSnapshot(encoded) {
+  try {
+    const json = await decompressFromBase64url(encoded);
+    state.current = JSON.parse(json);
+    state.current.id = state.current.id || "snapshot";
+    showView("dashboards");
+    $("dash-grid").innerHTML = ""; state.panels.clear();
+    $("time-range").value = String(state.current.timeRangeSec || 3600);
+    await renderVarsBar(state.current);
+    for (const p of state.current.panels || []) await renderPanel(p);
+    // Hide CRUD controls in read-only snapshot mode.
+    for (const id of ["dash-new","dash-rename","dash-delete","save-dash","edit-toggle"])
+      $(id).classList.add("hidden");
+    const note = document.createElement("span");
+    note.style.cssText = "font-size:11px;color:var(--muted);margin-right:8px;";
+    note.textContent = "\uD83D\uDCF8 Snapshot: " + (state.current.title || "Untitled");
+    $("dash-picker").insertAdjacentElement("afterend", note);
+  } catch (e) { alert("Failed to load snapshot: " + e.message); location.hash = "#/dashboards"; }
+}
+
+// ── 7. Live mode (WS-driven sub-second refresh) ───────────────────────
+function toggleLive() {
+  state.liveMode = !state.liveMode;
+  $("live-toggle").classList.toggle("btn-active", state.liveMode);
+  $("live-toggle").textContent = state.liveMode ? "\u29bf Live ON" : "\u29bf Live";
+  if (state.liveMode) {
+    if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
+  } else { scheduleRefresh(); }
+}
+
+// ── 8. Drilldown links ────────────────────────────────────────────────
+// Resolves link URL template tokens:
+//   ${__value}   last numeric value of the panel series
+//   ${__series}  series/metric name
+//   ${__from}    range start epoch ms
+//   ${__to}      range end epoch ms
+//   ${__dash}    current dashboard id
+//   $varName     any template variable
+function resolveLink(url, seriesName, value) {
+  const now  = Date.now();
+  const from = now - ((state.current && state.current.timeRangeSec) || 3600) * 1000;
+  url = url
+    .replace(/\$\{__value\}/g,  value   != null  ? encodeURIComponent(String(value)) : "")
+    .replace(/\$\{__series\}/g, seriesName        ? encodeURIComponent(seriesName)   : "")
+    .replace(/\$\{__from\}/g,   String(from))
+    .replace(/\$\{__to\}/g,     String(now))
+    .replace(/\$\{__dash\}/g,   (state.current && state.current.id) || "");
+  for (const v of ((state.current && state.current.vars) || [])) {
+    const val = Array.isArray(v.current) ? v.current.join(",") : (v.current || "");
+    url = url.replace(new RegExp(`\\$\\{${v.name}\\}`, "g"), encodeURIComponent(val));
+    url = url.replace(new RegExp(`\\$${v.name}(?![a-zA-Z0-9_])`, "g"), encodeURIComponent(val));
+  }
+  return url;
+}
+
+function parseLinks(text) {
+  return (text || "").split("\n").map(line => {
+    const p = line.split("|"); if (p.length < 2) return null;
+    return { title: p[0].trim(), url: p[1].trim(), newTab: p[2]?.trim() !== "false" };
+  }).filter(Boolean);
+}
+
+// =====================================================================
 // Dashboard loading + persistence
 // =====================================================================
 function pbBearer() { return sessionStorage.getItem("pb.bearer"); }
@@ -2525,6 +3015,8 @@ async function openDashboard(id) {
   $("dash-grid").innerHTML = "";
   $("time-range").value = String(d.timeRangeSec);
   $("refresh-int").value = String(d.refreshSec);
+  await renderVarsBar(d);
+  updateSavedViewsDropdown();
   for (const p of d.panels) await renderPanel(p);
   scheduleRefresh();
 }
@@ -2536,12 +3028,14 @@ async function refreshAll() {
 
 function scheduleRefresh() {
   if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
+  if (state.liveMode) return;  // WS events drive refreshes in live mode
   const sec = +$("refresh-int").value;
   if (sec > 0) state.refreshTimer = setInterval(refreshAll, sec * 1000);
 }
 
 async function saveCurrent() {
   if (!state.current) return;
+  pushHistory(state.current);
   const saved = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id),
                           state.current);
   state.current = saved;
@@ -2563,6 +3057,7 @@ function openEditor(panelId) {
   $("ed-w").value     = p.w;
   $("ed-h").value     = p.h;
   $("ed-opts").value  = Object.entries(p.options || {}).map(([k,v]) => `${k}=${v}`).join("\n");
+  $("ed-links").value = (p.links || []).map(lk => `${lk.title}|${lk.url}`).join("\n");
   $("ed-preview").innerHTML = "";
   $("editor").classList.add("open");
 }
@@ -2594,6 +3089,7 @@ function readEditorPanel() {
     w:         Math.max(1, Math.min(12, +$("ed-w").value || base.w)),
     h:         Math.max(1, +$("ed-h").value || base.h),
     options:   parseOpts($("ed-opts").value),
+    links:     parseLinks($("ed-links").value),
   };
 }
 
@@ -2777,6 +3273,11 @@ function connectWs() {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === "metric") state.liveMetrics.set(msg.name, msg.value);
     else if (msg.type === "alert") state.liveAlerts++;
+    // Live mode: debounce a full dashboard refresh when WS events arrive.
+    if (state.liveMode) {
+      clearTimeout(state._liveTmo);
+      state._liveTmo = setTimeout(refreshAll, 150);
+    }
   };
 }
 
@@ -2785,7 +3286,8 @@ function connectWs() {
 // =====================================================================
 function router() {
   const h = location.hash || "#/dashboards";
-  if (h.startsWith("#/explore"))      showView("explore");
+  if (h.startsWith("#/snapshot/"))    loadSnapshot(h.slice("#/snapshot/".length));
+  else if (h.startsWith("#/explore")) showView("explore");
   else if (h.startsWith("#/traces"))  showView("traces");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
@@ -2827,6 +3329,12 @@ $("refresh-int").addEventListener("change", async () => {
   await saveCurrent();
 });
 $("refresh-now").addEventListener("click", refreshAll);
+$("compare-toggle").addEventListener("click", toggleCompare);
+$("live-toggle").addEventListener("click", toggleLive);
+$("share-btn").addEventListener("click", openShare);
+$("history-btn").addEventListener("click", openHistory);
+$("save-view-btn").addEventListener("click", saveCurrentView);
+$("saved-views").addEventListener("change", (e) => { if (e.target.value) applyView(e.target.value); });
 $("edit-toggle").addEventListener("click", () => {
   if (!state.current) {
     alert("Open or create a dashboard first.");
@@ -2837,9 +3345,77 @@ $("edit-toggle").addEventListener("click", () => {
   $("edit-toggle").textContent = state.editMode ? "✓ Done" : "✎ Edit";
   $("add-panel").classList.toggle("hidden", !state.editMode);
   $("save-dash").classList.toggle("hidden", !state.editMode);
+  $("vars-edit-btn").classList.toggle("hidden", !state.editMode);
 });
+$("vars-edit-btn").addEventListener("click", openVarsEditor);
 $("add-panel").addEventListener("click", addPanel);
 $("save-dash").addEventListener("click", saveCurrent);
+
+// History modal
+$("hist-close").addEventListener("click", () => $("history-modal").classList.add("hidden"));
+$("history-modal").addEventListener("click", (e) => {
+  if (e.target === $("history-modal")) $("history-modal").classList.add("hidden");
+});
+
+// Share modal
+$("share-close").addEventListener("click", () => $("share-modal").classList.add("hidden"));
+$("share-modal").addEventListener("click", (e) => {
+  if (e.target === $("share-modal")) $("share-modal").classList.add("hidden");
+});
+$("share-gen-btn").addEventListener("click", async () => {
+  if (!state.current) return;
+  const enc = await compressToBase64url(JSON.stringify(state.current));
+  const url = location.origin + location.pathname + "#/snapshot/" + enc;
+  $("share-url-inp").value = url;
+  $("share-embed-inp").value = `<iframe src="${url}" width="1200" height="600" frameborder="0"></iframe>`;
+});
+$("share-copy-url-btn").addEventListener("click", () => {
+  const v = $("share-url-inp").value; if (v) navigator.clipboard.writeText(v).catch(() => {});
+});
+$("share-copy-embed-btn").addEventListener("click", () => {
+  const v = $("share-embed-inp").value; if (v) navigator.clipboard.writeText(v).catch(() => {});
+});
+$("share-export-btn").addEventListener("click", () => {
+  if (!state.current) return;
+  navigator.clipboard.writeText(JSON.stringify(state.current, null, 2)).catch(() => {});
+});
+$("share-download-btn").addEventListener("click", () => {
+  if (!state.current) return;
+  const blob = new Blob([JSON.stringify(state.current, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (state.current.title || "dashboard").replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
+  a.click(); URL.revokeObjectURL(a.href);
+});
+$("share-import-btn").addEventListener("click", async () => {
+  const text = $("share-import-ta").value.trim(); if (!text) return;
+  let dash; try { dash = JSON.parse(text); } catch { alert("Invalid JSON"); return; }
+  dash.id = "d-" + uuid();
+  dash.title = (dash.title || "Imported") + " (copy)";
+  try {
+    const saved = await api("POST", "/api/dashboards", dash);
+    $("share-modal").classList.add("hidden");
+    await reloadList(saved.id);
+  } catch (e) { alert("Import failed: " + e.message); }
+});
+
+// Variables editor modal
+$("vars-modal-close").addEventListener("click", async () => {
+  $("vars-modal").classList.add("hidden");
+  await renderVarsBar(state.current);
+  await saveCurrent();
+});
+$("vars-modal").addEventListener("click", (e) => {
+  if (e.target === $("vars-modal")) $("vars-modal").classList.add("hidden");
+});
+$("vars-add-btn").addEventListener("click", () => {
+  if (!state.current.vars) state.current.vars = [];
+  state.current.vars.push({
+    name: "var" + (state.current.vars.length + 1), label: "", type: "custom",
+    options: "", query: "", current: "", multi: false, allOption: false, regex: "", hide: false,
+  });
+  renderVarsEditorModal();
+});
 
 $("editor-close").addEventListener("click", closeEditor);
 $("ed-apply").addEventListener("click", applyEditor);
