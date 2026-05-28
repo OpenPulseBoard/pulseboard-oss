@@ -15,6 +15,7 @@ open PulseBoard.Audit
 open PulseBoard.Hub
 open PulseBoard.Storage
 open PulseBoard.Gateway
+open PulseBoard.Rbac
 
 // ---------------------------------------------------------------------------
 // TestEdge — an in-process Suave host for integration tests.
@@ -49,10 +50,23 @@ type TestStores =
 type TestEnv (stores : TestStores, baseUrl : string, cts : CancellationTokenSource) =
   member _.Stores    = stores
   member _.BaseUrl   = baseUrl
+  /// A fresh, unauthenticated HttpClient pointed at the test server.
   member _.Http      =
     let c = new HttpClient()
     c.BaseAddress <- Uri(baseUrl)
     c
+  /// A fresh HttpClient with the given API key in X-API-Key header.
+  member _.HttpWithKey (key : string) =
+    let c = new HttpClient()
+    c.BaseAddress <- Uri(baseUrl)
+    c.DefaultRequestHeaders.Add("X-API-Key", key)
+    c
+  /// Register a tenant and issue an API key; returns the plaintext key string.
+  member _.IssueKey (tenantName : string) (scope : Scope) : string =
+    let _tenant = stores.TenantStore.CreateTenant(tenantName)
+    let tid  = _tenant.id
+    let iss  = stores.TenantStore.IssueApiKey(tid, tenantName, Role.Editor, scope)
+    iss.plaintext
   interface IDisposable with
     member _.Dispose () = cts.Cancel()
 
@@ -100,14 +114,20 @@ let start (stores : TestStores) : TestEnv =
   let baseUrl = sprintf "http://127.0.0.1:%d" port
   let cts = new CancellationTokenSource()
 
-  // Minimal WebPart: health check, ingest, and query routes.
-  // Ingest and Query WebParts are wired with no quotas / secrets / meters
-  // so tests exercise the storage path without multi-tenant overhead.
+  // Full WebPart: health check, all ingest endpoints, all query endpoints.
+  // No auth middleware — single-tenant mode suitable for protocol tests.
   let app =
     choose [
       GET  >=> path "/api/healthz" >=> OK """{"ok":true}"""
       pathStarts "/ingest" >=>
         PulseBoard.Ingest.webPart stores.Storage None None None None None
+      POST >=> path "/v1/metrics" >=>
+        PulseBoard.Otlp.metrics stores.Storage None
+      POST >=> path "/loki/api/v1/push" >=>
+        PulseBoard.LokiPush.handler stores.Storage None
+      POST >=> (path "/api/v1/write" <|> path "/api/prom/push") >=>
+        PulseBoard.PromRemoteWrite.handler stores.Storage None None
+      PulseBoard.QueryApi.webPart None None stores.MetricStore None stores.LogStore
       PulseBoard.Query.webPart stores.MetricStore stores.LogStore None None
     ]
 
@@ -126,7 +146,53 @@ let start (stores : TestStores) : TestEnv =
 
   TestEnv(stores, baseUrl, cts)
 
-/// Convenience: create stores + start server in one call.
+/// Start an in-process Suave host with auth middleware enabled.
+/// Ingest routes require a valid X-API-Key header with Ingest scope.
+/// Query routes are also protected (Query scope required via requireScope).
+let startMultiTenant (stores : TestStores) : TestEnv =
+  let port = freePort ()
+  let baseUrl = sprintf "http://127.0.0.1:%d" port
+  let cts = new CancellationTokenSource()
+
+  let authIngest inner =
+    PulseBoard.Auth.resolveApiKey stores.TenantStore
+      (requireScope stores.AuditLog "ingest" Scope.Ingest inner)
+
+  let app =
+    choose [
+      GET  >=> path "/api/healthz" >=> OK """{"ok":true}"""
+      pathStarts "/ingest" >=>
+        authIngest (PulseBoard.Ingest.webPart stores.Storage None None None None None)
+      POST >=> path "/v1/metrics" >=>
+        authIngest (PulseBoard.Otlp.metrics stores.Storage None)
+      POST >=> path "/loki/api/v1/push" >=>
+        authIngest (PulseBoard.LokiPush.handler stores.Storage None)
+      POST >=> (path "/api/v1/write" <|> path "/api/prom/push") >=>
+        authIngest (PulseBoard.PromRemoteWrite.handler stores.Storage None None)
+      PulseBoard.QueryApi.webPart None None stores.MetricStore None stores.LogStore
+      PulseBoard.Query.webPart stores.MetricStore stores.LogStore None None
+    ]
+
+  let suaveCfg =
+    { defaultConfig with
+        bindings    = [ HttpBinding.createSimple HTTP "127.0.0.1" port ]
+        cancellationToken = cts.Token
+        hideHeader  = true }
+
+  let _startTask =
+    System.Threading.Tasks.Task.Run(fun () ->
+      startWebServer suaveCfg app)
+
+  System.Threading.Thread.Sleep 150
+
+  TestEnv(stores, baseUrl, cts)
+
+/// Convenience: create stores + start server in one call (unauthenticated).
 let create () =
   let stores = makeStores ()
   start stores
+
+/// Convenience: create stores + start server with auth middleware enabled.
+let createMultiTenant () =
+  let stores = makeStores ()
+  startMultiTenant stores

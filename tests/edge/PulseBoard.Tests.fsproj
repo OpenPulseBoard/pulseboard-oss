@@ -36,6 +36,10 @@
     <Compile Include="Integration/PgAuditLogTests.fs" />
     <Compile Include="Integration/PgOverridesTests.fs" />
     <Compile Include="Integration/HttpApiTests.fs" />
+    <!-- Phase 11.5 acceptance scenarios -->
+    <Compile Include="Integration/AuthIsolationTests.fs" />
+    <Compile Include="Integration/ProtocolIngestTests.fs" />
+    <Compile Include="Integration/RoutingFlapTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
