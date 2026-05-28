@@ -16,6 +16,14 @@
     <Compile Include="Unit/QuotasTests.fs" />
     <Compile Include="Unit/SecretsTests.fs" />
     <Compile Include="Unit/AiAssistTests.fs" />
+    <Compile Include="Unit/RulesTests.fs" />
+    <Compile Include="Unit/RoutingTests.fs" />
+    <Compile Include="Unit/NotifyQueueTests.fs" />
+    <Compile Include="Unit/OnCallTests.fs" />
+    <Compile Include="Unit/RetentionTests.fs" />
+    <Compile Include="Unit/PlansTests.fs" />
+    <Compile Include="Unit/SpansTests.fs" />
+    <Compile Include="Unit/TenancyTests.fs" />
     <!-- Property-based tests -->
     <Compile Include="Properties/RollupsPropertyTests.fs" />
   </ItemGroup>
