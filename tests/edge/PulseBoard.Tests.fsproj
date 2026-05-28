@@ -26,6 +26,11 @@
     <Compile Include="Unit/TenancyTests.fs" />
     <!-- Property-based tests -->
     <Compile Include="Properties/RollupsPropertyTests.fs" />
+    <Compile Include="Properties/RulesPropertyTests.fs" />
+    <Compile Include="Properties/RoutingPropertyTests.fs" />
+    <Compile Include="Properties/PlansPropertyTests.fs" />
+    <Compile Include="Properties/SpansPropertyTests.fs" />
+    <Compile Include="Properties/TenancyPropertyTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
