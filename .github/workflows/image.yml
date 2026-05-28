@@ -48,6 +48,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history needed for git diff on PRs
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -60,16 +62,35 @@ jobs:
           --filter "Category!=Postgres&Category!=Integration"
           --collect:"XPlat Code Coverage"
           --results-directory coverage/
+          --
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
-      - name: Upload coverage report
+      - name: Install ReportGenerator
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+      - name: Generate HTML coverage report
+        run: |
+          reportgenerator \
+            -reports:"coverage/**/coverage.cobertura.xml" \
+            -targetdir:"coverage-report" \
+            -reporttypes:"Html;TextSummary"
+          cat coverage-report/Summary.txt
+
+      - name: Enforce coverage gate
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF:   ${{ github.base_ref }}
+        run: python3 tests/coverage-gate.py
+
+      - name: Upload HTML coverage report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage
-          path: coverage/
+          name: coverage-report
+          path: coverage-report/
 
   build:
-    needs: validate-builds
+    needs: [validate-builds, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
