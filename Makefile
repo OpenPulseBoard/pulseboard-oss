@@ -35,13 +35,53 @@ coverage: test
 	@cat coverage-report/Summary.txt
 	@python3 tests/coverage-gate.py
 
-# Bench suite — Phase 11.5 (not yet implemented)
+# Bench suite — Phase 11.5
+# Runs all BenchmarkDotNet benchmarks in Release mode and emits JSON artefacts.
+# Usage:  make bench
+#         make bench FILTER="*Ingest*"   (run a subset)
 bench:
-	@echo "Bench suite lives in tests/bench/ — not yet implemented (Phase 11.5)"
+	@mkdir -p bench-results
+	dotnet run --project tests/bench/PulseBoard.Bench.fsproj \
+	  --configuration Release -- \
+	  --filter "$(or $(FILTER),*)" \
+	  --exporters Json MarkdownExporter \
+	  --artifacts bench-results/ \
+	  --memoryDiagnoser
 
-# Chaos suite — Phase 11.5 (not yet implemented)
+# k6 load profile — 10k series × ~1k samples/s for 10 minutes.
+# Requires k6 ≥ 0.45 (https://k6.io/docs/getting-started/installation/)
+# Usage:  make bench-k6
+#         make bench-k6 BASE_URL=https://staging.pulseboard.io API_KEY=pk_xxx
+bench-k6:
+	@mkdir -p bench-results
+	k6 run tests/chaos/k6-load.js \
+	  --env BASE_URL=$(or $(BASE_URL),http://localhost:8080) \
+	  $(if $(API_KEY),--env API_KEY=$(API_KEY),) \
+	  --env DURATION=$(or $(DURATION),10m) \
+	  --env VUS_INGEST=$(or $(VUS_INGEST),50) \
+	  --env VUS_QUERY=$(or $(VUS_QUERY),10) \
+	  --env SERIES=$(or $(SERIES),10000)
+
+# Chaos suite — Phase 11.5
+# Runs kill-edge-pod, kill-postgres, and kill-mimir-ingester smoke scenarios.
+# Requires a running PulseBoard instance (DEPLOY_MODE=docker by default).
+# Usage:  make chaos
+#         make chaos DEPLOY_MODE=k8s BASE_URL=https://staging.pulseboard.io
 chaos:
-	@echo "Chaos suite lives in tests/chaos/ — not yet implemented (Phase 11.5)"
+	@echo "Running PulseBoard chaos suite (DEPLOY_MODE=$(or $(DEPLOY_MODE),docker))..."
+	DEPLOY_MODE=$(or $(DEPLOY_MODE),docker) \
+	  BASE_URL=$(or $(BASE_URL),http://localhost:8080) \
+	  $(if $(API_KEY),API_KEY=$(API_KEY),) \
+	  bash tests/chaos/kill-edge-pod.sh
+	DEPLOY_MODE=$(or $(DEPLOY_MODE),docker) \
+	  BASE_URL=$(or $(BASE_URL),http://localhost:8080) \
+	  $(if $(API_KEY),API_KEY=$(API_KEY),) \
+	  bash tests/chaos/kill-postgres.sh
+	DEPLOY_MODE=$(or $(DEPLOY_MODE),docker) \
+	  BASE_URL=$(or $(BASE_URL),http://localhost:8080) \
+	  $(if $(API_KEY),API_KEY=$(API_KEY),) \
+	  bash tests/chaos/kill-mimir-ingester.sh
+	@echo "All chaos scenarios passed."
 
 # Format all F# source files
 format:

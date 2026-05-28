@@ -7,6 +7,9 @@
   <Folder Name="/tests/edge/">
     <Project Path="tests/edge/PulseBoard.Tests.fsproj" />
   </Folder>
+  <Folder Name="/tests/bench/">
+    <Project Path="tests/bench/PulseBoard.Bench.fsproj" />
+  </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/DemoFeeder/DemoFeeder.fsproj" />
   </Folder>
