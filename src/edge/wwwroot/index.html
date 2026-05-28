@@ -210,6 +210,181 @@
     /* uPlot theming */
     .u-legend { font-size: 11px !important; color: var(--muted) !important; }
     .u-legend .u-marker { width: 8px !important; height: 8px !important; }
+
+    /* ── Wave A panel types (Phase 12.2) ─────────────────────────── */
+
+    /* bar-gauge */
+    .panel .body.bar-gauge { display:flex; flex-direction:column; gap:4px;
+      padding:8px 10px; overflow:auto; justify-content:center; }
+    .bar-gauge .bg-row { display:flex; align-items:center; gap:6px; }
+    .bar-gauge .bg-label { width:120px; overflow:hidden; text-overflow:ellipsis;
+      white-space:nowrap; font-size:11px; color:var(--muted); flex-shrink:0; }
+    .bar-gauge .bg-track { flex:1; height:16px; background:var(--bg);
+      border-radius:3px; overflow:hidden; position:relative; }
+    .bar-gauge .bg-fill  { height:100%; border-radius:3px; transition:width .3s; }
+    .bar-gauge .bg-val   { width:60px; text-align:right; font-size:12px; font-weight:bold; flex-shrink:0; }
+
+    /* gauge (radial) */
+    .panel .body.gauge { display:flex; align-items:center;
+      justify-content:center; overflow:hidden; padding:4px; }
+    .gauge svg { max-width:100%; max-height:100%; }
+
+    /* pie / donut */
+    .panel .body.piechart { display:flex; align-items:center;
+      justify-content:center; overflow:hidden; padding:4px; gap:10px; flex-wrap:wrap; }
+    .piechart svg { flex-shrink:0; max-width:min(100%,300px); max-height:min(100%,300px); }
+    .piechart .pie-legend { font-size:11px; color:var(--muted); display:flex;
+      flex-direction:column; gap:4px; }
+    .piechart .pie-legend-item { display:flex; align-items:center; gap:5px; }
+    .piechart .pie-swatch { width:10px; height:10px; border-radius:2px; flex-shrink:0; }
+
+    /* barchart (categorical) */
+    .panel .body.barchart { overflow:hidden; }
+
+    /* histogram */
+    .panel .body.histogram { overflow:hidden; }
+
+    /* state-timeline */
+    .panel .body.state-timeline { overflow:auto; padding:4px 8px; display:flex;
+      flex-direction:column; gap:3px; }
+    .state-timeline .stl-row  { display:flex; align-items:center; gap:6px; height:22px; }
+    .state-timeline .stl-label { width:110px; overflow:hidden; text-overflow:ellipsis;
+      white-space:nowrap; font-size:11px; color:var(--muted); flex-shrink:0; }
+    .state-timeline .stl-track { flex:1; height:100%; background:var(--bg);
+      border-radius:2px; position:relative; overflow:hidden; }
+    .state-timeline .stl-seg   { position:absolute; top:0; bottom:0; }
+
+    /* status-history */
+    .panel .body.status-history { overflow:auto; padding:4px 8px; display:flex;
+      flex-direction:column; gap:3px; }
+    .status-history .sh-row    { display:flex; align-items:center; gap:6px; height:20px; }
+    .status-history .sh-label  { width:110px; overflow:hidden; text-overflow:ellipsis;
+      white-space:nowrap; font-size:11px; color:var(--muted); flex-shrink:0; }
+    .status-history .sh-cells  { flex:1; display:flex; gap:2px; height:100%; }
+    .status-history .sh-cell   { flex:1; border-radius:2px; }
+
+    /* text (markdown) */
+    .panel .body.text { overflow:auto; padding:10px 12px; font-size:12px;
+      line-height:1.55; color:var(--fg); }
+    .panel .body.text h1,.panel .body.text h2,
+    .panel .body.text h3 { color:var(--accent); margin:.4em 0 .2em; }
+    .panel .body.text a  { color:var(--accent); }
+    .panel .body.text code { background:var(--panel-3); padding:1px 4px;
+      border-radius:3px; font-family:inherit; }
+    .panel .body.text pre  { background:var(--panel-3); padding:8px;
+      border-radius:4px; overflow:auto; }
+
+    /* dashboard-list / alert-list / annotations-list */
+    .panel .body.dashlist, .panel .body.alertlist, .panel .body.annolist {
+      overflow:auto; padding:4px; }
+    .dashlist a, .alertlist .al-row, .annolist .ao-row {
+      display:flex; align-items:center; gap:8px; padding:4px 6px;
+      border-radius:3px; font-size:12px; color:var(--fg); text-decoration:none; }
+    .dashlist a:hover, .alertlist .al-row:hover, .annolist .ao-row:hover {
+      background:var(--panel-2); }
+    .alertlist .al-state { font-size:10px; padding:1px 5px; border-radius:3px;
+      background:var(--panel-3); }
+    .alertlist .al-state.firing  { background:#3d1a1a; color:var(--err); }
+    .alertlist .al-state.pending { background:#3d3010; color:var(--warn); }
+    .alertlist .al-state.ok      { background:#1a3d22; color:var(--ok); }
+    .annolist  .ao-ts { color:var(--muted); font-size:11px; flex-shrink:0; width:70px; }
+
+    /* ── Wave B panel types (Phase 12.2) ─────────────────────────── */
+
+    /* heatmap */
+    .panel .body.heatmap { overflow:hidden; position:relative; }
+    .heatmap canvas { display:block; width:100%; height:100%; }
+
+    /* trend (numeric x) */
+    .panel .body.trend { overflow:hidden; }
+
+    /* xychart (scatter / bubble) */
+    .panel .body.xychart { overflow:hidden; }
+    .xychart svg { width:100%; height:100%; }
+
+    /* candlestick */
+    .panel .body.candlestick { overflow:hidden; }
+    .candlestick svg { width:100%; height:100%; }
+
+    /* traces (embeddable waterfall) */
+    .panel .body.traces-panel { overflow:auto; padding:4px; }
+    .traces-panel .tp-controls { display:flex; gap:6px; padding:4px 6px;
+      border-bottom:1px solid var(--grid); margin-bottom:4px; }
+    .traces-panel .tp-controls select { font-size:11px; }
+    .traces-panel .tp-list { font-size:11px; }
+    .traces-panel .tp-row { display:flex; align-items:center; gap:6px;
+      padding:3px 4px; border-radius:3px; cursor:pointer; }
+    .traces-panel .tp-row:hover { background:var(--panel-2); }
+    .traces-panel .tp-svc  { color:var(--accent-2); flex-shrink:0; width:90px;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .traces-panel .tp-op   { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .traces-panel .tp-dur  { color:var(--muted); flex-shrink:0; width:54px; text-align:right; }
+    .traces-panel .tp-err  { color:var(--err); flex-shrink:0; font-size:10px; }
+    .traces-panel .tp-detail { padding:6px; background:var(--bg);
+      border-radius:4px; margin-top:4px; font-size:11px; }
+
+    /* flame graph */
+    .panel .body.flamegraph { overflow:auto; padding:2px; cursor:default; }
+    .flamegraph svg { display:block; }
+    .flamegraph .fg-frame { cursor:pointer; }
+    .flamegraph .fg-frame rect { stroke:var(--bg); stroke-width:.5px; }
+    .flamegraph .fg-frame text { font-size:10px; fill:#fff; pointer-events:none;
+      dominant-baseline:middle; }
+
+    /* news */
+    .panel .body.news { overflow:auto; padding:4px; }
+    .news .nw-item { padding:5px 6px; border-bottom:1px solid var(--grid); }
+    .news .nw-item:last-child { border-bottom:none; }
+    .news .nw-title { font-size:12px; }
+    .news .nw-title a { color:var(--fg); }
+    .news .nw-title a:hover { color:var(--accent); }
+    .news .nw-meta  { font-size:10px; color:var(--muted); margin-top:2px; }
+
+    /* ── Wave C panel types (Phase 12.2) ─────────────────────────── */
+
+    /* node-graph */
+    .panel .body.nodegraph { position:relative; overflow:hidden; }
+    .nodegraph svg { display:block; }
+    .nodegraph .ng-tip { position:absolute; background:var(--panel-2);
+      border:1px solid var(--border); padding:5px 8px; border-radius:4px;
+      font-size:11px; pointer-events:none; display:none; white-space:pre;
+      z-index:10; max-width:220px; line-height:1.5; }
+    .nodegraph .node circle { fill:var(--panel-2); stroke:#6ad;
+      stroke-width:2px; cursor:pointer; transition:opacity .15s; }
+    .nodegraph .node circle.err { stroke:var(--err); }
+    .nodegraph .node circle.hl  { stroke:var(--accent); stroke-width:3px; }
+    .nodegraph .node text { fill:var(--fg); font-size:11px; text-anchor:middle;
+      dominant-baseline:middle; pointer-events:none; }
+    .nodegraph .edge line { transition:stroke-opacity .15s; }
+    .nodegraph .edge text { fill:var(--muted); font-size:9px;
+      text-anchor:middle; pointer-events:none; }
+
+    /* canvas panel */
+    .panel .body.canvas { position:relative; overflow:hidden; }
+    .cv-el { position:absolute; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; padding:4px 6px;
+      border-radius:3px; box-sizing:border-box; }
+    .edit-mode .cv-el { cursor:move; outline:1px dashed transparent; }
+    .edit-mode .cv-el:hover { outline-color:var(--accent); }
+    .cv-el.cv-dragging { opacity:.75; outline-color:var(--accent-2) !important; }
+    .cv-metric-val { font-size:22px; font-weight:bold; color:var(--accent); line-height:1.1; }
+    .cv-metric-lbl { font-size:10px; color:var(--muted); text-align:center;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+    .cv-del { display:none; position:absolute; top:1px; right:2px;
+      padding:0 3px; font-size:10px; line-height:14px; z-index:5;
+      background:var(--panel-3); border-radius:2px; }
+    .edit-mode .cv-el:hover .cv-del { display:block; }
+    .cv-toolbar { position:absolute; bottom:6px; right:6px;
+      display:none; gap:4px; z-index:10; flex-wrap:wrap; justify-content:flex-end; }
+    .edit-mode .cv-toolbar { display:flex; }
+    .cv-toolbar button { padding:2px 7px; font-size:11px; }
+
+    /* geomap */
+    .panel .body.geomap { position:relative; overflow:hidden; padding:0; }
+    .panel .body.geomap > div:not(.err) { width:100%; height:100%; }
+    /* Leaflet dark-mode overrides */
+    .geomap .leaflet-tile-pane { filter:brightness(.7) saturate(.8); }
+    .geomap .leaflet-control-attribution { font-size:9px; opacity:.5; }
   </style>
 </head>
 <body>
@@ -358,10 +533,7 @@
     <div class="field"><label>Title</label><input id="ed-title" /></div>
     <div class="field"><label>Panel type</label>
       <select id="ed-type">
-        <option value="timeseries">Time series</option>
-        <option value="stat">Stat (single value)</option>
-        <option value="logs">Logs</option>
-        <option value="table">Table</option>
+        <!-- populated from PulseBoard.panelTypes() at startup -->
       </select>
     </div>
     <div class="field"><label>Query language</label>
@@ -395,6 +567,43 @@
 <script src="/uPlot.iife.min.js"></script>
 <script>
 "use strict";
+
+// =====================================================================
+// Panel SDK — pluggable registry (Phase 12.1)
+// =====================================================================
+//
+// Each entry describes one panel type that PulseBoard knows how to render.
+//
+//   PulseBoard.registerPanel({
+//     type       : "heatmap",          // unique string key
+//     label      : "Heatmap",          // shown in the editor <select>
+//     queryShape : "matrix",           // scalar | vector | matrix | logs | spans | nodes | edges
+//     render     : (el, frame, opts, p) => { /* draw into el; return optional cleanup fn */ },
+//     editor     : (opts, onChange)    => { /* optional extra fields HTML string */ },
+//   })
+//
+// Built-in panels (timeseries, stat, logs, table) are registered below
+// before any user code runs.  Third-party panels can call registerPanel
+// any time before the dashboard opens.
+//
+const PulseBoard = (() => {
+  const _registry = new Map();
+
+  function registerPanel(def) {
+    if (!def || !def.type) throw new Error("registerPanel: `type` is required");
+    _registry.set(def.type, def);
+  }
+
+  function getPanel(type) {
+    return _registry.get(type);
+  }
+
+  function panelTypes() {
+    return Array.from(_registry.values()).map(d => ({ type: d.type, label: d.label || d.type }));
+  }
+
+  return { registerPanel, getPanel, panelTypes };
+})();
 
 // =====================================================================
 // State + utilities
@@ -641,14 +850,17 @@ async function renderPanel(p) {
   }
 
   body.innerHTML = "";
-  if (p.type === "timeseries") {
-    renderTimeseries(body, result, p);
-  } else if (p.type === "stat") {
-    renderStat(body, result, p);
-  } else if (p.type === "logs") {
-    renderLogs(body, result, p);
-  } else if (p.type === "table") {
-    renderTable(body, result, p);
+  const def = PulseBoard.getPanel(p.type);
+  if (def) {
+    body.className = "body " + p.type;
+    def.render(body, result, p.options || {}, p);
+  } else {
+    // Unknown panel type — show a clear message rather than silently nothing.
+    body.className = "body";
+    const d = document.createElement("div");
+    d.className = "err";
+    d.textContent = `Unknown panel type: "${p.type}". Has the panel plugin been loaded?`;
+    body.appendChild(d);
   }
 }
 
@@ -753,6 +965,1493 @@ function renderTable(body, result, p) {
 
 const PALETTE = ["#5ec8ff","#b388ff","#5cd97a","#f0c452","#f25f5c","#79e0c8","#ff9d6c","#d8a0ff"];
 const colorFor = (i) => PALETTE[i % PALETTE.length];
+
+// =====================================================================
+// Wave A render helpers (Phase 12.2)
+// =====================================================================
+
+// ── Bar gauge ─────────────────────────────────────────────────────────
+// opts: unit, min (default 0), max (default auto), orientation (h|v)
+function renderBarGauge(body, result, p) {
+  const opts   = p.options || {};
+  const unit   = opts.unit  || "";
+  const series = (result.series || []).filter(s => s.ys.length);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+  const vals   = series.map(s => s.ys[s.ys.length - 1]);
+  const min    = +opts.min  || 0;
+  const max    = +opts.max  || Math.max(...vals.map(Math.abs)) * 1.15 || 1;
+  const rows   = series.map((s, i) => {
+    const v    = vals[i];
+    const pct  = Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100));
+    const col  = colorFor(i);
+    return `<div class="bg-row">
+      <div class="bg-label" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
+      <div class="bg-track"><div class="bg-fill" style="width:${pct}%;background:${col};"></div></div>
+      <div class="bg-val" style="color:${col};">${fmtNum(v)}${escapeHtml(unit)}</div>
+    </div>`;
+  });
+  body.innerHTML = rows.join("");
+}
+
+// ── Gauge (radial / arc) ──────────────────────────────────────────────
+// opts: unit, min, max, thresholds (e.g. "80=warn,90=err")
+function renderGauge(body, result, p) {
+  const opts   = p.options || {};
+  const unit   = opts.unit  || "";
+  const series = result.kind === "stat"
+    ? [{ name: "", ys: [result.value] }]
+    : (result.series || []).filter(s => s.ys.length);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  // Render one arc per series; in practice dashboards usually put one per gauge panel.
+  const svgW = 200, svgH = 120;
+  const cx = svgW / 2, cy = svgH - 14;
+  const R = 80, strokeW = 16;
+  const min = +opts.min || 0;
+  const max = +opts.max || 100;
+
+  // Parse threshold string "80=warn,90=err" → [{at, color}]
+  const thresholds = [];
+  for (const tok of (opts.thresholds || "").split(",")) {
+    const [at, name] = tok.split("=");
+    if (!isNaN(+at)) thresholds.push({ at: +at, color: name === "err" ? "var(--err)" : "var(--warn)" });
+  }
+  thresholds.sort((a, b) => a.at - b.at);
+
+  function arcColor(v) {
+    let c = "var(--ok)";
+    for (const t of thresholds) if (v >= t.at) c = t.color;
+    return c;
+  }
+
+  function polarXY(angleDeg, r) {
+    const a = (angleDeg - 180) * Math.PI / 180;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  }
+  function arcPath(startAngle, endAngle, r) {
+    const [x1, y1] = polarXY(startAngle, r);
+    const [x2, y2] = polarXY(endAngle,   r);
+    const large     = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+    return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
+  }
+
+  const parts = [];
+  // Track (background arc 0°→180°)
+  parts.push(`<path d="${arcPath(0, 180, R)}" fill="none"
+    stroke="var(--bg)" stroke-width="${strokeW}" stroke-linecap="round"/>`);
+
+  for (let i = 0; i < series.length; i++) {
+    const v    = series[i].ys[series[i].ys.length - 1];
+    const pct  = Math.min(1, Math.max(0, (v - min) / (max - min)));
+    const end  = pct * 180;
+    const col  = arcColor(v);
+    if (end > 0) {
+      parts.push(`<path d="${arcPath(0, end, R)}" fill="none"
+        stroke="${col}" stroke-width="${strokeW}" stroke-linecap="round"/>`);
+    }
+    parts.push(`<text x="${cx}" y="${cy - 6}" text-anchor="middle"
+      font-size="26" font-weight="bold" fill="${col}">${fmtNum(v)}</text>`);
+    parts.push(`<text x="${cx}" y="${cy + 14}" text-anchor="middle"
+      font-size="11" fill="var(--muted)">${escapeHtml(unit)}</text>`);
+  }
+  // Min / max labels
+  const [lx, ly] = polarXY(0,   R + strokeW + 6);
+  const [rx, ry] = polarXY(180, R + strokeW + 6);
+  parts.push(`<text x="${lx}" y="${ly + 4}" text-anchor="middle" font-size="10"
+    fill="var(--muted)">${fmtNum(min)}</text>`);
+  parts.push(`<text x="${rx}" y="${ry + 4}" text-anchor="middle" font-size="10"
+    fill="var(--muted)">${fmtNum(max)}</text>`);
+
+  body.innerHTML =
+    `<svg viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">${parts.join("")}</svg>`;
+}
+
+// ── Pie / Donut ────────────────────────────────────────────────────────
+// opts: donut (boolean-ish), unit
+function renderPieChart(body, result, p) {
+  const opts   = p.options || {};
+  const donut  = opts.donut === "true" || opts.donut === true;
+  const unit   = opts.unit  || "";
+  const series = (result.series || []).filter(s => s.ys.length);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  const vals  = series.map(s => Math.abs(s.ys[s.ys.length - 1]));
+  const total = vals.reduce((a, b) => a + b, 0) || 1;
+
+  const svgSize = 160, cx = svgSize / 2, cy = svgSize / 2, R = 70;
+  const innerR  = donut ? 38 : 0;
+  let angle     = -Math.PI / 2;
+  const slices  = [];
+  for (let i = 0; i < series.length; i++) {
+    const sweep = (vals[i] / total) * Math.PI * 2;
+    const x1 = cx + R * Math.cos(angle);
+    const y1 = cy + R * Math.sin(angle);
+    angle    += sweep;
+    const x2 = cx + R * Math.cos(angle);
+    const y2 = cy + R * Math.sin(angle);
+    const large = sweep > Math.PI ? 1 : 0;
+    const col   = colorFor(i);
+    let d;
+    if (innerR > 0) {
+      const ix1 = cx + innerR * Math.cos(angle - sweep);
+      const iy1 = cy + innerR * Math.sin(angle - sweep);
+      const ix2 = cx + innerR * Math.cos(angle);
+      const iy2 = cy + innerR * Math.sin(angle);
+      d = `M ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2}
+           L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${large} 0 ${ix1} ${iy1} Z`;
+    } else {
+      d = `M ${cx} ${cy} L ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2} Z`;
+    }
+    const pct = ((vals[i] / total) * 100).toFixed(1);
+    slices.push({ d, col, pct, name: series[i].name, val: vals[i] });
+  }
+
+  const paths = slices.map(s =>
+    `<path d="${s.d}" fill="${s.col}" stroke="var(--bg)" stroke-width="1.5">
+       <title>${escapeHtml(s.name)}: ${fmtNum(s.val)}${escapeHtml(unit)} (${s.pct}%)</title>
+     </path>`).join("");
+  const legendItems = slices.map(s =>
+    `<div class="pie-legend-item">
+       <div class="pie-swatch" style="background:${s.col};"></div>
+       <span>${escapeHtml(s.name.length > 22 ? s.name.slice(0,21) + "…" : s.name)}</span>
+     </div>`).join("");
+
+  body.innerHTML =
+    `<svg viewBox="0 0 ${svgSize} ${svgSize}" xmlns="http://www.w3.org/2000/svg"
+         style="overflow:visible;">${paths}</svg>` +
+    `<div class="pie-legend">${legendItems}</div>`;
+}
+
+// ── Bar chart (categorical) ───────────────────────────────────────────
+// Uses uPlot in bar mode.  opts: unit, stacked
+function renderBarChart(body, result, p) {
+  const series = (result.series || []);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+  // Treat last-value of each series as one categorical bar.
+  const labels = series.map(s => s.name);
+  const vals   = series.map(s => s.ys.length ? s.ys[s.ys.length - 1] : 0);
+  const svgW   = body.clientWidth  || 300;
+  const svgH   = body.clientHeight || 120;
+  const barW   = Math.max(4, Math.floor((svgW - 30) / series.length) - 4);
+  const maxV   = Math.max(...vals.map(Math.abs), 1);
+  const parts  = [];
+  const scaleH = svgH - 28;
+  vals.forEach((v, i) => {
+    const h   = Math.max(1, Math.abs(v) / maxV * scaleH);
+    const x   = 10 + i * ((svgW - 20) / series.length) + ((svgW - 20) / series.length - barW) / 2;
+    const y   = svgH - 20 - h;
+    const col = colorFor(i);
+    const lbl = labels[i].length > 8 ? labels[i].slice(0, 7) + "…" : labels[i];
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}"
+      width="${barW}" height="${h.toFixed(1)}"
+      fill="${col}" rx="2">
+      <title>${escapeHtml(labels[i])}: ${fmtNum(v)}</title></rect>`);
+    parts.push(`<text x="${(x + barW/2).toFixed(1)}" y="${(svgH - 4)}"
+      text-anchor="middle" font-size="9" fill="var(--muted)">${escapeHtml(lbl)}</text>`);
+    parts.push(`<text x="${(x + barW/2).toFixed(1)}" y="${(y - 3).toFixed(1)}"
+      text-anchor="middle" font-size="9" fill="${col}">${fmtNum(v)}</text>`);
+  });
+  body.innerHTML =
+    `<svg viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;height:100%;">${parts.join("")}</svg>`;
+  // Redraw on resize.
+  if (!body._bro) {
+    body._bro = new ResizeObserver(() => {
+      if (body.isConnected) renderBarChart(body, result, p);
+    });
+    body._bro.observe(body);
+  }
+}
+
+// ── Histogram ─────────────────────────────────────────────────────────
+// Accepts a matrix result: treats each series as one bucket whose name
+// contains the upper bound as a number, matching Prometheus histogram
+// label format (le="…"). opts: unit
+function renderHistogram(body, result, p) {
+  const opts   = p.options || {};
+  const unit   = opts.unit  || "";
+  const series = (result.series || []).filter(s => s.ys.length);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  // Extract le="<value>" from series names or fall back to index.
+  const buckets = series.map((s, i) => {
+    const m   = s.name.match(/le="([^"]+)"/);
+    const le  = m ? (m[1] === "+Inf" ? Infinity : +m[1]) : i;
+    const cnt = s.ys[s.ys.length - 1] || 0;
+    return { le, cnt, name: s.name };
+  }).filter(b => isFinite(b.le)).sort((a, b) => a.le - b.le);
+
+  // Convert cumulative counts to bucket heights.
+  const heights = buckets.map((b, i) => Math.max(0, b.cnt - (i > 0 ? buckets[i-1].cnt : 0)));
+  const maxH    = Math.max(...heights, 1);
+  const svgW    = body.clientWidth  || 300;
+  const svgH    = body.clientHeight || 120;
+  const scaleH  = svgH - 28;
+  const barW    = Math.max(2, (svgW - 20) / buckets.length - 2);
+  const parts   = [];
+  buckets.forEach((b, i) => {
+    const h   = heights[i] / maxH * scaleH;
+    const x   = 10 + i * ((svgW - 20) / buckets.length);
+    const y   = svgH - 20 - h;
+    const lbl = b.le >= 1e9 ? "∞" : fmtNum(b.le);
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}"
+      width="${barW}" height="${Math.max(1,h).toFixed(1)}"
+      fill="var(--accent)" rx="1" opacity="0.85">
+      <title>≤${lbl}${escapeHtml(unit)}: ${fmtNum(heights[i])}</title></rect>`);
+    if (i % Math.max(1, Math.floor(buckets.length / 8)) === 0) {
+      parts.push(`<text x="${(x + barW/2).toFixed(1)}" y="${(svgH - 4)}"
+        text-anchor="middle" font-size="9" fill="var(--muted)">${escapeHtml(lbl)}</text>`);
+    }
+  });
+  body.innerHTML =
+    `<svg viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;height:100%;">${parts.join("")}</svg>`;
+  if (!body._hro) {
+    body._hro = new ResizeObserver(() => { if (body.isConnected) renderHistogram(body, result, p); });
+    body._hro.observe(body);
+  }
+}
+
+// ── State timeline ────────────────────────────────────────────────────
+// Each series is expected to be step-interpolated (0/1/2 = states).
+// opts: states (comma-sep labels e.g. "off,on,warn"), colors
+function renderStateTimeline(body, result, p) {
+  const opts   = p.options || {};
+  const labels = (opts.states || "0,1").split(",");
+  const stateColors = ["var(--panel-3)", "var(--ok)", "var(--warn)", "var(--err)",
+                       "var(--accent)", "var(--accent-2)"];
+  const series = (result.series || []);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  const rows = series.map(s => {
+    if (s.xs.length === 0) return "";
+    const t0  = s.xs[0], t1 = s.xs[s.xs.length - 1], span = Math.max(1, t1 - t0);
+    const segs = s.xs.map((x, i) => {
+      const stateIdx = Math.round(s.ys[i] || 0);
+      const col      = stateColors[stateIdx % stateColors.length];
+      const left     = ((x - t0) / span * 100).toFixed(2);
+      const width    = i + 1 < s.xs.length
+        ? (((s.xs[i+1] - x) / span) * 100).toFixed(2)
+        : (100 - +left).toFixed(2);
+      const lbl      = labels[stateIdx] || String(stateIdx);
+      return `<div class="stl-seg" style="left:${left}%;width:${width}%;background:${col};"
+        title="${escapeHtml(s.name)}: ${escapeHtml(lbl)}"></div>`;
+    }).join("");
+    return `<div class="stl-row">
+      <div class="stl-label" title="${escapeHtml(s.name)}">${escapeHtml(
+        s.name.length > 16 ? s.name.slice(0,15) + "…" : s.name)}</div>
+      <div class="stl-track">${segs}</div>
+    </div>`;
+  }).join("");
+  body.innerHTML = rows || '<div class="empty">no data</div>';
+}
+
+// ── Status history ────────────────────────────────────────────────────
+// Renders a grid of equally-sized coloured cells — one cell per time
+// step.  Value ranges map to ok/warn/err colours via thresholds.
+// opts: thresholds (e.g. "80=warn,90=err"), buckets (max cells, default 40)
+function renderStatusHistory(body, result, p) {
+  const opts       = p.options || {};
+  const maxCells   = +(opts.buckets || 40);
+  const thresholds = [];
+  for (const tok of (opts.thresholds || "").split(",")) {
+    const [at, name] = tok.split("=");
+    if (!isNaN(+at)) thresholds.push({ at: +at,
+      color: name === "err" ? "var(--err)" : name === "warn" ? "var(--warn)" : "var(--ok)" });
+  }
+  thresholds.sort((a, b) => a.at - b.at);
+  function cellColor(v) {
+    let c = "var(--ok)";
+    for (const t of thresholds) if (v >= t.at) c = t.color;
+    return c;
+  }
+
+  const series = (result.series || []);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+  const rows = series.map(s => {
+    const pts   = s.ys.slice(-maxCells);
+    const cells = pts.map((v, i) =>
+      `<div class="sh-cell" style="background:${cellColor(v)};"
+        title="${fmtTs(s.xs.slice(-maxCells)[i] * 1000)}: ${fmtNum(v)}"></div>`
+    ).join("");
+    return `<div class="sh-row">
+      <div class="sh-label" title="${escapeHtml(s.name)}">${escapeHtml(
+        s.name.length > 16 ? s.name.slice(0,15) + "…" : s.name)}</div>
+      <div class="sh-cells">${cells}</div>
+    </div>`;
+  }).join("");
+  body.innerHTML = rows || '<div class="empty">no data</div>';
+}
+
+// ── Text (markdown) ───────────────────────────────────────────────────
+// opts: content (markdown string).  Query is ignored.
+// Uses a minimal inline Markdown→HTML renderer (no third-party lib needed
+// for the common subset used in runbooks / info panels).
+function renderTextPanel(body, result, p) {
+  const md  = (p.options || {}).content || "(empty — set `content` in panel options)";
+  body.innerHTML = mdToHtml(md);
+}
+
+function mdToHtml(src) {
+  // Process block by block; keep it simple and XSS-safe (no raw HTML passthrough).
+  const lines   = src.split("\n");
+  const out     = [];
+  let   inPre   = false, preBuf = [];
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    // Fenced code blocks
+    if (raw.startsWith("```")) {
+      if (!inPre) { inPre = true; preBuf = []; continue; }
+      out.push("<pre><code>" + escapeHtml(preBuf.join("\n")) + "</code></pre>");
+      inPre = false; preBuf = []; continue;
+    }
+    if (inPre) { preBuf.push(raw); continue; }
+    // Headings
+    const hm = raw.match(/^(#{1,3})\s+(.*)/);
+    if (hm) { const n = hm[1].length; out.push(`<h${n}>${inlinemd(hm[2])}</h${n}>`); continue; }
+    // HR
+    if (/^---+$/.test(raw.trim())) { out.push("<hr/>"); continue; }
+    // Bullet list
+    const li = raw.match(/^[-*]\s+(.*)/);
+    if (li) { out.push(`<ul><li>${inlinemd(li[1])}</li></ul>`); continue; }
+    // Empty line
+    if (raw.trim() === "") { out.push("<br/>"); continue; }
+    out.push("<p>" + inlinemd(raw) + "</p>");
+  }
+  return out.join("");
+}
+function inlinemd(s) {
+  return escapeHtml(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g,     "<em>$1</em>")
+    .replace(/`(.+?)`/g,       "<code>$1</code>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) =>
+      // Only allow safe URL schemes to prevent javascript: injection.
+      /^https?:\/\//.test(u) ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${t}</a>` : t
+    );
+}
+
+// ── Dashboard list ────────────────────────────────────────────────────
+// opts: (none).  Renders a linked list of all dashboards.
+function renderDashList(body, result, p) {
+  const list = state.dashboards || [];
+  if (list.length === 0) { body.innerHTML = '<div class="empty">no dashboards</div>'; return; }
+  body.innerHTML = list.map(d =>
+    `<a href="#/dashboards" data-id="${escapeHtml(d.id)}" tabindex="0">
+       <span style="flex:1;">${escapeHtml(d.title)}</span>
+     </a>`
+  ).join("");
+  body.querySelectorAll("a[data-id]").forEach(a => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      openDashboard(a.dataset.id);
+      showView("dashboards");
+    });
+  });
+}
+
+// ── Alert list ────────────────────────────────────────────────────────
+// Fetches /api/alerts and shows name + state.
+async function renderAlertList(body, result, p) {
+  body.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const r = await authFetch("/api/alerts");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const alerts = await r.json();
+    if (alerts.length === 0) { body.innerHTML = '<div class="empty">no alerts</div>'; return; }
+    body.innerHTML = alerts.map(a =>
+      `<div class="al-row">
+         <span class="al-state ${escapeHtml(a.state || "ok")}">${escapeHtml(a.state || "ok")}</span>
+         <span style="flex:1;">${escapeHtml(a.name || a.alertname || "—")}</span>
+         <span style="color:var(--muted);font-size:11px;">${escapeHtml(a.labels && a.labels.severity || "")}</span>
+       </div>`
+    ).join("");
+  } catch (e) {
+    body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ── Annotations list ─────────────────────────────────────────────────
+// Fetches /api/annotations and shows time + text.
+async function renderAnnoList(body, result, p) {
+  body.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const r = await authFetch("/api/annotations?limit=50");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const items = await r.json();
+    if (items.length === 0) { body.innerHTML = '<div class="empty">no annotations</div>'; return; }
+    body.innerHTML = items.map(a =>
+      `<div class="ao-row">
+         <span class="ao-ts">${fmtTs(a.timeMs || a.time || 0)}</span>
+         <span style="flex:1;">${escapeHtml(a.text || a.message || "—")}</span>
+         ${a.tags ? `<span style="color:var(--muted);font-size:10px;">${escapeHtml(a.tags.join(", "))}</span>` : ""}
+       </div>`
+    ).join("");
+  } catch (e) {
+    body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// =====================================================================
+// Wave B render helpers (Phase 12.2)
+// =====================================================================
+
+// ── Heatmap ──────────────────────────────────────────────────────────
+// Expects a Prometheus histogram result (series with le="…" labels).
+// Builds a 2D canvas: x = time buckets, y = le buckets, colour = density.
+// opts: colorScheme (hot|blues|greens, default hot)
+function renderHeatmap(body, result, p) {
+  const opts   = p.options || {};
+  const scheme = opts.colorScheme || "hot";
+  const series = (result.series || []).filter(s => s.ys.length);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  // Sort series by le value.
+  const buckets = series.map(s => {
+    const m  = s.name.match(/le="([^"]+)"/);
+    const le = m ? (m[1] === "+Inf" ? Infinity : +m[1]) : NaN;
+    return { le, xs: s.xs, ys: s.ys };
+  }).filter(b => !isNaN(b.le)).sort((a, b) => a.le - b.le);
+
+  if (buckets.length < 2) { body.innerHTML = '<div class="empty">need ≥2 le buckets</div>'; return; }
+
+  // Convert cumulative counts to per-bucket densities per time step.
+  const numT   = buckets[0].xs.length;
+  const numB   = buckets.length - 1;  // +Inf excluded from colour range
+  const density = Array.from({ length: numB }, (_, bi) =>
+    buckets[bi].ys.map((v, ti) => Math.max(0, v - (buckets[bi - 1] ? buckets[bi - 1].ys[ti] : 0)))
+  );
+  const maxD = Math.max(1, ...density.flatMap(r => r));
+
+  // Create / reuse canvas.
+  let canvas = body.querySelector("canvas");
+  if (!canvas) { canvas = document.createElement("canvas"); body.appendChild(canvas); }
+  const W = body.clientWidth  || 300;
+  const H = body.clientHeight || 120;
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const cellW = W / numT;
+  const cellH = H / numB;
+
+  function hotColor(t) {
+    // t in [0,1] → black→red→yellow→white
+    if (scheme === "blues") {
+      const v = Math.round(t * 200 + 55);
+      return `rgb(${Math.round(t*80)},${Math.round(t*140)},${v})`;
+    }
+    if (scheme === "greens") {
+      const v = Math.round(t * 200 + 55);
+      return `rgb(${Math.round(t*80)},${v},${Math.round(t*80)})`;
+    }
+    // hot (default)
+    const r = Math.min(255, Math.round(t * 3 * 255));
+    const g = Math.min(255, Math.max(0, Math.round((t * 3 - 1) * 255)));
+    const b = Math.min(255, Math.max(0, Math.round((t * 3 - 2) * 255)));
+    return `rgb(${r},${g},${b})`;
+  }
+
+  ctx.clearRect(0, 0, W, H);
+  for (let bi = 0; bi < numB; bi++) {
+    for (let ti = 0; ti < numT; ti++) {
+      const d = density[bi][ti] / maxD;
+      if (d <= 0) continue;
+      ctx.fillStyle = hotColor(d);
+      ctx.fillRect(
+        Math.floor(ti * cellW), Math.floor((numB - 1 - bi) * cellH),
+        Math.ceil(cellW) + 1, Math.ceil(cellH) + 1
+      );
+    }
+  }
+
+  // Resize observer.
+  if (!body._hmro) {
+    body._hmro = new ResizeObserver(() => { if (body.isConnected) renderHeatmap(body, result, p); });
+    body._hmro.observe(body);
+  }
+}
+
+// ── Trend (non-time numeric x) ────────────────────────────────────────
+// Like timeseries but x-axis is treated as a plain number, not a Unix
+// timestamp. opts: unit, xLabel
+function renderTrend(body, result, p) {
+  const series = (result.series || []);
+  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  const xset = new Set();
+  for (const s of series) for (const x of s.xs) xset.add(x);
+  const xs = Array.from(xset).sort((a, b) => a - b);
+  const xi = new Map(); xs.forEach((x, i) => xi.set(x, i));
+  const data = [xs];
+  for (const s of series) {
+    const arr = new Array(xs.length).fill(null);
+    for (let i = 0; i < s.xs.length; i++) {
+      const idx = xi.get(s.xs[i]); if (idx != null) arr[idx] = s.ys[i];
+    }
+    data.push(arr);
+  }
+
+  const opts = {
+    width:  body.clientWidth  || 300,
+    height: body.clientHeight || 100,
+    cursor: { drag: { x: true, y: false } },
+    legend: { show: series.length > 1 },
+    scales: { x: { time: false } },   // <-- key difference from timeseries
+    axes: [
+      { stroke: "#8a93a1", grid: { stroke: "#232833" },
+        values: (u, vals) => vals.map(v => fmtNum(v)) },
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
+        values: (u, vals) => vals.map(v => fmtNum(v)) },
+    ],
+    series: [
+      {},
+      ...series.map((s, i) => ({
+        label: s.name, stroke: colorFor(i), width: 1.5,
+        points: { show: xs.length < 60 },
+      })),
+    ],
+  };
+  const plot = new uPlot(opts, data, body);
+  // Store so resizes work via the same mechanism as timeseries.
+  state.panels.set(p.id, { dom: body.closest(".panel"), uplot: plot });
+  if (!body._tro) {
+    body._tro = new ResizeObserver(() => {
+      const cached = state.panels.get(p.id);
+      if (cached && cached.uplot) {
+        try { cached.uplot.setSize({ width: body.clientWidth, height: body.clientHeight }); } catch {}
+      }
+    });
+    body._tro.observe(body);
+  }
+}
+
+// ── XY chart (scatter / bubble) ───────────────────────────────────────
+// Expects two series: first is x values, second is y values (same index
+// pairs). Optional third series drives bubble radius.
+// opts: unit, xLabel, yLabel
+function renderXYChart(body, result, p) {
+  const opts   = p.options || {};
+  const series = (result.series || []);
+  if (series.length < 2) {
+    body.innerHTML = '<div class="empty">need ≥2 series (x, y)</div>'; return;
+  }
+  const xs  = series[0].ys;
+  const ys  = series[1].ys;
+  const rs  = series[2] ? series[2].ys : null;
+  const n   = Math.min(xs.length, ys.length);
+  if (n === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  const W = body.clientWidth  || 300;
+  const H = body.clientHeight || 120;
+  const PAD = { l: 36, r: 8, t: 8, b: 24 };
+  const plotW = W - PAD.l - PAD.r;
+  const plotH = H - PAD.t - PAD.b;
+
+  const minX = Math.min(...xs), maxX = Math.max(...xs) || 1;
+  const minY = Math.min(...ys), maxY = Math.max(...ys) || 1;
+  const maxR = rs ? Math.max(...rs) || 1 : 1;
+
+  function scX(v) { return PAD.l + ((v - minX) / (maxX - minX || 1)) * plotW; }
+  function scY(v) { return PAD.t + plotH - ((v - minY) / (maxY - minY || 1)) * plotH; }
+
+  const dots = Array.from({ length: n }, (_, i) => {
+    const r   = rs ? Math.max(3, (rs[i] / maxR) * 14) : 4;
+    const col = colorFor(0);
+    const lbl = `(${fmtNum(xs[i])}, ${fmtNum(ys[i])})`;
+    return `<circle cx="${scX(xs[i]).toFixed(1)}" cy="${scY(ys[i]).toFixed(1)}"
+      r="${r.toFixed(1)}" fill="${col}" fill-opacity="0.7" stroke="${col}" stroke-width="1">
+      <title>${escapeHtml(lbl)}</title></circle>`;
+  }).join("");
+
+  // Axis ticks
+  const xTicks = [minX, (minX + maxX) / 2, maxX].map(v =>
+    `<text x="${scX(v).toFixed(1)}" y="${(H - 6)}" text-anchor="middle"
+      font-size="9" fill="var(--muted)">${fmtNum(v)}</text>`).join("");
+  const yTicks = [minY, (minY + maxY) / 2, maxY].map(v =>
+    `<text x="${(PAD.l - 3)}" y="${scY(v).toFixed(1)}" text-anchor="end"
+      dominant-baseline="middle" font-size="9" fill="var(--muted)">${fmtNum(v)}</text>`).join("");
+  const xLabel = opts.xLabel
+    ? `<text x="${(PAD.l + plotW / 2).toFixed(1)}" y="${H}" text-anchor="middle"
+        font-size="10" fill="var(--muted)">${escapeHtml(opts.xLabel)}</text>` : "";
+
+  body.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;height:100%;">
+       <line x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${PAD.t + plotH}"
+         stroke="var(--grid)"/>
+       <line x1="${PAD.l}" y1="${PAD.t + plotH}" x2="${PAD.l + plotW}" y2="${PAD.t + plotH}"
+         stroke="var(--grid)"/>
+       ${dots}${xTicks}${yTicks}${xLabel}
+     </svg>`;
+
+  if (!body._xyro) {
+    body._xyro = new ResizeObserver(() => { if (body.isConnected) renderXYChart(body, result, p); });
+    body._xyro.observe(body);
+  }
+}
+
+// ── Candlestick (OHLC) ────────────────────────────────────────────────
+// Expects series named exactly "open", "high", "low", "close" sharing
+// the same timestamps (xs from the "open" series).
+// opts: unit, upColor, downColor
+function renderCandlestick(body, result, p) {
+  const opts   = p.options || {};
+  const up     = opts.upColor   || "var(--ok)";
+  const down   = opts.downColor || "var(--err)";
+  const map    = {};
+  for (const s of (result.series || [])) {
+    const key = s.name.toLowerCase().replace(/^.*\b(open|high|low|close)\b.*$/, "$1");
+    if (["open","high","low","close"].includes(key)) map[key] = s;
+  }
+  if (!map.open || !map.close) {
+    body.innerHTML = '<div class="empty">need series named open, high, low, close</div>'; return;
+  }
+  const n = map.open.xs.length;
+  if (n === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+
+  const W = body.clientWidth  || 300;
+  const H = body.clientHeight || 120;
+  const PAD = { l: 44, r: 8, t: 8, b: 20 };
+  const plotW = W - PAD.l - PAD.r;
+  const plotH = H - PAD.t - PAD.b;
+
+  const allVals = [...(map.high || map.open).ys, ...(map.low || map.open).ys];
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals) || 1;
+  function scY(v) { return PAD.t + plotH - ((v - minV) / (maxV - minV || 1)) * plotH; }
+
+  const barW   = Math.max(2, plotW / n * 0.6);
+  const parts  = [];
+  map.open.xs.forEach((ts, i) => {
+    const o = map.open.ys[i];
+    const c = map.close.ys[i];
+    const h = map.high  ? map.high.ys[i]  : Math.max(o, c);
+    const l = map.low   ? map.low.ys[i]   : Math.min(o, c);
+    const x = PAD.l + (i + 0.5) * (plotW / n);
+    const col    = c >= o ? up : down;
+    const bodyY  = scY(Math.max(o, c));
+    const bodyH  = Math.max(1, Math.abs(scY(o) - scY(c)));
+    // Wick
+    parts.push(`<line x1="${x.toFixed(1)}" y1="${scY(h).toFixed(1)}"
+      x2="${x.toFixed(1)}" y2="${scY(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`);
+    // Body
+    parts.push(`<rect x="${(x - barW/2).toFixed(1)}" y="${bodyY.toFixed(1)}"
+      width="${barW.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${col}" rx="1">
+      <title>O:${fmtNum(o)} H:${fmtNum(h)} L:${fmtNum(l)} C:${fmtNum(c)}</title></rect>`);
+  });
+
+  // Y axis labels
+  const yTicks = [minV, (minV+maxV)/2, maxV].map(v =>
+    `<text x="${(PAD.l - 4)}" y="${scY(v).toFixed(1)}" text-anchor="end"
+      dominant-baseline="middle" font-size="9" fill="var(--muted)">${fmtNum(v)}</text>`
+  ).join("");
+  // X axis — first and last timestamp
+  const t0 = new Date(map.open.xs[0] * 1000);
+  const t1 = new Date(map.open.xs[n - 1] * 1000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  const xLabels =
+    `<text x="${PAD.l}" y="${H - 3}" font-size="9" fill="var(--muted)">${fmt(t0)}</text>` +
+    `<text x="${W - PAD.r}" y="${H - 3}" text-anchor="end" font-size="9"
+      fill="var(--muted)">${fmt(t1)}</text>`;
+
+  body.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;height:100%;">
+       ${parts.join("")}${yTicks}${xLabels}
+     </svg>`;
+
+  if (!body._csro) {
+    body._csro = new ResizeObserver(() => { if (body.isConnected) renderCandlestick(body, result, p); });
+    body._csro.observe(body);
+  }
+}
+
+// ── Traces panel (embeddable waterfall) ───────────────────────────────
+// Renders a compact trace list inside the panel body with inline
+// waterfall expansion on click — reuses the existing renderWaterfall().
+// opts: limit (default 20), range (seconds, overrides dashboard range)
+async function renderTracesPanel(body, result, p) {
+  const opts  = p.options || {};
+  const limit = +(opts.limit || 20);
+  body.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const since = Date.now() - (+(opts.range || 3600)) * 1000;
+    const r     = await authFetch(`/api/traces?sinceMs=${since}&limit=${limit}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const traces = await r.json();
+    if (traces.length === 0) { body.innerHTML = '<div class="empty">no traces</div>'; return; }
+
+    const rows = traces.map(t => {
+      const errCls = t.errorCount > 0 ? " tp-err" : "";
+      return `<div class="tp-row" data-tid="${escapeHtml(t.traceId)}">
+        <span class="tp-svc">${escapeHtml(t.rootService)}</span>
+        <span class="tp-op">${escapeHtml(t.rootOperation)}</span>
+        <span class="tp-dur">${fmtDur(t.durationMs)}</span>
+        ${t.errorCount > 0 ? `<span class="tp-err">✕${t.errorCount}</span>` : ""}
+      </div>`;
+    }).join("");
+
+    body.innerHTML = `<div class="tp-list">${rows}</div>`;
+
+    body.querySelectorAll(".tp-row[data-tid]").forEach(row => {
+      row.addEventListener("click", async () => {
+        // Toggle: if already open, close it.
+        const existing = row.nextElementSibling;
+        if (existing && existing.classList.contains("tp-detail")) {
+          existing.remove(); return;
+        }
+        const detail = document.createElement("div");
+        detail.className = "tp-detail";
+        detail.textContent = "loading…";
+        row.insertAdjacentElement("afterend", detail);
+        try {
+          const dr = await authFetch("/api/traces/" + encodeURIComponent(row.dataset.tid));
+          if (!dr.ok) throw new Error("HTTP " + dr.status);
+          const data = await dr.json();
+          // Reuse the waterfall renderer but target a temp container.
+          const tmp = document.createElement("div");
+          tmp.className = "waterfall";
+          // renderWaterfall writes into trace-modal-body; redirect it temporarily.
+          const origBody = document.getElementById("trace-modal-body");
+          const savedHTML = origBody.innerHTML;
+          renderWaterfall(data);
+          tmp.innerHTML = origBody.innerHTML;
+          origBody.innerHTML = savedHTML;
+          detail.innerHTML = "";
+          detail.appendChild(tmp);
+        } catch (e) {
+          detail.innerHTML = `<span style="color:var(--err)">${escapeHtml(e.message)}</span>`;
+        }
+      });
+    });
+  } catch (e) {
+    body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ── Flame graph ───────────────────────────────────────────────────────
+// Accepts a spans result (from /api/traces/<id>) or a synthetic flat
+// series where each series name encodes a stack frame path with ">"
+// separators, e.g. "main>http.Handler>db.Query", and the last ys value
+// is the self-time in ms.  Renders a top-down icicle/flame chart.
+// opts: maxDepth (default 12), minWidthPx (default 2)
+function renderFlameGraph(body, result, p) {
+  const opts     = p.options || {};
+  const maxDepth = +(opts.maxDepth || 12);
+  const minW     = +(opts.minWidthPx || 2);
+
+  // Build a tree from series whose names encode stacks with ">".
+  const root = { name: "total", value: 0, children: {} };
+  for (const s of (result.series || [])) {
+    const frames = s.name.split(">").map(f => f.trim()).filter(Boolean);
+    const val    = s.ys.length ? Math.abs(s.ys[s.ys.length - 1]) : 0;
+    if (frames.length === 0 || val === 0) continue;
+    let node = root;
+    node.value += val;
+    for (const frame of frames) {
+      if (!node.children[frame]) node.children[frame] = { name: frame, value: 0, children: {} };
+      node = node.children[frame];
+      node.value += val;
+    }
+  }
+
+  if (root.value === 0) { body.innerHTML = '<div class="empty">no frame data (use "a>b>c" series names)</div>'; return; }
+
+  const W    = body.clientWidth || 300;
+  const ROW  = 18;
+
+  // Flatten tree into layout rows.
+  const frames = [];
+  function walk(node, depth, x0, x1) {
+    if (depth > maxDepth) return;
+    const w = x1 - x0;
+    if (w * W < minW) return;
+    frames.push({ name: node.name, depth, x: x0, w, value: node.value });
+    const childTotal = Object.values(node.children).reduce((s, c) => s + c.value, 0) || 1;
+    let cx = x0;
+    for (const child of Object.values(node.children)) {
+      const cw = (child.value / childTotal) * w;
+      walk(child, depth + 1, cx, cx + cw);
+      cx += cw;
+    }
+  }
+  walk(root, 0, 0, 1);
+
+  const maxDepthSeen = Math.max(...frames.map(f => f.depth));
+  const H = (maxDepthSeen + 1) * ROW + 4;
+
+  const rects = frames.map(f => {
+    const x  = (f.x * W).toFixed(1);
+    const y  = (f.depth * ROW + 2).toFixed(1);
+    const fw = Math.max(0, (f.w * W - 1)).toFixed(1);
+    const col = colorFor(f.depth + Math.round(f.x * 7));
+    const lbl = f.name.length > 16 ? f.name.slice(0, 15) + "…" : f.name;
+    const showLabel = f.w * W > 30;
+    return `<g class="fg-frame" data-name="${escapeHtml(f.name)}" data-val="${escapeHtml(fmtDur(f.value))}">
+      <rect x="${x}" y="${y}" width="${fw}" height="${ROW - 1}" fill="${col}"/>
+      ${showLabel ? `<text x="${(+x + 3).toFixed(1)}" y="${(+y + ROW/2).toFixed(1)}"
+        clip-path="inset(0 0 0 0)">${escapeHtml(lbl)}</text>` : ""}
+      <title>${escapeHtml(f.name)} — ${escapeHtml(fmtDur(f.value))}</title>
+    </g>`;
+  }).join("");
+
+  body.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
+         xmlns="http://www.w3.org/2000/svg">${rects}</svg>`;
+
+  if (!body._fgro) {
+    body._fgro = new ResizeObserver(() => { if (body.isConnected) renderFlameGraph(body, result, p); });
+    body._fgro.observe(body);
+  }
+}
+
+// ── News (RSS via server proxy) ───────────────────────────────────────
+// opts: url (RSS feed URL), limit (default 10)
+// Server must expose GET /api/news?url=<encoded> returning
+// [{title, link, pubDate, description}].
+async function renderNews(body, result, p) {
+  const opts  = p.options || {};
+  const feed  = opts.url || "";
+  const limit = +(opts.limit || 10);
+  if (!feed) {
+    body.innerHTML = '<div class="empty">set <code>url</code> in panel options</div>'; return;
+  }
+  body.innerHTML = '<div class="empty">loading…</div>';
+  try {
+    const r = await authFetch("/api/news?url=" + encodeURIComponent(feed) + "&limit=" + limit);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const items = await r.json();
+    if (items.length === 0) { body.innerHTML = '<div class="empty">no items</div>'; return; }
+    body.innerHTML = items.map(item => {
+      const date = item.pubDate ? new Date(item.pubDate).toLocaleDateString() : "";
+      // Only allow https:// links — block javascript: and other schemes.
+      const safeLink = /^https?:\/\//.test(item.link || "") ? item.link : "#";
+      return `<div class="nw-item">
+        <div class="nw-title">
+          <a href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer">
+            ${escapeHtml(item.title || "(no title)")}
+          </a>
+        </div>
+        <div class="nw-meta">${escapeHtml(date)}</div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
+  }
+}
+  label: "Time series",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderTimeseries(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "stat",
+  label: "Stat",
+  queryShape: "scalar",
+  render(el, frame, opts, p) { renderStat(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "logs",
+  label: "Logs",
+  queryShape: "logs",
+  render(el, frame, opts, p) { renderLogs(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "table",
+  label: "Table",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderTable(el, frame, p); },
+});
+
+// =====================================================================
+// Wave C render helpers (Phase 12.2)
+// =====================================================================
+
+// ── Force-directed layout (shared by node-graph) ──────────────────────
+// Fruchterman-Reingold; runs synchronously; fine for < ~80 nodes.
+// edges: [{si, ti}]  nodes get .x and .y set in place.
+function forceLayout(nodes, edges, W, H) {
+  const n = nodes.length;
+  if (n === 0) return;
+  const r0 = Math.min(W, H) * 0.35;
+  nodes.forEach((nd, i) => {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    nd.x = W / 2 + r0 * Math.cos(a);
+    nd.y = H / 2 + r0 * Math.sin(a);
+  });
+  if (n === 1) return;
+  const k   = Math.sqrt(W * H / n) * 0.8;
+  let   tmp = k * 2;
+  for (let iter = 0; iter < 220; iter++) {
+    // Repulsion
+    for (let i = 0; i < n; i++) {
+      nodes[i].dx = 0; nodes[i].dy = 0;
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+        const d  = Math.hypot(dx, dy) || 0.01;
+        const f  = k * k / d;
+        nodes[i].dx += (dx / d) * f;
+        nodes[i].dy += (dy / d) * f;
+      }
+    }
+    // Attraction
+    for (const e of edges) {
+      const a = nodes[e.si], b = nodes[e.ti];
+      if (!a || !b) continue;
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const d  = Math.hypot(dx, dy) || 0.01;
+      const f  = d * d / k;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      a.dx -= fx; a.dy -= fy;
+      b.dx += fx; b.dy += fy;
+    }
+    for (const nd of nodes) {
+      const d = Math.hypot(nd.dx, nd.dy) || 1;
+      nd.x = Math.max(36, Math.min(W - 36, nd.x + (nd.dx / d) * Math.min(d, tmp)));
+      nd.y = Math.max(36, Math.min(H - 36, nd.y + (nd.dy / d) * Math.min(d, tmp)));
+    }
+    tmp *= 0.97;
+  }
+}
+
+// ── Node graph (general force-directed DAG) ───────────────────────────
+// opts.source = "servicemap" (default when no series) → fetches /api/servicemap
+// Otherwise: series names encode edges as "from→to" or "from->to";
+//            last value = edge weight shown as label.
+// opts: nodeRadius (22), range (3600), showEdgeLabels (true)
+async function renderNodeGraph(body, result, p) {
+  const opts = p.options || {};
+  const R    = +(opts.nodeRadius || 22);
+  let nodes  = [], edges = [];
+
+  if (opts.source === "servicemap" || !(result.series || []).length) {
+    try {
+      const since = Date.now() - (+(opts.range || 3600)) * 1000;
+      const r = await authFetch(`/api/servicemap?sinceMs=${since}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const m = await r.json();
+      nodes = m.nodes.map(n => ({
+        id: n.service, label: n.service,
+        errRate: n.spanCount ? n.errorCount / n.spanCount : 0,
+        tip: `${n.service}\nspans: ${n.spanCount}  errors: ${n.errorCount}\np50: ${fmtDur(n.p50Ms)}  p95: ${fmtDur(n.p95Ms)}  p99: ${fmtDur(n.p99Ms)}`,
+      }));
+      const idx = new Map(nodes.map((n, i) => [n.id, i]));
+      edges = m.edges.map(e => ({
+        si: idx.get(e.from) ?? -1, ti: idx.get(e.to) ?? -1,
+        label: opts.showEdgeLabels !== "false" ? `${e.callCount}` : "",
+        errRate: e.callCount ? e.errorCount / e.callCount : 0,
+        tip: `${e.from} → ${e.to}\ncalls: ${e.callCount}  errors: ${e.errorCount}\np50: ${fmtDur(e.p50Ms)}  p99: ${fmtDur(e.p99Ms)}`,
+      })).filter(e => e.si >= 0 && e.ti >= 0);
+    } catch (e) {
+      body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`; return;
+    }
+  } else {
+    const nodeMap = new Map();
+    const getNode = id => {
+      if (!nodeMap.has(id)) nodeMap.set(id, { id, label: id, errRate: 0, tip: id });
+      return nodeMap.get(id);
+    };
+    for (const s of (result.series || [])) {
+      const m = s.name.match(/^(.+?)\s*(?:→|->|>)\s*(.+)$/);
+      if (m) {
+        getNode(m[1].trim()); getNode(m[2].trim());
+        const val = s.ys.length ? s.ys[s.ys.length - 1] : 0;
+        edges.push({ fromId: m[1].trim(), toId: m[2].trim(),
+          label: fmtNum(val), errRate: 0, tip: `${s.name}: ${fmtNum(val)}` });
+      } else { getNode(s.name); }
+    }
+    nodes = Array.from(nodeMap.values());
+    const idx = new Map(nodes.map((n, i) => [n.id, i]));
+    edges = edges.map(e => ({ ...e, si: idx.get(e.fromId) ?? -1, ti: idx.get(e.toId) ?? -1 }))
+                 .filter(e => e.si >= 0 && e.ti >= 0);
+  }
+
+  if (nodes.length === 0) { body.innerHTML = '<div class="empty">no graph data</div>'; return; }
+
+  const W = body.clientWidth  || 400;
+  const H = body.clientHeight || 200;
+  forceLayout(nodes, edges, W, H);
+
+  body.innerHTML = "";
+  const tip = document.createElement("div");
+  tip.className = "ng-tip";
+  body.appendChild(tip);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width",  W);
+  svg.setAttribute("height", H);
+
+  const showTip = (ev, text) => {
+    tip.textContent = text; tip.style.display = "block";
+    const rect = body.getBoundingClientRect();
+    let lx = ev.clientX - rect.left + 14, ty = ev.clientY - rect.top + 14;
+    if (lx + 200 > W) lx -= 200; if (ty + 70 > H) ty -= 70;
+    tip.style.left = lx + "px"; tip.style.top = ty + "px";
+  };
+  const hideTip = () => { tip.style.display = "none"; };
+
+  let highlighted = null;
+  const edgeEls = [], nodeEls = [];
+
+  // Edges (drawn first so nodes sit on top)
+  const NS = "http://www.w3.org/2000/svg";
+  for (const e of edges) {
+    const a = nodes[e.si], b = nodes[e.ti];
+    const hue = Math.round((1 - e.errRate) * 120);
+    const col = `hsl(${hue},60%,55%)`;
+    const g = document.createElementNS(NS, "g"); g.setAttribute("class", "edge");
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("x1", a.x.toFixed(1)); line.setAttribute("y1", a.y.toFixed(1));
+    line.setAttribute("x2", b.x.toFixed(1)); line.setAttribute("y2", b.y.toFixed(1));
+    line.setAttribute("stroke", col); line.setAttribute("stroke-width", "1.5");
+    line.setAttribute("stroke-opacity", "0.6");
+    // Arrowhead
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const tx = b.x - ux * (R + 4), ty2 = b.y - uy * (R + 4);
+    const tri = document.createElementNS(NS, "polygon");
+    tri.setAttribute("points",
+      `${(tx + ux*7).toFixed(1)},${(ty2 + uy*7).toFixed(1)} ` +
+      `${(tx - uy*4).toFixed(1)},${(ty2 + ux*4).toFixed(1)} ` +
+      `${(tx + uy*4).toFixed(1)},${(ty2 - ux*4).toFixed(1)}`);
+    tri.setAttribute("fill", col);
+    g.appendChild(line); g.appendChild(tri);
+    if (e.label) {
+      const lbl = document.createElementNS(NS, "text");
+      lbl.setAttribute("x", ((a.x + b.x) / 2).toFixed(1));
+      lbl.setAttribute("y", ((a.y + b.y) / 2).toFixed(1));
+      lbl.setAttribute("dy", "-4"); lbl.textContent = e.label;
+      g.appendChild(lbl);
+    }
+    g.addEventListener("mousemove", ev => showTip(ev, e.tip));
+    g.addEventListener("mouseleave", hideTip);
+    svg.appendChild(g);
+    edgeEls.push({ line, tri, e });
+  }
+
+  // Nodes
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const g = document.createElementNS(NS, "g"); g.setAttribute("class", "node");
+    g.setAttribute("transform", `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
+    const circle = document.createElementNS(NS, "circle"); circle.setAttribute("r", R);
+    if (n.errRate > 0.05) circle.setAttribute("class", "err");
+    const txt = document.createElementNS(NS, "text");
+    txt.textContent = n.label.length > 12 ? n.label.slice(0, 11) + "…" : n.label;
+    g.appendChild(circle); g.appendChild(txt);
+    g.addEventListener("mousemove", ev => showTip(ev, n.tip));
+    g.addEventListener("mouseleave", hideTip);
+    g.addEventListener("click", () => {
+      highlighted = highlighted === n.id ? null : n.id;
+      // Dim/highlight edges
+      for (const { line, tri, e } of edgeEls) {
+        const on = !highlighted || nodes[e.si].id === highlighted || nodes[e.ti].id === highlighted;
+        line.setAttribute("stroke-opacity", on ? "0.75" : "0.1");
+        tri.setAttribute("opacity", on ? "1" : "0.1");
+      }
+      // Dim/highlight nodes
+      for (const { circle: c, n: nd } of nodeEls) {
+        const connected = !highlighted || nd.id === highlighted
+          || edges.some(e => (nodes[e.si].id === highlighted && nodes[e.ti].id === nd.id)
+                          || (nodes[e.ti].id === highlighted && nodes[e.si].id === nd.id));
+        c.setAttribute("opacity", connected ? "1" : "0.25");
+        c.classList.toggle("hl", !!highlighted && nd.id === highlighted);
+      }
+    });
+    svg.appendChild(g);
+    nodeEls.push({ circle, n });
+  }
+
+  body.appendChild(svg);
+
+  if (!body._ngro) {
+    body._ngro = new ResizeObserver(() => { if (body.isConnected) renderNodeGraph(body, result, p); });
+    body._ngro.observe(body);
+  }
+}
+
+// ── Canvas (free-form drag-and-drop elements) ─────────────────────────
+// Elements stored as JSON array in panel.options.elements.
+// Element schema: {id, kind, x, y, w, h, text, color, fill, fontSize,
+//                  query, queryLang, unit}
+// Kinds: text, metric, rect, ellipse
+// Edit mode: elements draggable; delete button on hover; toolbar adds new elements.
+async function renderCanvasPanel(body, result, p) {
+  let elements;
+  try { elements = JSON.parse((p.options || {}).elements || "[]"); }
+  catch { elements = []; }
+
+  body.innerHTML = "";
+
+  // Edit-mode toolbar (visibility via CSS .edit-mode .cv-toolbar)
+  const toolbar = document.createElement("div");
+  toolbar.className = "cv-toolbar";
+  ["text", "metric", "rect", "ellipse"].forEach(kind => {
+    const btn = document.createElement("button");
+    btn.textContent = "+ " + kind.charAt(0).toUpperCase() + kind.slice(1);
+    btn.addEventListener("click", () => {
+      let els; try { els = JSON.parse((p.options || {}).elements || "[]"); } catch { els = []; }
+      const newEl = {
+        id:        "cv-" + Math.random().toString(36).slice(2),
+        kind,
+        x: 16, y: 16 + els.length * 36,
+        w: (kind === "rect" || kind === "ellipse") ? 90 : 120,
+        h: (kind === "rect" || kind === "ellipse") ? 60 : 36,
+        text:      kind === "text" ? "Label" : "",
+        color:     "#e6e6e6",
+        fill:      (kind === "rect" || kind === "ellipse") ? "#2a3140" : "transparent",
+        fontSize:  13, query: "", queryLang: "promql", unit: "",
+      };
+      els.push(newEl);
+      p.options.elements = JSON.stringify(els);
+      saveCurrent().catch(() => {});
+      body.insertBefore(buildCanvasEl(newEl, p), toolbar);
+    });
+    toolbar.appendChild(btn);
+  });
+  body.appendChild(toolbar);
+
+  // Render existing elements
+  for (const el of elements) body.insertBefore(buildCanvasEl(el, p), toolbar);
+
+  // Fetch values for metric elements asynchronously
+  for (const el of elements.filter(e => e.kind === "metric" && e.query)) {
+    (async () => {
+      try {
+        const now = Date.now(), start = now - 3600_000;
+        const r = await runQuery(el.queryLang || "promql", el.query, start, now, 60);
+        let val = null;
+        if (r.kind === "stat") val = r.value;
+        else if (r.series && r.series.length) {
+          const s = r.series[0]; val = s.ys.length ? s.ys[s.ys.length - 1] : null;
+        }
+        const valEl = body.querySelector(`[data-cv-id="${CSS.escape(el.id)}"] .cv-metric-val`);
+        if (valEl) valEl.textContent = val == null ? "—" : fmtNum(val) + (el.unit || "");
+      } catch {}
+    })();
+  }
+}
+
+function buildCanvasEl(el, p) {
+  const div = document.createElement("div");
+  div.className = "cv-el cv-" + el.kind;
+  div.dataset.cvId = el.id;
+  div.style.left   = (el.x || 0) + "px";
+  div.style.top    = (el.y || 0) + "px";
+  div.style.width  = (el.w || 80) + "px";
+  div.style.height = (el.h || 36) + "px";
+  if (el.color && el.color !== "transparent") div.style.color      = el.color;
+  if (el.fill  && el.fill  !== "transparent") div.style.background = el.fill;
+  if (el.fontSize) div.style.fontSize = el.fontSize + "px";
+  if (el.kind === "ellipse") div.style.borderRadius = "50%";
+
+  if (el.kind === "text") {
+    const span = document.createElement("span");
+    span.textContent = el.text || "";
+    div.appendChild(span);
+  } else if (el.kind === "metric") {
+    const val = document.createElement("div"); val.className = "cv-metric-val"; val.textContent = "…";
+    const lbl = document.createElement("div"); lbl.className = "cv-metric-lbl";
+    lbl.textContent = el.text || el.query || "";
+    div.appendChild(val); div.appendChild(lbl);
+  }
+
+  // Delete button (visible in edit mode on hover via CSS)
+  const del = document.createElement("button");
+  del.className = "cv-del"; del.textContent = "×"; del.title = "Remove";
+  del.addEventListener("click", e => {
+    e.stopPropagation();
+    let els; try { els = JSON.parse((p.options || {}).elements || "[]"); } catch { els = []; }
+    p.options.elements = JSON.stringify(els.filter(x => x.id !== el.id));
+    div.remove();
+    saveCurrent().catch(() => {});
+  });
+  div.appendChild(del);
+
+  // Drag (only active in edit mode)
+  let ds = null;
+  div.addEventListener("pointerdown", e => {
+    if (!state.editMode || e.target === del) return;
+    e.stopPropagation(); e.preventDefault();
+    div.setPointerCapture(e.pointerId);
+    div.classList.add("cv-dragging");
+    ds = { startX: e.clientX, startY: e.clientY, ox: el.x || 0, oy: el.y || 0 };
+  });
+  div.addEventListener("pointermove", e => {
+    if (!ds) return;
+    el.x = Math.max(0, ds.ox + (e.clientX - ds.startX));
+    el.y = Math.max(0, ds.oy + (e.clientY - ds.startY));
+    div.style.left = el.x + "px"; div.style.top = el.y + "px";
+  });
+  div.addEventListener("pointerup", () => {
+    if (!ds) return;
+    div.classList.remove("cv-dragging"); ds = null;
+    let els; try { els = JSON.parse((p.options || {}).elements || "[]"); } catch { els = []; }
+    const i = els.findIndex(x => x.id === el.id);
+    if (i >= 0) { els[i].x = el.x; els[i].y = el.y; p.options.elements = JSON.stringify(els); }
+    saveCurrent().catch(() => {});
+  });
+
+  return div;
+}
+
+// ── Geomap (Leaflet lazy-loaded from /leaflet.css + /leaflet.js) ──────
+// Series names: "lat:lng" or "lat:lng:label". Value = marker size/color.
+// opts: lat, lng, zoom, tileUrl, tileAttrib, thresholds, unit,
+//       minRadius (4), maxRadius (20)
+let _leafletPending = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (_leafletPending) return _leafletPending;
+  _leafletPending = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[href="/leaflet.css"]')) {
+      const lnk = document.createElement("link");
+      lnk.rel = "stylesheet"; lnk.href = "/leaflet.css";
+      document.head.appendChild(lnk);
+    }
+    const s = document.createElement("script");
+    s.src = "/leaflet.js";
+    s.onload  = () => { _leafletPending = null; resolve(window.L); };
+    s.onerror = () => { _leafletPending = null;
+      reject(new Error("Leaflet not found. Vendor leaflet.js + leaflet.css into src/edge/wwwroot/")); };
+    document.head.appendChild(s);
+  });
+  return _leafletPending;
+}
+
+async function renderGeomap(body, result, p) {
+  const opts = p.options || {};
+  // Parse series names "lat:lng" or "lat:lng:label" into map points.
+  const series = (result.series || []).filter(s => s.ys.length);
+  const points = series.map((s, i) => {
+    const parts = s.name.split(":");
+    const lat   = +parts[0], lng = +parts[1];
+    if (isNaN(lat) || isNaN(lng)) return null;
+    return { lat, lng, label: parts.slice(2).join(":") || s.name,
+             val: s.ys[s.ys.length - 1], color: colorFor(i) };
+  }).filter(Boolean);
+
+  // Threshold coloring
+  const thresholds = [];
+  for (const tok of (opts.thresholds || "").split(",")) {
+    const [at, name] = tok.split("=");
+    if (!isNaN(+at)) thresholds.push({
+      at: +at,
+      color: name === "err" ? "#f25f5c" : name === "warn" ? "#f0c452" : "#5cd97a",
+    });
+  }
+  thresholds.sort((a, b) => a.at - b.at);
+  const ptColor = v => { let c = "#5ec8ff"; for (const t of thresholds) if (v >= t.at) c = t.color; return c; };
+  const maxV  = Math.max(...points.map(pt => pt.val), 1);
+  const minR  = +(opts.minRadius || 4);
+  const maxR  = +(opts.maxRadius || 20);
+
+  // Tear down any previous Leaflet instance on this body.
+  if (body._leafletMap) { try { body._leafletMap.remove(); } catch {} body._leafletMap = null; }
+
+  try {
+    const L = await loadLeaflet();
+    body.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.style.width = "100%"; wrap.style.height = "100%";
+    body.appendChild(wrap);
+
+    const map = L.map(wrap, {
+      center:      [+(opts.lat || 20), +(opts.lng || 0)],
+      zoom:        +(opts.zoom || 2),
+      zoomControl: true,
+    });
+    body._leafletMap = map;
+
+    // Tile layer — user must supply tileUrl; without it, plain grey bg.
+    if (opts.tileUrl) {
+      L.tileLayer(opts.tileUrl, {
+        attribution: opts.tileAttrib || "",
+        maxZoom: 19,
+      }).addTo(map);
+    }
+
+    // Data markers
+    for (const pt of points) {
+      const r   = minR + (pt.val / maxV) * (maxR - minR);
+      const col = thresholds.length ? ptColor(pt.val) : pt.color;
+      L.circleMarker([pt.lat, pt.lng], {
+        radius: r, color: col, fillColor: col, fillOpacity: 0.7, weight: 1.5,
+      }).bindPopup(
+        `<strong>${escapeHtml(pt.label)}</strong><br>${fmtNum(pt.val)}${escapeHtml(opts.unit || "")}`
+      ).addTo(map);
+    }
+
+    if (!body._gmro) {
+      body._gmro = new ResizeObserver(() => {
+        if (body._leafletMap) body._leafletMap.invalidateSize();
+      });
+      body._gmro.observe(body);
+    }
+  } catch (e) {
+    body.innerHTML =
+      `<div class="err" style="padding:10px;">${escapeHtml(e.message)}<br>
+       <span style="color:var(--muted);font-size:11px;">
+         Download from <a href="https://leafletjs.com" target="_blank"
+         rel="noopener noreferrer">leafletjs.com</a> and place in
+         <code>src/edge/wwwroot/</code>
+       </span></div>`;
+  }
+}
+
+// ── Wave A registrations (Phase 12.2) ─────────────────────────────────
+PulseBoard.registerPanel({
+  type: "bargauge",
+  label: "Bar gauge",
+  queryShape: "vector",
+  render(el, frame, opts, p) { renderBarGauge(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "gauge",
+  label: "Gauge",
+  queryShape: "scalar",
+  render(el, frame, opts, p) { renderGauge(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "piechart",
+  label: "Pie / Donut",
+  queryShape: "vector",
+  render(el, frame, opts, p) { renderPieChart(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "barchart",
+  label: "Bar chart",
+  queryShape: "vector",
+  render(el, frame, opts, p) { renderBarChart(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "histogram",
+  label: "Histogram",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderHistogram(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "state-timeline",
+  label: "State timeline",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderStateTimeline(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "status-history",
+  label: "Status history",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderStatusHistory(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "text",
+  label: "Text",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderTextPanel(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "dashlist",
+  label: "Dashboard list",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderDashList(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "alertlist",
+  label: "Alert list",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderAlertList(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "annolist",
+  label: "Annotations list",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderAnnoList(el, frame, p); },
+});
+
+// ── Wave B registrations (Phase 12.2) ─────────────────────────────────
+PulseBoard.registerPanel({
+  type: "heatmap",
+  label: "Heatmap",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderHeatmap(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "trend",
+  label: "Trend",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderTrend(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "xychart",
+  label: "XY chart",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderXYChart(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "candlestick",
+  label: "Candlestick",
+  queryShape: "matrix",
+  render(el, frame, opts, p) { renderCandlestick(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "traces",
+  label: "Traces",
+  queryShape: "spans",
+  render(el, frame, opts, p) { renderTracesPanel(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "flamegraph",
+  label: "Flame graph",
+  queryShape: "spans",
+  render(el, frame, opts, p) { renderFlameGraph(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "news",
+  label: "News",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderNews(el, frame, p); },
+});
+
+// ── Wave C registrations (Phase 12.2) ─────────────────────────────────
+PulseBoard.registerPanel({
+  type: "nodegraph",
+  label: "Node graph",
+  queryShape: "nodes",
+  render(el, frame, opts, p) { renderNodeGraph(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "canvas",
+  label: "Canvas",
+  queryShape: "none",
+  render(el, frame, opts, p) { renderCanvasPanel(el, frame, p); },
+});
+
+PulseBoard.registerPanel({
+  type: "geomap",
+  label: "Geomap",
+  queryShape: "vector",
+  render(el, frame, opts, p) { renderGeomap(el, frame, p); },
+});
 
 // =====================================================================
 // Dashboard loading + persistence
@@ -916,10 +2615,12 @@ async function previewEditor() {
   try {
     const r = await runQuery(p.queryLang, p.expr, start, now, step);
     host.innerHTML = "";
-    if (p.type === "timeseries") renderTimeseries(host, r, p);
-    else if (p.type === "stat") renderStat(host, r, p);
-    else if (p.type === "logs") renderLogs(host, r, p);
-    else renderTable(host, r, p);
+    const def = PulseBoard.getPanel(p.type);
+    if (def) {
+      def.render(host, r, p.options || {}, p);
+    } else {
+      renderTimeseries(host, r, p);
+    }
   } catch (err) {
     host.innerHTML = `<div class="err" style="padding:8px;">${err.message}</div>`;
   }
@@ -1382,6 +3083,18 @@ $("map-range").addEventListener("change", loadServiceMap);
 
 window.addEventListener("hashchange", router);
 router();
+
+// Populate panel-type <select> from the registry so new panel plugins
+// appear automatically without touching HTML.
+(function populatePanelTypeSelect() {
+  const sel = $("ed-type");
+  sel.innerHTML = "";
+  for (const { type, label } of PulseBoard.panelTypes()) {
+    const o = document.createElement("option");
+    o.value = type; o.textContent = label;
+    sel.appendChild(o);
+  }
+})();
 
 (async () => {
   if (!pbBearer()) { pbRedirectSignin(); return; }
