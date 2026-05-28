@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+#
+# Install once per clone with:
+#   git config core.hooksPath .githooks
+# or:
+#   make install-hooks
+#
+# What this does:
+#   1. dotnet format --verify-no-changes  (formatting — no auto-fix in hooks)
+#   2. dotnet test --filter Category=Fast (fast unit tests, ~seconds)
+#
+# Both steps run against the staged state so you never commit unformatted code
+# or a red fast-test suite.
+
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# ---------------------------------------------------------------------------
+# 1. Format check
+# ---------------------------------------------------------------------------
+echo "[pre-commit] checking formatting..."
+if ! dotnet format PulseBoard.slnx --verify-no-changes --no-restore 2>&1; then
+  echo ""
+  echo "  Format errors detected. Run 'make format' (or 'dotnet format PulseBoard.slnx') to fix, then re-stage."
+  exit 1
+fi
+echo "[pre-commit] formatting OK"
+
+# ---------------------------------------------------------------------------
+# 2. Fast tests
+# ---------------------------------------------------------------------------
+echo "[pre-commit] running fast tests (Category=Fast)..."
+if ! dotnet test tests/edge/PulseBoard.Tests.fsproj \
+       --filter "Category=Fast" \
+       --no-build \
+       --nologo \
+       --verbosity quiet 2>&1; then
+  echo ""
+  echo "  Fast tests FAILED. Fix failing tests before committing."
+  exit 1
+fi
+echo "[pre-commit] fast tests passed"

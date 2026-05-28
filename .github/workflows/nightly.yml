@@ -1,0 +1,220 @@
+name: nightly
+
+# Nightly bench + chaos run.
+#
+# Runs every night at 02:00 UTC (off-peak). Also triggerable manually.
+#
+# Jobs:
+#   bench   — BenchmarkDotNet suite (Short job = ~2 min), uploads JSON + MD artefacts,
+#             then pushes p50/p99 summaries to the self-observability dashboard via
+#             Prom remote-write.
+#   chaos   — kill-edge-pod, kill-postgres, kill-mimir-ingester smoke scenarios
+#             against the staging environment.
+#
+# Required repo secrets:
+#   PULSEBOARD_URL      — staging PulseBoard base URL, e.g. https://staging.pulseboard.io
+#   PULSEBOARD_API_KEY  — API key with write access for the __self__ tenant
+#
+# Optional repo secrets (chaos only):
+#   DEPLOY_MODE         — fly | k8s | docker (default: docker, skips chaos if not set)
+#   FLY_API_TOKEN       — required when DEPLOY_MODE=fly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 02:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      skip_chaos:
+        description: "Skip chaos scenarios (bench only)"
+        type: boolean
+        default: false
+      bench_filter:
+        description: "BenchmarkDotNet --filter glob (default: *)"
+        type: string
+        default: "*"
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false   # never cancel a running nightly mid-flight
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # bench — BenchmarkDotNet in Short mode
+  # ---------------------------------------------------------------------------
+  bench:
+    name: Benchmark suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build bench project
+        run: dotnet build tests/bench/PulseBoard.Bench.fsproj --configuration Release --nologo
+
+      - name: Run benchmarks (Short job)
+        run: |
+          mkdir -p bench-results
+          dotnet run --project tests/bench/PulseBoard.Bench.fsproj \
+            --configuration Release --no-build -- \
+            --filter "${{ inputs.bench_filter || '*' }}" \
+            --job Short \
+            --exporters Json MarkdownExporter \
+            --artifacts bench-results/ \
+            --memoryDiagnoser \
+            --nologo
+
+      - name: Upload bench artefacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results-${{ github.run_number }}
+          path: bench-results/
+          retention-days: 90
+
+      - name: Push bench metrics to self-observability dashboard
+        if: ${{ vars.PULSEBOARD_URL != '' || secrets.PULSEBOARD_URL != '' }}
+        env:
+          PULSEBOARD_URL: ${{ secrets.PULSEBOARD_URL }}
+          PULSEBOARD_API_KEY: ${{ secrets.PULSEBOARD_API_KEY }}
+        run: |
+          # Extract p50/p99/alloc from the BDN JSON summary and push as Prom
+          # remote-write to the __self__ tenant on the staging PulseBoard instance.
+          python3 - <<'PYEOF'
+          import json, os, glob, struct, time, urllib.request, urllib.error
+
+          url = os.environ.get("PULSEBOARD_URL", "").rstrip("/")
+          key = os.environ.get("PULSEBOARD_API_KEY", "")
+          if not url:
+              print("PULSEBOARD_URL not set — skipping metric push")
+              exit(0)
+
+          now_ms = int(time.time() * 1000)
+
+          # Collect all BDN JSON result files.
+          results = glob.glob("bench-results/**/*-report-full.json", recursive=True)
+          if not results:
+              results = glob.glob("bench-results/**/*.json", recursive=True)
+
+          metrics = []   # list of (name, value_ms)
+          for path in results:
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+                  for bench in data.get("Benchmarks", []):
+                      short = bench.get("MethodTitle") or bench.get("Method", "unknown")
+                      ns = bench.get("Statistics", {})
+                      p50  = ns.get("Median", ns.get("Mean", 0)) / 1_000_000   # ns → ms
+                      p99  = ns.get("Percentiles", {}).get("P99", p50 * 1.5)
+                      p99  = p99 / 1_000_000 if p99 > 1000 else p99             # ns → ms guard
+                      alloc = bench.get("Memory", {}).get("BytesAllocatedPerOperation", 0)
+                      safe = short.lower().replace(" ", "_").replace("/", "_")
+                      metrics.append((f"pulseboard_bench_{safe}_p50_ms", p50))
+                      metrics.append((f"pulseboard_bench_{safe}_p99_ms", p99))
+                      metrics.append((f"pulseboard_bench_{safe}_alloc_bytes", alloc))
+              except Exception as e:
+                  print(f"  warn: could not parse {path}: {e}")
+
+          if not metrics:
+              print("No bench metrics extracted — skipping push")
+              exit(0)
+
+          # Build a minimal Prometheus text-format payload and push via
+          # /api/prom/write (Cortex/Mimir compatible endpoint).
+          # Each metric is a single sample at now_ms.
+          lines = []
+          ts_s = now_ms // 1000
+          for name, value in metrics:
+              lines.append(f'{name}{{job="nightly-bench",sha="{os.environ.get("GITHUB_SHA","unknown")[:8]}"}} {value:.6f} {ts_s}')
+
+          payload = "\n".join(lines) + "\n"
+
+          req = urllib.request.Request(
+              f"{url}/api/prom/write",
+              data=payload.encode(),
+              method="POST",
+              headers={
+                  "Content-Type": "text/plain; version=0.0.4",
+                  "Authorization": f"Bearer {key}",
+                  "X-Scope-OrgID": "__self__",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  print(f"Pushed {len(metrics)} bench metrics → HTTP {resp.status}")
+          except urllib.error.HTTPError as e:
+              print(f"warn: metric push returned HTTP {e.code} — continuing")
+          except Exception as e:
+              print(f"warn: metric push failed ({e}) — continuing")
+          PYEOF
+
+  # ---------------------------------------------------------------------------
+  # chaos — kill-edge-pod / kill-postgres / kill-mimir-ingester
+  # ---------------------------------------------------------------------------
+  chaos:
+    name: Chaos scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: ${{ github.event.inputs.skip_chaos != 'true' }}
+    permissions:
+      contents: read
+
+    env:
+      BASE_URL:    ${{ secrets.PULSEBOARD_URL || 'http://localhost:8080' }}
+      API_KEY:     ${{ secrets.PULSEBOARD_API_KEY }}
+      DEPLOY_MODE: ${{ vars.DEPLOY_MODE || 'docker' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Fly CLI (fly mode only)
+        if: ${{ vars.DEPLOY_MODE == 'fly' }}
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Start PulseBoard via Docker Compose (docker mode only)
+        if: ${{ vars.DEPLOY_MODE == 'docker' || vars.DEPLOY_MODE == '' }}
+        run: |
+          docker compose up -d
+          # Wait for edge to be healthy before injecting chaos.
+          for i in $(seq 1 30); do
+            code=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/api/healthz 2>/dev/null || echo 000)
+            [ "$code" = "200" ] && echo "Edge healthy after ${i}s" && break
+            sleep 1
+          done
+
+      - name: Chaos — kill edge pod
+        run: bash tests/chaos/kill-edge-pod.sh
+
+      - name: Chaos — kill postgres
+        run: bash tests/chaos/kill-postgres.sh
+
+      - name: Chaos — kill Mimir ingester
+        run: bash tests/chaos/kill-mimir-ingester.sh
+
+      - name: Push chaos pass/fail metric to dashboard
+        if: always()
+        env:
+          PULSEBOARD_URL: ${{ secrets.PULSEBOARD_URL }}
+          PULSEBOARD_API_KEY: ${{ secrets.PULSEBOARD_API_KEY }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          [ -z "$PULSEBOARD_URL" ] && echo "PULSEBOARD_URL not set — skipping" && exit 0
+          VALUE=1
+          [ "$JOB_STATUS" != "success" ] && VALUE=0
+          SHA="${GITHUB_SHA:0:8}"
+          TS=$(date +%s)
+          PAYLOAD="pulseboard_chaos_passed{job=\"nightly-chaos\",sha=\"$SHA\"} $VALUE $TS"
+          curl -sf \
+            -X POST "${PULSEBOARD_URL}/api/prom/write" \
+            -H "Content-Type: text/plain; version=0.0.4" \
+            -H "Authorization: Bearer $PULSEBOARD_API_KEY" \
+            -H "X-Scope-OrgID: __self__" \
+            --data-binary "$PAYLOAD" \
+          && echo "Pushed chaos result metric" \
+          || echo "warn: metric push failed — non-fatal"

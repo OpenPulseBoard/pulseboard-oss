@@ -1,4 +1,4 @@
-.PHONY: build test test-fast test-postgres coverage bench chaos format
+.PHONY: build test test-fast test-postgres coverage bench bench-k6 chaos format install-hooks
 
 # Build all projects
 build:
@@ -85,4 +85,11 @@ chaos:
 
 # Format all F# source files
 format:
-	dotnet format PulseBoard.sln
+	dotnet format PulseBoard.slnx
+
+# Install git hooks — run once per clone
+# Sets core.hooksPath so git picks up .githooks/pre-commit automatically.
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@echo "Git hooks installed. pre-commit: dotnet format + Category=Fast tests."
