@@ -1101,6 +1101,10 @@ let main argv =
       PulseBoard.Gateway.internalWebPart inproc secret
     | _ -> fun _ -> async { return None }
 
+  let agentStore : PulseBoard.AgentApi.IAgentStore =
+    PulseBoard.AgentApi.InMemoryAgentStore() :> _
+  let agentApiInner = PulseBoard.AgentApi.webPart multiTenant agentStore
+
   let app : WebPart =
     choose [
       // Liveness probe. Cheap, no auth, no DB call — used by Fly
@@ -1124,6 +1128,7 @@ let main argv =
       admin     // must precede `query` because /api/admin/* also matches /api/
       secretsAdmin   // /api/secrets/* — also Admin-scoped, sibling of admin
       PulseBoard.Admin.pricingWebPart ()   // Phase 8 #5 — public rate card + calculator
+      agentApiInner // Phase 13 — agent enroll/checkin + portal fleet endpoints
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       whoamiRoute

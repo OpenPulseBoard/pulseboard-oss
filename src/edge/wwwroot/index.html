@@ -423,6 +423,15 @@
 
   /* --- Dashboard Library (Phase 12.4) --- */
   .lib-header { padding:16px 20px 8px; }
+  /* ── Agents table (Phase 13) ── */
+  .agents-table { width:100%; border-collapse:collapse; margin:0 20px; width:calc(100% - 40px); }
+  .agents-table th { text-align:left; font-size:12px; color:var(--muted); font-weight:500;
+    padding:6px 10px; border-bottom:1px solid var(--border); }
+  .agents-table td { padding:8px 10px; font-size:13px; border-bottom:1px solid var(--border); }
+  .agent-dot { display:inline-block; width:8px; height:8px; border-radius:50%; }
+  .agent-dot.online   { background:#22c55e; }
+  .agent-dot.degraded { background:#f59e0b; }
+  .agent-dot.offline  { background:#6b7280; }
   .lib-header h2 { margin:0 0 4px; font-size:18px; }
   .lib-header > p { margin:0 0 10px; color:var(--muted); font-size:13px; }
   #lib-search { width:280px; background:var(--panel-2); border:1px solid var(--border);
@@ -465,6 +474,7 @@
     <a href="#/traces"     id="tab-traces">Traces</a>
     <a href="#/map"        id="tab-map">Service Map</a>
     <a href="#/library"    id="tab-library">Library</a>
+    <a href="#/agents"     id="tab-agents">Agents</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
@@ -691,6 +701,50 @@
   </div>
 </div>
 
+<!-- Agents view (Phase 13) -->
+<div id="view-agents" class="hidden">
+  <div class="lib-header">
+    <h2>Agent Fleet</h2>
+    <p>Manage PulseAgent instances enrolled in this workspace.</p>
+    <button id="agents-gen-token-btn" class="primary" style="margin-top:8px;">Generate enrollment token</button>
+  </div>
+  <table class="agents-table" id="agents-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Hostname</th>
+        <th>Version</th>
+        <th>Last seen</th>
+        <th>Enrolled</th>
+      </tr>
+    </thead>
+    <tbody id="agents-body"></tbody>
+  </table>
+</div>
+
+<!-- Enrollment token modal -->
+<div class="modal-backdrop hidden" id="agents-token-modal">
+  <div class="modal" style="max-width:540px;">
+    <header>
+      <h2>Enrollment token</h2>
+      <button id="agents-token-modal-close">×</button>
+    </header>
+    <div class="body">
+      <p style="margin-bottom:12px;color:var(--muted);font-size:13px;">
+        This token expires in 30 minutes. Pass it to <code>install.sh</code> or set
+        <code>enroll_token</code> in <code>agent.toml</code>.
+      </p>
+      <div style="background:var(--panel-2);border-radius:6px;padding:12px;font-family:monospace;
+                  font-size:13px;word-break:break-all;margin-bottom:16px;" id="agents-token-value"></div>
+      <details>
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);">Example agent.toml snippet</summary>
+        <pre id="agents-token-snippet" style="background:var(--panel-2);border-radius:6px;padding:10px;
+             font-size:12px;margin-top:8px;overflow-x:auto;"></pre>
+      </details>
+    </div>
+  </div>
+</div>
+
 <!-- Trace waterfall modal -->
 <div class="modal-backdrop" id="trace-modal">
   <div class="modal">
@@ -854,14 +908,17 @@ function showView(name) {
   $("view-traces").classList.toggle("hidden",     name !== "traces");
   $("view-map").classList.toggle("hidden",        name !== "map");
   $("view-library").classList.toggle("hidden",    name !== "library");
+  $("view-agents").classList.toggle("hidden",     name !== "agents");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
   $("tab-traces").classList.toggle("active",     name === "traces");
   $("tab-map").classList.toggle("active",        name === "map");
   $("tab-library").classList.toggle("active",    name === "library");
+  $("tab-agents").classList.toggle("active",     name === "agents");
   if (name === "traces")  loadTraces();
   if (name === "map")     loadServiceMap();
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
+  if (name === "agents")  loadAgents();
 }
 
 function uuid() {
@@ -3668,6 +3725,7 @@ function router() {
   else if (h.startsWith("#/explore")) showView("explore");
   else if (h.startsWith("#/traces"))  showView("traces");
   else if (h.startsWith("#/library")) showView("library");
+  else if (h.startsWith("#/agents"))  showView("agents");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
 }
@@ -3955,6 +4013,79 @@ $("trace-modal").addEventListener("click", (e) => {
 // =====================================================================
 // Service Map tab — SVG with nodes on a circle (Phase 4 #4)
 // =====================================================================
+// ── Phase 13: Agents fleet ──────────────────────────────────────────────────
+async function loadAgents() {
+  const tbody = $("agents-body");
+  tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr>';
+  try {
+    const list = await api("GET", "/api/agents");
+    renderAgents(Array.isArray(list) ? list : []);
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">Failed: ${e.message}</td></tr>`;
+  }
+}
+
+function agentStatus(lastSeenMs) {
+  const age = Date.now() - lastSeenMs;
+  if (age < 90_000)   return "online";
+  if (age < 300_000)  return "degraded";
+  return "offline";
+}
+
+function fmtAgo(ms) {
+  if (!ms) return "never";
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 5)   return "just now";
+  if (s < 90)  return s + "s ago";
+  if (s < 3600) return Math.floor(s/60) + "m ago";
+  if (s < 86400) return Math.floor(s/3600) + "h ago";
+  return Math.floor(s/86400) + "d ago";
+}
+
+function renderAgents(list) {
+  const tbody = $("agents-body");
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No agents enrolled yet. Generate an enrollment token and run install.sh on your hosts.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(a => {
+    const st = agentStatus(a.lastSeen);
+    return `<tr>
+      <td><span class="agent-dot ${st}" title="${st}"></span></td>
+      <td>${escapeHtml(a.hostname || a.id)}</td>
+      <td style="color:var(--muted);font-size:12px;">${escapeHtml(a.version || "—")}</td>
+      <td title="${new Date(a.lastSeen).toISOString()}">${fmtAgo(a.lastSeen)}</td>
+      <td style="color:var(--muted);font-size:12px;" title="${new Date(a.enrolledAt).toISOString()}">${fmtAgo(a.enrolledAt)}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function generateEnrollToken() {
+  try {
+    const data = await api("POST", "/api/agents/token");
+    const tok = (data && data.token) || "";
+    const baseUrl = location.origin;
+    $("agents-token-value").textContent = tok;
+    $("agents-token-snippet").textContent =
+`[agent]
+workspace_url = "${baseUrl}"
+enroll_token  = "${tok}"
+
+[sources.host_metrics]
+interval = "15s"`;
+    $("agents-token-modal").classList.remove("hidden");
+  } catch(e) {
+    alert("Could not generate token: " + e.message);
+  }
+}
+
+$("agents-gen-token-btn").addEventListener("click", generateEnrollToken);
+$("agents-token-modal-close").addEventListener("click", () => $("agents-token-modal").classList.add("hidden"));
+$("agents-token-modal").addEventListener("click", (e) => {
+  if (e.target === $("agents-token-modal")) $("agents-token-modal").classList.add("hidden");
+});
+
+// ── End Phase 13 agents ─────────────────────────────────────────────────────
 async function loadServiceMap() {
   const since = sinceMsFrom($("map-range").value);
   $("map-meta").textContent = "loading…";
