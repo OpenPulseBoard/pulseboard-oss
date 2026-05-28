@@ -420,6 +420,39 @@
   .var-row input, .var-row select {
     background:var(--panel-2); border:1px solid var(--border); color:var(--fg);
     border-radius:4px; padding:2px 6px; font-size:11px; width:100%; }
+
+  /* --- Dashboard Library (Phase 12.4) --- */
+  .lib-header { padding:16px 20px 8px; }
+  .lib-header h2 { margin:0 0 4px; font-size:18px; }
+  .lib-header > p { margin:0 0 10px; color:var(--muted); font-size:13px; }
+  #lib-search { width:280px; background:var(--panel-2); border:1px solid var(--border);
+    color:var(--fg); border-radius:4px; padding:5px 10px; font-size:13px; }
+  .lib-filters { display:flex; gap:6px; margin:8px 0 14px; flex-wrap:wrap; }
+  .lib-filters button { background:var(--panel-2); border:1px solid var(--border); color:var(--muted);
+    padding:3px 10px; border-radius:12px; cursor:pointer; font-size:12px; }
+  .lib-filters button.btn-active { color:var(--accent); border-color:var(--accent); }
+  .lib-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+    gap:14px; padding:0 20px 24px; }
+  .lib-card { background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    padding:14px; cursor:pointer; transition:border-color .15s; }
+  .lib-card:hover { border-color:var(--accent); }
+  .lib-card-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .lib-card-icon { font-size:26px; line-height:1; }
+  .lib-card-name { font-size:14px; font-weight:600; margin:0; line-height:1.2; }
+  .lib-card-cat  { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .lib-card-desc { font-size:12px; color:var(--muted); line-height:1.5; margin:0 0 10px; }
+  .lib-card-foot { display:flex; align-items:center; justify-content:space-between; }
+  .lib-metric-cnt { font-size:11px; color:var(--muted); }
+  .lib-card-foot button { font-size:12px; padding:3px 10px; }
+  .lib-check-row { display:flex; align-items:center; gap:8px; padding:5px 0;
+    border-bottom:1px solid var(--border); font-size:12px; }
+  .lib-check-ok   { color:#4caf50; font-weight:bold; font-size:14px; }
+  .lib-check-miss { color:#f44;    font-weight:bold; font-size:14px; }
+  .lib-check-name { flex:1; font-family:monospace; font-size:11px; }
+  .lib-check-hint { color:var(--muted); font-size:11px; }
+  .lib-metrics-wrap { max-height:260px; overflow-y:auto; margin:10px 0;
+    border:1px solid var(--border); border-radius:4px; padding:4px 8px; }
+  .lib-import-sum { font-size:12px; color:var(--muted); margin:6px 0; }
   </style>
 </head>
 <body>
@@ -431,6 +464,7 @@
     <a href="#/explore"    id="tab-explore">Explore</a>
     <a href="#/traces"     id="tab-traces">Traces</a>
     <a href="#/map"        id="tab-map">Service Map</a>
+    <a href="#/library"    id="tab-library">Library</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
@@ -615,6 +649,48 @@
   </div>
 </div>
 
+<!-- Library view (Phase 12.4) -->
+<div id="view-library" class="hidden">
+  <div class="lib-header">
+    <h2>Dashboard Library</h2>
+    <p>One-click dashboards for popular integrations. Checks which metrics you're already sending, then imports with a single click.</p>
+    <input type="text" id="lib-search" placeholder="Search integrations…" />
+    <div class="lib-filters" id="lib-filters">
+      <button class="btn-active" data-cat="">All</button>
+      <button data-cat="Infrastructure">Infrastructure</button>
+      <button data-cat="Database">Database</button>
+      <button data-cat="Application">Application</button>
+      <button data-cat="Container">Container</button>
+    </div>
+  </div>
+  <div class="lib-grid" id="lib-grid"></div>
+</div>
+
+<!-- Library import wizard modal (Phase 12.4) -->
+<div id="lib-modal" class="ergn-back hidden">
+  <div class="ergn-modal" style="max-width:560px">
+    <header class="ergn-modal-head">
+      <span id="lib-modal-title">Import dashboard</span>
+      <button id="lib-modal-close">×</button>
+    </header>
+    <div id="lib-step1">
+      <p id="lib-modal-desc" class="lib-import-sum"></p>
+      <strong style="font-size:12px;">Required metrics</strong>
+      <div id="lib-metrics-list" class="lib-metrics-wrap"></div>
+      <p id="lib-metrics-note" class="lib-import-sum"></p>
+    </div>
+    <div id="lib-step2" class="hidden">
+      <p id="lib-done-msg" class="lib-import-sum" style="margin-top:12px;line-height:1.6;"></p>
+    </div>
+    <div class="ergn-modal-foot">
+      <span id="lib-modal-status" style="font-size:12px;color:var(--muted)"></span>
+      <button id="lib-view-btn" class="hidden primary">Open dashboard</button>
+      <button id="lib-import-confirm" class="primary">Import</button>
+      <button id="lib-modal-close2">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Trace waterfall modal -->
 <div class="modal-backdrop" id="trace-modal">
   <div class="modal">
@@ -777,12 +853,15 @@ function showView(name) {
   $("view-explore").classList.toggle("hidden",    name !== "explore");
   $("view-traces").classList.toggle("hidden",     name !== "traces");
   $("view-map").classList.toggle("hidden",        name !== "map");
+  $("view-library").classList.toggle("hidden",    name !== "library");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
   $("tab-traces").classList.toggle("active",     name === "traces");
   $("tab-map").classList.toggle("active",        name === "map");
-  if (name === "traces") loadTraces();
-  if (name === "map")    loadServiceMap();
+  $("tab-library").classList.toggle("active",    name === "library");
+  if (name === "traces")  loadTraces();
+  if (name === "map")     loadServiceMap();
+  if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
 }
 
 function uuid() {
@@ -3281,6 +3360,305 @@ function connectWs() {
   };
 }
 
+
+// =====================================================================
+// Phase 12.4 — Dashboard Library
+// =====================================================================
+let _libCatFilter = "";
+let _libKey = null;
+
+const LIBRARY_CATALOG = [
+  {
+    id: "linux-host", icon: "🐧", title: "Linux Host", category: "Infrastructure",
+    description: "CPU, memory, disk I/O, and network throughput via node_exporter.",
+    metrics: ["node_cpu_seconds_total","node_memory_MemTotal_bytes","node_disk_read_bytes_total","node_network_receive_bytes_total"],
+    alerts: { name:"Linux Host Alerts", intervalMs:15000, rules:[
+      { name:"High CPU", lang:"promql", expr:'100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"CPU > 90%"} },
+      { name:"Low disk space", lang:"promql", expr:'(node_filesystem_avail_bytes{fstype!~"tmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs"}) * 100', cmp:"<", threshold:10, forMs:300000, severity:"critical", labels:{integration:"linux-host"}, annotations:{summary:"Disk free < 10%"} },
+      { name:"High memory", lang:"promql", expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"Memory > 90%"} },
+    ]},
+    dashboard: { title:"Linux Host", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"CPU Usage %", type:"timeseries", queryLang:"promql", expr:'100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', x:0,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p2", title:"Memory Usage %", type:"timeseries", queryLang:"promql", expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", x:6,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p3", title:"System Load 1m", type:"stat", queryLang:"promql", expr:"node_load1", x:0,y:3,w:3,h:2, options:{}, links:[] },
+      { id:"p4", title:"Disk Read", type:"timeseries", queryLang:"promql", expr:"rate(node_disk_read_bytes_total[5m])", x:3,y:3,w:4,h:2, options:{unit:"bytes/s"}, links:[] },
+      { id:"p5", title:"Disk Write", type:"timeseries", queryLang:"promql", expr:"rate(node_disk_written_bytes_total[5m])", x:7,y:3,w:5,h:2, options:{unit:"bytes/s"}, links:[] },
+      { id:"p6", title:"Network Rx", type:"timeseries", queryLang:"promql", expr:'rate(node_network_receive_bytes_total{device!="lo"}[5m])', x:0,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
+      { id:"p7", title:"Network Tx", type:"timeseries", queryLang:"promql", expr:'rate(node_network_transmit_bytes_total{device!="lo"}[5m])', x:6,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
+    ]}
+  },
+  {
+    id: "docker", icon: "🐳", title: "Docker", category: "Container",
+    description: "Container CPU, memory, and network usage via cadvisor or Docker stats exporter.",
+    metrics: ["container_cpu_usage_seconds_total","container_memory_usage_bytes","container_network_receive_bytes_total"],
+    alerts: { name:"Docker Alerts", intervalMs:15000, rules:[
+      { name:"Container high CPU", lang:"promql", expr:'rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100', cmp:">", threshold:80, forMs:300000, severity:"warning", labels:{integration:"docker"}, annotations:{summary:"Container CPU > 80%"} },
+      { name:"Container high memory", lang:"promql", expr:'container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} * 100', cmp:">", threshold:90, forMs:300000, severity:"critical", labels:{integration:"docker"}, annotations:{summary:"Container memory > 90% of limit"} },
+      { name:"Container OOM", lang:"promql", expr:'rate(container_oom_events_total[5m])', cmp:">", threshold:0, forMs:0, severity:"critical", labels:{integration:"docker"}, annotations:{summary:"Container OOM killed"} },
+    ]},
+    dashboard: { title:"Docker Containers", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Container CPU %", type:"timeseries", queryLang:"promql", expr:'rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100', x:0,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p2", title:"Container Memory", type:"timeseries", queryLang:"promql", expr:'container_memory_usage_bytes{name!=""}', x:6,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"Running Containers", type:"stat", queryLang:"promql", expr:'count(container_last_seen{name!=""})', x:0,y:3,w:3,h:2, options:{}, links:[] },
+      { id:"p4", title:"Network Rx", type:"timeseries", queryLang:"promql", expr:'rate(container_network_receive_bytes_total{name!=""}[5m])', x:3,y:3,w:4,h:2, options:{unit:"bytes/s"}, links:[] },
+      { id:"p5", title:"Network Tx", type:"timeseries", queryLang:"promql", expr:'rate(container_network_transmit_bytes_total{name!=""}[5m])', x:7,y:3,w:5,h:2, options:{unit:"bytes/s"}, links:[] },
+      { id:"p6", title:"Block I/O Read", type:"timeseries", queryLang:"promql", expr:'rate(container_blkio_device_usage_total{op="Read",name!=""}[5m])', x:0,y:5,w:12,h:3, options:{unit:"bytes/s"}, links:[] },
+    ]}
+  },
+  {
+    id: "kubernetes", icon: "☸️", title: "Kubernetes", category: "Container",
+    description: "Pod phases, node status, cluster CPU/memory via kube-state-metrics and kubelet.",
+    metrics: ["kube_pod_status_phase","kube_node_status_condition","container_cpu_usage_seconds_total","kube_node_status_allocatable"],
+    alerts: { name:"Kubernetes Alerts", intervalMs:15000, rules:[
+      { name:"Pod crash-looping", lang:"promql", expr:"rate(kube_pod_container_status_restarts_total[15m]) * 60", cmp:">", threshold:3, forMs:300000, severity:"warning", labels:{integration:"kubernetes"}, annotations:{summary:"Pod restarting > 3×/min"} },
+      { name:"Node not ready", lang:"promql", expr:'kube_node_status_condition{condition="Ready",status="true"}', cmp:"<", threshold:1, forMs:60000, severity:"critical", labels:{integration:"kubernetes"}, annotations:{summary:"Kubernetes node not ready"} },
+      { name:"High cluster CPU", lang:"promql", expr:'sum(rate(container_cpu_usage_seconds_total[5m])) / sum(kube_node_status_allocatable{resource="cpu"}) * 100', cmp:">", threshold:85, forMs:300000, severity:"warning", labels:{integration:"kubernetes"}, annotations:{summary:"Cluster CPU > 85%"} },
+    ]},
+    dashboard: { title:"Kubernetes Cluster", timeRangeSec:3600, refreshSec:30, vars:[], panels:[
+      { id:"p1", title:"Running Pods", type:"stat", queryLang:"promql", expr:'sum(kube_pod_status_phase{phase="Running"})', x:0,y:0,w:3,h:2, options:{}, links:[] },
+      { id:"p2", title:"Failed Pods", type:"stat", queryLang:"promql", expr:'sum(kube_pod_status_phase{phase="Failed"})', x:3,y:0,w:3,h:2, options:{}, links:[] },
+      { id:"p3", title:"Ready Nodes", type:"stat", queryLang:"promql", expr:'sum(kube_node_status_condition{condition="Ready",status="true"})', x:6,y:0,w:3,h:2, options:{}, links:[] },
+      { id:"p4", title:"Cluster CPU %", type:"timeseries", queryLang:"promql", expr:'sum(rate(container_cpu_usage_seconds_total[5m])) / sum(kube_node_status_allocatable{resource="cpu"}) * 100', x:0,y:2,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p5", title:"Cluster Memory %", type:"timeseries", queryLang:"promql", expr:'sum(container_memory_working_set_bytes) / sum(kube_node_status_allocatable{resource="memory"}) * 100', x:6,y:2,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p6", title:"Pod Restarts/min", type:"timeseries", queryLang:"promql", expr:"sum(rate(kube_pod_container_status_restarts_total[5m])) * 60", x:0,y:5,w:12,h:3, options:{}, links:[] },
+    ]}
+  },
+  {
+    id: "postgres", icon: "🐘", title: "PostgreSQL", category: "Database",
+    description: "Connections, transactions, cache hit rate, and query throughput via postgres_exporter.",
+    metrics: ["pg_up","pg_stat_activity_count","pg_stat_database_xact_commit","pg_stat_database_blks_hit"],
+    alerts: { name:"PostgreSQL Alerts", intervalMs:15000, rules:[
+      { name:"Postgres down", lang:"promql", expr:"pg_up", cmp:"<", threshold:1, forMs:60000, severity:"critical", labels:{integration:"postgres"}, annotations:{summary:"PostgreSQL is down"} },
+      { name:"High connection count", lang:"promql", expr:"pg_stat_activity_count", cmp:">", threshold:80, forMs:300000, severity:"warning", labels:{integration:"postgres"}, annotations:{summary:"Postgres connections > 80"} },
+      { name:"Low cache hit rate", lang:"promql", expr:"pg_stat_database_blks_hit / (pg_stat_database_blks_hit + pg_stat_database_blks_read + 1)", cmp:"<", threshold:0.95, forMs:600000, severity:"warning", labels:{integration:"postgres"}, annotations:{summary:"Cache hit rate < 95%"} },
+    ]},
+    dashboard: { title:"PostgreSQL", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Active Connections", type:"timeseries", queryLang:"promql", expr:"pg_stat_activity_count", x:0,y:0,w:6,h:3, options:{}, links:[] },
+      { id:"p2", title:"Cache Hit Rate", type:"stat", queryLang:"promql", expr:"pg_stat_database_blks_hit / (pg_stat_database_blks_hit + pg_stat_database_blks_read + 1)", x:6,y:0,w:3,h:3, options:{unit:"%"}, links:[] },
+      { id:"p3", title:"Postgres Up", type:"stat", queryLang:"promql", expr:"pg_up", x:9,y:0,w:3,h:3, options:{}, links:[] },
+      { id:"p4", title:"Commits/s", type:"timeseries", queryLang:"promql", expr:"rate(pg_stat_database_xact_commit[5m])", x:0,y:3,w:6,h:3, options:{}, links:[] },
+      { id:"p5", title:"Rollbacks/s", type:"timeseries", queryLang:"promql", expr:"rate(pg_stat_database_xact_rollback[5m])", x:6,y:3,w:6,h:3, options:{}, links:[] },
+      { id:"p6", title:"Rows Fetched/s", type:"timeseries", queryLang:"promql", expr:"rate(pg_stat_database_tup_fetched[5m])", x:0,y:6,w:6,h:3, options:{}, links:[] },
+      { id:"p7", title:"Rows Written/s", type:"timeseries", queryLang:"promql", expr:"rate(pg_stat_database_tup_inserted[5m]) + rate(pg_stat_database_tup_updated[5m])", x:6,y:6,w:6,h:3, options:{}, links:[] },
+    ]}
+  },
+  {
+    id: "redis", icon: "🟥", title: "Redis", category: "Database",
+    description: "Connections, memory, hit rate, and ops/sec via redis_exporter.",
+    metrics: ["redis_up","redis_connected_clients","redis_used_memory_bytes","redis_commands_processed_total"],
+    alerts: { name:"Redis Alerts", intervalMs:15000, rules:[
+      { name:"Redis down", lang:"promql", expr:"redis_up", cmp:"<", threshold:1, forMs:60000, severity:"critical", labels:{integration:"redis"}, annotations:{summary:"Redis is down"} },
+      { name:"Redis memory > 90%", lang:"promql", expr:"redis_used_memory_bytes / redis_total_system_memory_bytes * 100", cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"redis"}, annotations:{summary:"Redis memory above 90%"} },
+      { name:"Redis low hit rate", lang:"promql", expr:"redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total + 1)", cmp:"<", threshold:0.8, forMs:600000, severity:"warning", labels:{integration:"redis"}, annotations:{summary:"Cache hit rate below 80%"} },
+    ]},
+    dashboard: { title:"Redis", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Connected Clients", type:"stat", queryLang:"promql", expr:"redis_connected_clients", x:0,y:0,w:3,h:2, options:{}, links:[] },
+      { id:"p2", title:"Memory Used", type:"stat", queryLang:"promql", expr:"redis_used_memory_bytes", x:3,y:0,w:3,h:2, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"Ops/s", type:"timeseries", queryLang:"promql", expr:"rate(redis_commands_processed_total[5m])", x:6,y:0,w:6,h:2, options:{}, links:[] },
+      { id:"p4", title:"Hit Rate", type:"timeseries", queryLang:"promql", expr:"redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total + 1)", x:0,y:2,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p5", title:"Evictions/s", type:"timeseries", queryLang:"promql", expr:"rate(redis_evicted_keys_total[5m])", x:6,y:2,w:6,h:3, options:{}, links:[] },
+      { id:"p6", title:"Memory Growth", type:"timeseries", queryLang:"promql", expr:"redis_used_memory_bytes", x:0,y:5,w:12,h:3, options:{unit:"bytes"}, links:[] },
+    ]}
+  },
+  {
+    id: "nginx", icon: "🔀", title: "NGINX", category: "Infrastructure",
+    description: "Request rate, active connections, status codes, and error rate via nginx_exporter.",
+    metrics: ["nginx_http_requests_total","nginx_connections_active","nginx_connections_waiting"],
+    alerts: { name:"NGINX Alerts", intervalMs:15000, rules:[
+      { name:"NGINX high error rate", lang:"promql", expr:'rate(nginx_http_requests_total{status=~"5.."}[5m]) / (rate(nginx_http_requests_total[5m]) + 1) * 100', cmp:">", threshold:5, forMs:300000, severity:"warning", labels:{integration:"nginx"}, annotations:{summary:"NGINX 5xx error rate > 5%"} },
+      { name:"NGINX down", lang:"promql", expr:"nginx_up", cmp:"<", threshold:1, forMs:60000, severity:"critical", labels:{integration:"nginx"}, annotations:{summary:"NGINX is down"} },
+      { name:"NGINX connection spike", lang:"promql", expr:"nginx_connections_active", cmp:">", threshold:1000, forMs:300000, severity:"warning", labels:{integration:"nginx"}, annotations:{summary:"NGINX active connections > 1000"} },
+    ]},
+    dashboard: { title:"NGINX", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Requests/s", type:"timeseries", queryLang:"promql", expr:"rate(nginx_http_requests_total[5m])", x:0,y:0,w:6,h:3, options:{}, links:[] },
+      { id:"p2", title:"Active Connections", type:"stat", queryLang:"promql", expr:"nginx_connections_active", x:6,y:0,w:3,h:3, options:{}, links:[] },
+      { id:"p3", title:"Waiting Connections", type:"stat", queryLang:"promql", expr:"nginx_connections_waiting", x:9,y:0,w:3,h:3, options:{}, links:[] },
+      { id:"p4", title:"5xx Errors/s", type:"timeseries", queryLang:"promql", expr:'rate(nginx_http_requests_total{status=~"5.."}[5m])', x:0,y:3,w:6,h:3, options:{}, links:[] },
+      { id:"p5", title:"4xx Errors/s", type:"timeseries", queryLang:"promql", expr:'rate(nginx_http_requests_total{status=~"4.."}[5m])', x:6,y:3,w:6,h:3, options:{}, links:[] },
+    ]}
+  },
+  {
+    id: "nodejs", icon: "⬡", title: "Node.js", category: "Application",
+    description: "Event loop lag, heap usage, GC, and HTTP request latency via prom-client middleware.",
+    metrics: ["nodejs_eventloop_lag_seconds","nodejs_heap_size_used_bytes","process_cpu_seconds_total","http_request_duration_seconds"],
+    alerts: { name:"Node.js Alerts", intervalMs:15000, rules:[
+      { name:"High event loop lag", lang:"promql", expr:"nodejs_eventloop_lag_seconds * 1000", cmp:">", threshold:100, forMs:300000, severity:"warning", labels:{integration:"nodejs"}, annotations:{summary:"Event loop lag > 100ms"} },
+      { name:"High heap usage", lang:"promql", expr:"nodejs_heap_size_used_bytes / nodejs_heap_size_total_bytes * 100", cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"nodejs"}, annotations:{summary:"Heap usage above 90%"} },
+      { name:"High HTTP p99 latency", lang:"promql", expr:"histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) * 1000", cmp:">", threshold:2000, forMs:300000, severity:"warning", labels:{integration:"nodejs"}, annotations:{summary:"HTTP p99 latency > 2s"} },
+    ]},
+    dashboard: { title:"Node.js", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Event Loop Lag (ms)", type:"timeseries", queryLang:"promql", expr:"nodejs_eventloop_lag_seconds * 1000", x:0,y:0,w:6,h:3, options:{unit:"ms"}, links:[] },
+      { id:"p2", title:"Heap Used", type:"timeseries", queryLang:"promql", expr:"nodejs_heap_size_used_bytes", x:6,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"CPU %", type:"timeseries", queryLang:"promql", expr:"rate(process_cpu_seconds_total[5m]) * 100", x:0,y:3,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p4", title:"HTTP Req/s", type:"timeseries", queryLang:"promql", expr:"rate(http_request_duration_seconds_count[5m])", x:6,y:3,w:6,h:3, options:{}, links:[] },
+      { id:"p5", title:"HTTP p99 (ms)", type:"timeseries", queryLang:"promql", expr:"histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) * 1000", x:0,y:6,w:12,h:3, options:{unit:"ms"}, links:[] },
+    ]}
+  },
+  {
+    id: "golang", icon: "🐹", title: "Go", category: "Application",
+    description: "Goroutines, GC pause, heap usage, and CPU via Go's standard prometheus metrics.",
+    metrics: ["go_goroutines","go_gc_duration_seconds","go_memstats_heap_inuse_bytes","process_cpu_seconds_total"],
+    alerts: { name:"Go Alerts", intervalMs:15000, rules:[
+      { name:"Goroutine leak", lang:"promql", expr:"go_goroutines", cmp:">", threshold:10000, forMs:300000, severity:"warning", labels:{integration:"golang"}, annotations:{summary:"Goroutine count > 10 000"} },
+      { name:"High GC pressure", lang:"promql", expr:"histogram_quantile(0.99, rate(go_gc_duration_seconds_bucket[5m])) * 1000", cmp:">", threshold:100, forMs:300000, severity:"warning", labels:{integration:"golang"}, annotations:{summary:"GC p99 > 100ms"} },
+      { name:"High heap usage", lang:"promql", expr:"go_memstats_heap_inuse_bytes / go_memstats_sys_bytes * 100", cmp:">", threshold:85, forMs:300000, severity:"warning", labels:{integration:"golang"}, annotations:{summary:"Heap utilisation > 85%"} },
+    ]},
+    dashboard: { title:"Go Runtime", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Goroutines", type:"timeseries", queryLang:"promql", expr:"go_goroutines", x:0,y:0,w:6,h:3, options:{}, links:[] },
+      { id:"p2", title:"Heap In-Use", type:"timeseries", queryLang:"promql", expr:"go_memstats_heap_inuse_bytes", x:6,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"CPU %", type:"timeseries", queryLang:"promql", expr:"rate(process_cpu_seconds_total[5m]) * 100", x:0,y:3,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p4", title:"GC Runs/min", type:"timeseries", queryLang:"promql", expr:"rate(go_gc_duration_seconds_count[5m]) * 60", x:6,y:3,w:6,h:3, options:{}, links:[] },
+      { id:"p5", title:"GC p99 (ms)", type:"timeseries", queryLang:"promql", expr:"histogram_quantile(0.99, rate(go_gc_duration_seconds_bucket[5m])) * 1000", x:0,y:6,w:12,h:3, options:{unit:"ms"}, links:[] },
+    ]}
+  },
+  {
+    id: "python", icon: "🐍", title: "Python", category: "Application",
+    description: "CPU, memory RSS, GC collection counts, and open FDs via prometheus_client.",
+    metrics: ["process_cpu_seconds_total","process_resident_memory_bytes","python_gc_objects_collected_total","process_open_fds"],
+    alerts: { name:"Python Alerts", intervalMs:15000, rules:[
+      { name:"High CPU", lang:"promql", expr:"rate(process_cpu_seconds_total[5m]) * 100", cmp:">", threshold:85, forMs:300000, severity:"warning", labels:{integration:"python"}, annotations:{summary:"Python CPU > 85%"} },
+      { name:"High memory RSS", lang:"promql", expr:"process_resident_memory_bytes", cmp:">", threshold:2147483648, forMs:300000, severity:"warning", labels:{integration:"python"}, annotations:{summary:"Python RSS > 2 GiB"} },
+      { name:"FD exhaustion", lang:"promql", expr:"process_open_fds / process_max_fds * 100", cmp:">", threshold:80, forMs:300000, severity:"warning", labels:{integration:"python"}, annotations:{summary:"Open FDs > 80% of limit"} },
+    ]},
+    dashboard: { title:"Python Runtime", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"CPU %", type:"timeseries", queryLang:"promql", expr:"rate(process_cpu_seconds_total[5m]) * 100", x:0,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+      { id:"p2", title:"Memory RSS", type:"timeseries", queryLang:"promql", expr:"process_resident_memory_bytes", x:6,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"Open FDs", type:"stat", queryLang:"promql", expr:"process_open_fds", x:0,y:3,w:3,h:2, options:{}, links:[] },
+      { id:"p4", title:"GC Gen0/s", type:"timeseries", queryLang:"promql", expr:'rate(python_gc_objects_collected_total{generation="0"}[5m])', x:3,y:3,w:4,h:2, options:{}, links:[] },
+      { id:"p5", title:"GC Gen1+2/s", type:"timeseries", queryLang:"promql", expr:'rate(python_gc_objects_collected_total{generation!="0"}[5m])', x:7,y:3,w:5,h:2, options:{}, links:[] },
+    ]}
+  },
+  {
+    id: "java-jvm", icon: "☕", title: "Java JVM", category: "Application",
+    description: "Heap/non-heap memory, GC pause, thread count, and class loading via Micrometer or JMX exporter.",
+    metrics: ["jvm_memory_used_bytes","jvm_gc_pause_seconds","jvm_threads_live_threads","jvm_classes_loaded_classes"],
+    alerts: { name:"Java JVM Alerts", intervalMs:15000, rules:[
+      { name:"JVM heap > 90%", lang:"promql", expr:'jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} * 100', cmp:">", threshold:90, forMs:300000, severity:"critical", labels:{integration:"java-jvm"}, annotations:{summary:"JVM heap > 90% — OOM risk"} },
+      { name:"High GC pause", lang:"promql", expr:"histogram_quantile(0.99, rate(jvm_gc_pause_seconds_bucket[5m])) * 1000", cmp:">", threshold:500, forMs:300000, severity:"warning", labels:{integration:"java-jvm"}, annotations:{summary:"GC p99 pause > 500ms"} },
+      { name:"Thread spike", lang:"promql", expr:"jvm_threads_live_threads", cmp:">", threshold:500, forMs:300000, severity:"warning", labels:{integration:"java-jvm"}, annotations:{summary:"JVM live threads > 500"} },
+    ]},
+    dashboard: { title:"Java JVM", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
+      { id:"p1", title:"Heap Used", type:"timeseries", queryLang:"promql", expr:'jvm_memory_used_bytes{area="heap"}', x:0,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p2", title:"Non-Heap Used", type:"timeseries", queryLang:"promql", expr:'jvm_memory_used_bytes{area="nonheap"}', x:6,y:0,w:6,h:3, options:{unit:"bytes"}, links:[] },
+      { id:"p3", title:"Live Threads", type:"stat", queryLang:"promql", expr:"jvm_threads_live_threads", x:0,y:3,w:3,h:2, options:{}, links:[] },
+      { id:"p4", title:"Classes Loaded", type:"stat", queryLang:"promql", expr:"jvm_classes_loaded_classes", x:3,y:3,w:3,h:2, options:{}, links:[] },
+      { id:"p5", title:"GC p99 (ms)", type:"timeseries", queryLang:"promql", expr:"histogram_quantile(0.99, rate(jvm_gc_pause_seconds_bucket[5m])) * 1000", x:6,y:3,w:6,h:2, options:{unit:"ms"}, links:[] },
+      { id:"p6", title:"GC Throughput %", type:"timeseries", queryLang:"promql", expr:"(1 - rate(jvm_gc_pause_seconds_sum[5m]) / 15) * 100", x:0,y:5,w:12,h:3, options:{unit:"%"}, links:[] },
+    ]}
+  },
+];
+
+function renderLibrary(catFilter, search) {
+  const lower = (search || "").toLowerCase();
+  const cards = LIBRARY_CATALOG.filter(e =>
+    (!catFilter || e.category === catFilter) &&
+    (!lower || e.title.toLowerCase().includes(lower) ||
+               e.description.toLowerCase().includes(lower) ||
+               e.category.toLowerCase().includes(lower))
+  );
+  const grid = $("lib-grid");
+  grid.innerHTML = cards.length
+    ? ""
+    : "<p style='padding:20px;color:var(--muted)'>No matching integrations.</p>";
+  for (const e of cards) {
+    const card = document.createElement("div");
+    card.className = "lib-card";
+    card.innerHTML = `
+      <div class="lib-card-head">
+        <span class="lib-card-icon">${e.icon}</span>
+        <div>
+          <p class="lib-card-name">${escapeHtml(e.title)}</p>
+          <span class="lib-card-cat">${escapeHtml(e.category)}</span>
+        </div>
+      </div>
+      <p class="lib-card-desc">${escapeHtml(e.description)}</p>
+      <div class="lib-card-foot">
+        <span class="lib-metric-cnt">${e.metrics.length} metrics &middot; ${e.dashboard.panels.length} panels &middot; ${e.alerts.rules.length} alerts</span>
+        <button class="primary">Import</button>
+      </div>`;
+    const importBtn = card.querySelector("button");
+    importBtn.addEventListener("click", (ev) => { ev.stopPropagation(); openLibraryImport(e.id); });
+    card.addEventListener("click", () => openLibraryImport(e.id));
+    grid.appendChild(card);
+  }
+}
+
+async function checkLibraryMetrics(metrics) {
+  try {
+    const r = await authFetch("/api/prom/api/v1/label/__name__/values");
+    if (!r.ok) return null;
+    const data = await r.json();
+    const have = new Set(data.data || []);
+    return metrics.map(m => ({
+      name: m,
+      present: [...have].some(n => n === m || n.startsWith(m + "_") || n.startsWith(m + "{"))
+    }));
+  } catch { return null; }
+}
+
+async function openLibraryImport(id) {
+  const entry = LIBRARY_CATALOG.find(e => e.id === id);
+  if (!entry) return;
+  _libKey = id;
+  $("lib-modal-title").textContent = "Import: " + entry.title;
+  $("lib-modal-desc").textContent = entry.description;
+  $("lib-metrics-list").innerHTML = "<em style='color:var(--muted);font-size:12px'>Checking metrics…</em>";
+  $("lib-metrics-note").textContent = "";
+  $("lib-modal-status").textContent = "";
+  $("lib-import-confirm").disabled = false;
+  $("lib-import-confirm").classList.remove("hidden");
+  $("lib-view-btn").classList.add("hidden");
+  $("lib-step1").classList.remove("hidden");
+  $("lib-step2").classList.add("hidden");
+  $("lib-modal").classList.remove("hidden");
+
+  const results = await checkLibraryMetrics(entry.metrics);
+  const list = $("lib-metrics-list");
+  if (!results) {
+    list.innerHTML = "<em style='color:var(--muted);font-size:12px'>Could not check — Prometheus API unavailable.</em>";
+    return;
+  }
+  const missing = results.filter(r => !r.present).length;
+  list.innerHTML = results.map(r => `
+    <div class="lib-check-row">
+      <span class="${r.present ? "lib-check-ok" : "lib-check-miss"}">${r.present ? "✓" : "✗"}</span>
+      <span class="lib-check-name">${escapeHtml(r.name)}</span>
+      <span class="lib-check-hint">${r.present ? "found" : "not yet detected"}</span>
+    </div>`).join("");
+  $("lib-metrics-note").textContent = missing
+    ? missing + " metric(s) not yet detected. The dashboard will still import; panels will show \u201cNo data\u201d until you start sending those metrics."
+    : "All required metrics detected. You\u2019re ready to go!";
+}
+
+async function importLibraryDashboard() {
+  const entry = LIBRARY_CATALOG.find(e => e.id === _libKey);
+  if (!entry) return;
+  $("lib-import-confirm").disabled = true;
+  $("lib-modal-status").textContent = "Importing\u2026";
+  try {
+    const dash = {
+      ...entry.dashboard,
+      id: "d-" + uuid(),
+      panels: entry.dashboard.panels.map(p => ({ ...p, id: "p-" + uuid() })),
+    };
+    const saved = await api("POST", "/api/dashboards", dash);
+    // Best-effort alert rule creation
+    try { await api("POST", "/api/rules", entry.alerts); } catch {}
+    $("lib-step1").classList.add("hidden");
+    $("lib-step2").classList.remove("hidden");
+    $("lib-done-msg").textContent =
+      "Dashboard \u201c" + dash.title + "\u201d created with " + dash.panels.length +
+      " panels and " + entry.alerts.rules.length + " alert rules. Open it to start exploring.";
+    $("lib-view-btn").classList.remove("hidden");
+    $("lib-import-confirm").classList.add("hidden");
+    $("lib-modal-status").textContent = "";
+    await reloadList(saved.id);
+  } catch (e) {
+    $("lib-modal-status").textContent = "Error: " + e.message;
+    $("lib-import-confirm").disabled = false;
+  }
+}
+
 // =====================================================================
 // Wiring
 // =====================================================================
@@ -3289,6 +3667,7 @@ function router() {
   if (h.startsWith("#/snapshot/"))    loadSnapshot(h.slice("#/snapshot/".length));
   else if (h.startsWith("#/explore")) showView("explore");
   else if (h.startsWith("#/traces"))  showView("traces");
+  else if (h.startsWith("#/library")) showView("library");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
 }
@@ -3421,6 +3800,29 @@ $("editor-close").addEventListener("click", closeEditor);
 $("ed-apply").addEventListener("click", applyEditor);
 $("ed-delete").addEventListener("click", deleteEditorPanel);
 $("ed-preview-btn").addEventListener("click", previewEditor);
+
+// Library
+$("lib-search").addEventListener("input", (e) => renderLibrary(_libCatFilter, e.target.value));
+$("lib-filters").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-cat]");
+  if (!btn) return;
+  _libCatFilter = btn.dataset.cat;
+  $("lib-filters").querySelectorAll("button").forEach(b =>
+    b.classList.toggle("btn-active", b.dataset.cat === _libCatFilter)
+  );
+  renderLibrary(_libCatFilter, $("lib-search").value);
+});
+$("lib-modal-close").addEventListener("click", () => $("lib-modal").classList.add("hidden"));
+$("lib-modal-close2").addEventListener("click", () => $("lib-modal").classList.add("hidden"));
+$("lib-modal").addEventListener("click", (e) => {
+  if (e.target === $("lib-modal")) $("lib-modal").classList.add("hidden");
+});
+$("lib-import-confirm").addEventListener("click", importLibraryDashboard);
+$("lib-view-btn").addEventListener("click", () => {
+  $("lib-modal").classList.add("hidden");
+  showView("dashboards");
+  location.hash = "#/dashboards";
+});
 
 $("explore-run").addEventListener("click", runExplore);
 $("explore-expr").addEventListener("keydown", (e) => {
