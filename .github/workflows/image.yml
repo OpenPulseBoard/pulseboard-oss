@@ -14,7 +14,12 @@ on:
     paths:
       - "Dockerfile"
       - "src/**"
+      - "tests/**"
       - ".github/workflows/image.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
   workflow_dispatch:
 
 concurrency:
@@ -35,6 +40,33 @@ jobs:
 
       - name: Build workspace project
         run: dotnet build src/edge/PulseBoard.fsproj
+
+  test:
+    needs: validate-builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run unit and property tests
+        run: >
+          dotnet test tests/edge/PulseBoard.Tests.fsproj
+          --configuration Release
+          --filter "Category!=Postgres&Category!=Integration"
+          --collect:"XPlat Code Coverage"
+          --results-directory coverage/
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
 
   build:
     needs: validate-builds
