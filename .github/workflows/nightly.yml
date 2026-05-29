@@ -62,13 +62,12 @@ jobs:
         run: |
           mkdir -p bench-results
           dotnet run --project tests/bench/PulseBoard.Bench.fsproj \
-            --configuration Release --no-build -- \
+            --configuration Release --no-build --nologo -- \
             --filter "${{ inputs.bench_filter || '*' }}" \
             --job Short \
-            --exporters Json MarkdownExporter \
+            --exporters json markdown \
             --artifacts bench-results/ \
-            --memoryDiagnoser \
-            --nologo
+            -m
 
       - name: Upload bench artefacts
         uses: actions/upload-artifact@v4
