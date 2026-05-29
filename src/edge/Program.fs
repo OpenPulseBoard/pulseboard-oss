@@ -1103,7 +1103,22 @@ let main argv =
 
   let agentStore : PulseBoard.AgentApi.IAgentStore =
     PulseBoard.AgentApi.InMemoryAgentStore() :> _
-  let agentApiInner = PulseBoard.AgentApi.webPart multiTenant agentStore
+  // Agent enroll/checkin are unauthenticated (the agent has no credentials yet).
+  // The portal fleet endpoints (GET /api/agents, POST /api/agents/token) need a
+  // tenant session — wrap them in the same resolveSession + resolveApiKey chain
+  // used by admin and query so that tryGetTenant finds the context it expects.
+  let agentApiInner =
+    let raw = PulseBoard.AgentApi.webPart multiTenant agentStore
+    if multiTenant then
+      choose [
+        // Let the unauthenticated agent endpoints pass through first.
+        POST >=> pathStarts "/api/agent/v1/" >=> raw
+        GET  >=> path "/api/agent/v1/config" >=> raw
+        // Portal fleet endpoints require a session.
+        resolveSession (PulseBoard.Auth.resolveApiKey tenantStore raw)
+      ]
+    else
+      raw
 
   let app : WebPart =
     choose [
