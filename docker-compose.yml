@@ -33,22 +33,22 @@ services:
       retries: 10
 
   mimir-ingester:
-    image: grafana/mimir:latest
+    image: grafana/mimir:2.12.0
     container_name: mimir-ingester
     restart: unless-stopped
     command:
       - -config.file=/etc/mimir/mimir.yaml
-      - -target=all
     volumes:
       - ./infra/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
       - mimir-data:/data
     ports:
       - "9009:9009"   # Mimir HTTP (remote-write + query)
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9009/ready || exit 1"]
-      interval: 5s
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9009/ready 2>/dev/null || exit 1"]
+      start_period: 30s
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 12
 
   pulseboard-edge:
     build:

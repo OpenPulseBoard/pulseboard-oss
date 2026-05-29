@@ -1,6 +1,6 @@
 # Mimir single-binary config for local dev and CI chaos testing.
-# Uses filesystem storage (no object store required).
-# All components run in the same process (-target=all).
+# Uses filesystem storage, all components in one process.
+# Compatible with grafana/mimir:2.12.x (Alpine-based image).
 
 target: all
 
@@ -11,31 +11,25 @@ server:
   grpc_listen_port: 9095
   log_level: warn
 
-common:
-  storage:
-    backend: filesystem
-    filesystem:
-      dir: /data/mimir
-
 blocks_storage:
   backend: filesystem
   filesystem:
-    dir: /data/mimir/blocks
+    dir: /data/blocks
   tsdb:
-    dir: /data/mimir/tsdb
+    dir: /data/tsdb
 
 compactor:
-  data_dir: /data/mimir/compactor
+  data_dir: /data/compactor
 
 ruler_storage:
   backend: filesystem
   filesystem:
-    dir: /data/mimir/rules
+    dir: /data/rules
 
 alertmanager_storage:
   backend: filesystem
   filesystem:
-    dir: /data/mimir/alertmanager
+    dir: /data/alertmanager
 
 ingester:
   ring:
@@ -44,11 +38,3 @@ ingester:
 store_gateway:
   sharding_ring:
     replication_factor: 1
-
-# Disable the ring requirement for single-node mode
-distributor:
-  ring:
-    instance_addr: 127.0.0.1
-
-memberlist:
-  join_members: []
