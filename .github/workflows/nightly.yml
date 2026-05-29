@@ -79,7 +79,6 @@ jobs:
           retention-days: 90
 
       - name: Push bench metrics to self-observability dashboard
-        if: ${{ vars.PULSEBOARD_URL != '' || secrets.PULSEBOARD_URL != '' }}
         env:
           PULSEBOARD_URL: ${{ secrets.PULSEBOARD_URL }}
           PULSEBOARD_API_KEY: ${{ secrets.PULSEBOARD_API_KEY }}
