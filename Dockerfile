@@ -6,6 +6,10 @@ RUN dotnet publish src/edge/PulseBoard.fsproj -c Release -o /out \
         /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# Install curl for container health checks (aspnet image is Debian slim
+# and ships without it).
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out .
 ENV PULSE_DATA_DIR=/data

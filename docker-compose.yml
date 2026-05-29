@@ -77,10 +77,10 @@ services:
       - edge-data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz > /dev/null"]
-      start_period: 60s
+      start_period: 90s
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 18
 
 volumes:
   postgres-data:
