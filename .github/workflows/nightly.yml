@@ -62,7 +62,7 @@ jobs:
         run: |
           mkdir -p bench-results
           dotnet run --project tests/bench/PulseBoard.Bench.fsproj \
-            --configuration Release --no-build --nologo -- \
+            --configuration Release --no-build -- \
             --filter "${{ inputs.bench_filter || '*' }}" \
             --job Short \
             --exporters json markdown \
