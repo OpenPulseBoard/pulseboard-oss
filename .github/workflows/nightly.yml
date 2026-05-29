@@ -178,13 +178,8 @@ jobs:
       - name: Start PulseBoard via Docker Compose (docker mode only)
         if: ${{ vars.DEPLOY_MODE == 'docker' || vars.DEPLOY_MODE == '' }}
         run: |
-          docker compose up -d
-          # Wait for edge to be healthy before injecting chaos.
-          for i in $(seq 1 30); do
-            code=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/api/healthz 2>/dev/null || echo 000)
-            [ "$code" = "200" ] && echo "Edge healthy after ${i}s" && break
-            sleep 1
-          done
+          docker compose up -d --build --wait
+          echo "All services healthy"
 
       - name: Chaos — kill edge pod
         run: bash tests/chaos/kill-edge-pod.sh

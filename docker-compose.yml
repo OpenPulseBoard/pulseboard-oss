@@ -1,0 +1,87 @@
+# docker-compose.yml — local development + CI chaos stack
+#
+# Services:
+#   pulseboard-edge     — the OSS edge (built from Dockerfile)
+#   pulseboard-postgres — Postgres 16 for tenant / audit storage
+#   mimir-ingester      — single-binary Mimir for metrics storage
+#
+# The container names match what the chaos scripts in tests/chaos/ expect by
+# default (CONTAINER env vars). No additional configuration is required for
+# local chaos runs:
+#
+#   docker compose up -d
+#   make chaos
+#
+# Useful env overrides:
+#   PULSE_TOKENS=agent1:secret  (ingest auth tokens)
+
+services:
+  pulseboard-postgres:
+    image: postgres:16-alpine
+    container_name: pulseboard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pulseboard
+      POSTGRES_USER: pulseboard
+      POSTGRES_PASSWORD: pulseboard
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulseboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mimir-ingester:
+    image: grafana/mimir:latest
+    container_name: mimir-ingester
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/mimir/mimir.yaml
+      - -target=all
+    volumes:
+      - ./infra/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir-data:/data
+    ports:
+      - "9009:9009"   # Mimir HTTP (remote-write + query)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9009/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  pulseboard-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pulseboard-edge
+    restart: unless-stopped
+    depends_on:
+      pulseboard-postgres:
+        condition: service_healthy
+      mimir-ingester:
+        condition: service_healthy
+    environment:
+      PULSE_DATA_DIR: /data
+      PULSE_BIND_ADDR: "::,0.0.0.0"
+      PULSE_POSTGRES: "Host=pulseboard-postgres;Port=5432;Database=pulseboard;Username=pulseboard;Password=pulseboard"
+      # Set PULSE_TOKENS to "user:pass" pairs (comma-separated) for ingest auth.
+      # Leave unset to run without token auth (open ingest — fine for local dev).
+      PULSE_TOKENS: "${PULSE_TOKENS:-}"
+    command:
+      - --port=8080
+      - --postgres=Host=pulseboard-postgres;Port=5432;Database=pulseboard;Username=pulseboard;Password=pulseboard
+    ports:
+      - "8080:8080"
+    volumes:
+      - edge-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
+  mimir-data:
+  edge-data:
