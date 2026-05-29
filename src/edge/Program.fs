@@ -1109,7 +1109,9 @@ let main argv =
     choose [
       // Liveness probe. Cheap, no auth, no DB call — used by Fly
       // http_service.checks, Caddy upstream health, and CI smoke.
-      GET >=> path "/healthz" >=>
+      // Both /healthz and /api/healthz are served — chaos scripts and the
+      // Compose health check use the /api/ prefix.
+      GET >=> choose [ path "/healthz"; path "/api/healthz" ] >=>
         (Successful.OK
            (sprintf """{"status":"ok","role":%s,"multiTenant":%b}"""
               (if multiTenant then "\"workspace\"" else "\"single-tenant\"")
