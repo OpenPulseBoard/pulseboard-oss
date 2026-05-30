@@ -3159,7 +3159,21 @@ async function openDashboard(id) {
 
 async function refreshAll() {
   if (!state.current) return;
-  for (const p of state.current.panels) await renderPanel(p);
+  // Reentrancy guard: panels render sequentially, but if a refresh tick
+  // (or a WS-driven nudge) fires while we're still drawing, we'd stack
+  // up overlapping passes that hammer /api/metrics. Coalesce instead:
+  // remember that another pass was requested and run it exactly once
+  // after the current one finishes.
+  if (state._refreshing) { state._refreshPending = true; return; }
+  state._refreshing = true;
+  try {
+    do {
+      state._refreshPending = false;
+      for (const p of state.current.panels) await renderPanel(p);
+    } while (state._refreshPending);
+  } finally {
+    state._refreshing = false;
+  }
 }
 
 function scheduleRefresh() {
