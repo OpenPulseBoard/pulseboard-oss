@@ -723,7 +723,7 @@
 </div>
 
 <!-- Enrollment token modal -->
-<div class="modal-backdrop hidden" id="agents-token-modal">
+<div class="modal-backdrop" id="agents-token-modal">
   <div class="modal" style="max-width:540px;">
     <header>
       <h2>Enrollment token</h2>
@@ -4087,16 +4087,16 @@ enroll_token  = "${tok}"
 
 [sources.host_metrics]
 interval = "15s"`;
-    $("agents-token-modal").classList.remove("hidden");
+    $("agents-token-modal").classList.add("open");
   } catch(e) {
     alert("Could not generate token: " + e.message);
   }
 }
 
 $("agents-gen-token-btn").addEventListener("click", generateEnrollToken);
-$("agents-token-modal-close").addEventListener("click", () => $("agents-token-modal").classList.add("hidden"));
+$("agents-token-modal-close").addEventListener("click", () => $("agents-token-modal").classList.remove("open"));
 $("agents-token-modal").addEventListener("click", (e) => {
-  if (e.target === $("agents-token-modal")) $("agents-token-modal").classList.add("hidden");
+  if (e.target === $("agents-token-modal")) $("agents-token-modal").classList.remove("open");
 });
 
 // ── End Phase 13 agents ─────────────────────────────────────────────────────
