@@ -1120,6 +1120,45 @@ let main argv =
     else
       raw
 
+  // Access log wrapper. Runs the full pipeline, then prints one line
+  // per request to stdout: ip, method, path[?query], status, latency
+  // and user-agent. Wrapping (rather than appending a tail WebPart to
+  // the `choose`) lets us observe both matched and unmatched
+  // responses, including the NOT_FOUND fallthrough.
+  let withAccessLog (inner : WebPart) : WebPart =
+    fun ctx ->
+      async {
+        let sw = System.Diagnostics.Stopwatch.StartNew()
+        let! result = inner ctx
+        sw.Stop()
+        let req = ctx.request
+        let methodStr = req.``method``.ToString()
+        let pathStr = req.url.AbsolutePath
+        let query =
+          if String.IsNullOrEmpty req.rawQuery then ""
+          else "?" + req.rawQuery
+        let status =
+          match result with
+          | Some c -> c.response.status.code
+          | None   -> 0
+        let header name =
+          req.headers
+          |> Seq.tryFind (fun (k, _) ->
+               String.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+          |> Option.map snd
+        let ip =
+          match header "x-forwarded-for" with
+          | Some v when not (String.IsNullOrWhiteSpace v) ->
+            v.Split(',').[0].Trim()
+          | _ ->
+            try ctx.clientIpTrustProxy.ToString()
+            with _ -> "-"
+        let ua = header "user-agent" |> Option.defaultValue "-"
+        printfn "[req] %s %s %s%s -> %d %dms ua=%s"
+          ip methodStr pathStr query status sw.ElapsedMilliseconds ua
+        return result
+      }
+
   let app : WebPart =
     choose [
       // Liveness probe. Cheap, no auth, no DB call — used by Fly
@@ -1321,7 +1360,7 @@ let main argv =
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
 
-  startWebServer config app
+  startWebServer config (withAccessLog app)
   GC.KeepAlive ruleEvaluator
   GC.KeepAlive notifyWorkers
   GC.KeepAlive alertingPipeline
