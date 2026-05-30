@@ -141,9 +141,18 @@ let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext)
           do! ws.send Pong data true
         | (Pong, _, _) ->
           ()
-        | (Text, _, _) | (Binary, _, _) | (Continuation, _, _) ->
+        | (Text, _, _) | (Binary, _, _) ->
           // Hub is push-only; ignore anything the client sends.
           ()
+        | (Continuation, _, _) ->
+          // An unsolicited Continuation frame is a protocol violation
+          // (RFC 6455 §5.4 — only valid after a Text/Binary start frame,
+          // and we never start a fragmented receive). In practice it is
+          // also the signature of Suave's half-closed-socket spin where
+          // a zero-filled 2-byte header decodes as opcode=0/len=0 and
+          // the read loop returns instantly with no I/O wait. Bail so
+          // the connection dies and the worker thread is freed.
+          loop <- false
         | (Reserved, _, _) ->
           // Protocol violation — drop the connection rather than spin.
           loop <- false
