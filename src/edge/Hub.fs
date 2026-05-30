@@ -42,6 +42,11 @@ let private buildForceShutdown (ws : WebSocket) : unit -> unit =
         with _ -> ()
   with _ -> fun () -> ()
 
+/// Bump this when changing the spin-breaker logic so we can confirm
+/// from inside the deployed container which build is actually loaded:
+///   strings -el /app/PulseBoard.dll | grep PULSEBOARD_HUB_REV
+let HubRev = "PULSEBOARD_HUB_REV=2026-05-30-spin-breaker-v3"
+
 let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 
 /// Broadcasts JSON-encoded events to every connected WebSocket client.
@@ -54,6 +59,10 @@ type Broadcaster(?heartbeatMs : int, ?idleTimeoutMs : int) =
   let subscribers = ConcurrentDictionary<Guid, Subscriber>()
   let heartbeatMs   = defaultArg heartbeatMs   30_000
   let idleTimeoutMs = defaultArg idleTimeoutMs 90_000
+  // Anchor HubRev into the .cctor so the literal survives into the
+  // compiled assembly even with aggressive optimisation, and surface
+  // it once in the process log.
+  do eprintfn "[hub] %s" HubRev
 
   let drop (id : Guid) =
     match subscribers.TryRemove id with
@@ -128,48 +137,49 @@ let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext)
   socket {
     let id = hub.Subscribe ws
     let mutable loop = true
-    // Frames received with no intervening I/O wait. If the per-iteration
-    // body of the outer socket-monad while-loop completes synchronously
-    // forever (a Suave reader spin), this counter saturates fast and we
-    // bail. 1000 chosen well above any plausible legitimate client rate
-    // (the hub is push-only; clients should only ever send Ping/Pong/Close).
-    let mutable busyStreak = 0
+    // Universal spin breaker: count frames per 1-second window. Real
+    // clients on this push-only hub send at most a Pong every ~30s in
+    // reply to our heartbeat Ping; anything faster than ~50 frames/s is
+    // a Suave reader spin (half-closed socket replaying cached bytes
+    // as valid frames with no I/O wait). The opcode doesn't matter —
+    // Pong and Ping decode just as easily from zero-padded buffers, so
+    // we can't trust per-opcode guards.
+    let mutable windowStartMs = nowMs ()
+    let mutable framesInWindow = 0
     try
       while loop do
         let! msg = ws.read()
-        match msg with
-        | (Close, _, _) ->
-          let empty = ByteSegment [||]
-          do! ws.send Close empty true
+        let now = nowMs ()
+        if now - windowStartMs >= 1000L then
+          windowStartMs <- now
+          framesInWindow <- 1
+        else
+          framesInWindow <- framesInWindow + 1
+        if framesInWindow > 100 then
+          // > 100 frames in < 1 second from a single subscriber: spin.
           loop <- false
-        | (Ping, data, _) ->
-          // Real client liveness signal — reset the streak counter and
-          // tell the watchdog the connection is alive.
-          busyStreak <- 0
-          hub.Touch id
-          do! ws.send Pong data true
-        | (Pong, _, _) ->
-          // Reply to our own heartbeat Ping — same treatment.
-          busyStreak <- 0
-          hub.Touch id
-        | (Text, _, _) | (Binary, _, _) ->
-          // Hub is push-only; a client has no reason to send data frames.
-          // Do NOT Touch — if these arrive at machine-gun speed they are
-          // the signature of a Suave parser spin, and Touch would mask
-          // the watchdog. Count them; bail if they flood.
-          busyStreak <- busyStreak + 1
-          if busyStreak > 1000 then loop <- false
-        | (Continuation, _, _) ->
-          // An unsolicited Continuation frame is a protocol violation
-          // (RFC 6455 §5.4 — only valid after a Text/Binary start frame,
-          // and we never start a fragmented receive). Also the signature
-          // of Suave's half-closed-socket spin where a zero-filled 2-byte
-          // header decodes as opcode=0/len=0 and the read loop returns
-          // instantly with no I/O wait. Bail immediately.
-          loop <- false
-        | (Reserved, _, _) ->
-          // Protocol violation — drop the connection rather than spin.
-          loop <- false
+        else
+          match msg with
+          | (Close, _, _) ->
+            let empty = ByteSegment [||]
+            do! ws.send Close empty true
+            loop <- false
+          | (Ping, data, _) ->
+            hub.Touch id
+            do! ws.send Pong data true
+          | (Pong, _, _) ->
+            hub.Touch id
+          | (Text, _, _) | (Binary, _, _) ->
+            // Hub is push-only; ignore data frames from the client.
+            ()
+          | (Continuation, _, _) ->
+            // Unsolicited Continuation (RFC 6455 §5.4) — we never
+            // start a fragmented receive. Also the half-closed-socket
+            // spin signature; bail.
+            loop <- false
+          | (Reserved, _, _) ->
+            // Protocol violation — drop the connection.
+            loop <- false
     finally
       hub.Unsubscribe id
   }
