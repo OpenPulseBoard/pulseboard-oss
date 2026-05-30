@@ -977,14 +977,29 @@ let main argv =
   // the ingest auth/scope/quota chain but live at well-known external
   // paths, so factor the gate out so each new receiver only wires its
   // handler.
+  let agentStore : PulseBoard.AgentApi.IAgentStore =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgAgentStore.ensureSchema cs
+        printfn "  AgentStore:  Postgres (schema ensured)"
+        PulseBoard.PgAgentStore.PgAgentStore(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres agent store: %s" ex.Message
+        exit 2
+    | None ->
+      printfn "  AgentStore:  in-memory (ephemeral — pass --postgres=... to persist enrolled agents)"
+      PulseBoard.AgentApi.InMemoryAgentStore() :> _
+
   let protectIngest (inner : WebPart) : WebPart =
     if multiTenant then
       resolveSession (
         PulseBoard.Auth.resolveApiKey tenantStore
-          (PulseBoard.Rbac.requireScope auditLog
-             "ingest" PulseBoard.Tenancy.Scope.Ingest
-             (PulseBoard.Rbac.requireQuota auditLog limiter
-                PulseBoard.Quotas.Ingest 1.0 inner)))
+          (PulseBoard.PgAgentStore.resolveAgentBearer tenantStore agentStore
+             (PulseBoard.Rbac.requireScope auditLog
+                "ingest" PulseBoard.Tenancy.Scope.Ingest
+                (PulseBoard.Rbac.requireQuota auditLog limiter
+                   PulseBoard.Quotas.Ingest 1.0 inner))))
     else
       PulseBoard.Auth.protect tokens inner
 
@@ -1101,19 +1116,6 @@ let main argv =
       PulseBoard.Gateway.internalWebPart inproc secret
     | _ -> fun _ -> async { return None }
 
-  let agentStore : PulseBoard.AgentApi.IAgentStore =
-    match pgConn with
-    | Some cs ->
-      try
-        PulseBoard.PgAgentStore.ensureSchema cs
-        printfn "  AgentStore:  Postgres (schema ensured)"
-        PulseBoard.PgAgentStore.PgAgentStore(cs) :> _
-      with ex ->
-        eprintfn "  [ERROR] failed to initialise Postgres agent store: %s" ex.Message
-        exit 2
-    | None ->
-      printfn "  AgentStore:  in-memory (ephemeral — pass --postgres=... to persist enrolled agents)"
-      PulseBoard.AgentApi.InMemoryAgentStore() :> _
   // Agent enroll/checkin are unauthenticated (the agent has no credentials yet).
   // The portal fleet endpoints (GET /api/agents, POST /api/agents/token) need a
   // tenant session — wrap them in the same resolveSession + resolveApiKey chain

@@ -12,6 +12,7 @@ open System
 open System.Security.Cryptography
 open System.Text
 open Npgsql
+open Suave
 open PulseBoard.AgentApi
 
 let private schema = """
@@ -195,3 +196,57 @@ type PgAgentStore(connectionString : string) =
         if nowMs() <= exp then Some tid else None
       else
         None
+
+// ---------------------------------------------------------------------------
+// Ingest middleware: accept agent bearer credentials
+// ---------------------------------------------------------------------------
+
+/// Middleware: if no tenant context has been attached yet AND the request
+/// carries `Authorization: Bearer <agentId>:<apiKey>` matching an enrolled
+/// agent, synthesise a TenantCtx with the Ingest scope and attach it. Lets
+/// the agent's existing enrollment credentials authenticate against
+/// `/v1/metrics`, `/v1/logs`, `/v1/traces`, `/loki/api/v1/push` without a
+/// separate tenant-scoped API key.
+let private extractBearer (req : HttpRequest) : string option =
+  let header (name : string) =
+    req.headers
+    |> Seq.tryFind (fun (k, _) -> String.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+    |> Option.map (snd >> fun v -> v.Trim())
+  match header "authorization" with
+  | Some v when v.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ->
+    let token = v.Substring(7).Trim()
+    if token.Length > 0 then Some token else None
+  | _ -> None
+
+let resolveAgentBearer (tenantStore : PulseBoard.Tenancy.ITenantStore)
+                       (agentStore : IAgentStore)
+                       (inner : WebPart) : WebPart =
+  fun ctx -> async {
+    match PulseBoard.Rbac.tryGetTenant ctx with
+    | Some _ -> return! inner ctx
+    | None ->
+      match extractBearer ctx.request with
+      | None -> return! inner ctx
+      | Some presented ->
+        let i = presented.IndexOf ':'
+        if i <= 0 || i = presented.Length - 1 then
+          return! inner ctx
+        else
+          let agentId = presented.Substring(0, i)
+          let apiKey  = presented.Substring(i + 1)
+          if not (agentStore.ValidateKey(agentId, apiKey)) then
+            return! inner ctx
+          else
+            match agentStore.TryGet agentId with
+            | None -> return! inner ctx
+            | Some rec' ->
+              match tenantStore.TryGetTenant (PulseBoard.Tenancy.TenantId rec'.tenantId) with
+              | None -> return! inner ctx
+              | Some tenant ->
+                let tctx : PulseBoard.Tenancy.TenantCtx =
+                  { tenant   = tenant
+                    apiKeyId = PulseBoard.Tenancy.ApiKeyId ("agent:" + agentId)
+                    role     = PulseBoard.Tenancy.Editor
+                    scopes   = PulseBoard.Tenancy.Scope.Ingest }
+                return! inner (PulseBoard.Rbac.attachTenant ctx tctx)
+  }
