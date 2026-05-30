@@ -13,6 +13,7 @@
     <Compile Include="Helpers/TestPostgres.fs" />
     <!-- Unit tests -->
     <Compile Include="Unit/RollupsTests.fs" />
+    <Compile Include="Unit/QueryApiTests.fs" />
     <Compile Include="Unit/QuotasTests.fs" />
     <Compile Include="Unit/SecretsTests.fs" />
     <Compile Include="Unit/AiAssistTests.fs" />

@@ -333,6 +333,429 @@ let matchesSelector (sel : VectorSelector)
   nameOk
   && sel.matchers |> Array.forall (fun m -> matchOne m (getLabel m.name))
 
+// =====================================================================
+// Embedded PromQL — small expression evaluator
+// =====================================================================
+//
+// Beyond the bare vector selectors that `parseVectorSelector` accepts
+// (used by the Prometheus /series endpoint and by the LogQL parser),
+// `/api/prom/api/v1/query` and `/query_range` accept a tiny PromQL
+// subset just rich enough to drive the bundled dashboards:
+//
+//   * scalar literals, parens, unary `-`, unary `+`
+//   * binary `+`  `-`  `*`  `/`  `%`
+//     - scalar⊗scalar -> scalar
+//     - scalar⊗vector / vector⊗scalar -> per-sample
+//     - vector⊗vector -> 1:1 matching on every label except `__name__`
+//   * vector selectors:        foo        foo{a="b", c!~"d"}
+//   * range selectors:         foo[5m]    (only as a range-fn arg)
+//   * range functions:         rate, irate, increase
+//   * aggregations:            sum, avg, min, max, count
+//     (no `by` / `without` grouping — the result has no labels)
+//
+// Anything outside this subset still short-circuits with the same
+// "use --mimir-url= for full PromQL" hint.
+
+type PromOp = PoAdd | PoSub | PoMul | PoDiv | PoMod
+
+type PromExpr =
+  | PeNum   of float
+  | PeNeg   of PromExpr
+  | PeSel   of VectorSelector
+  | PeRange of VectorSelector * int64       // window in ms
+  | PeCall  of string * PromExpr             // function name (lower-case), arg
+  | PeBin   of PromOp * PromExpr * PromExpr
+
+let private parsePromDurationMs (raw : string) : int64 option =
+  let m = Regex.Match(raw, @"^(\d+)(ms|s|m|h|d|w)$")
+  if not m.Success then None
+  else
+    let n = int64 m.Groups.[1].Value
+    let mult =
+      match m.Groups.[2].Value with
+      | "ms" -> 1L | "s" -> 1_000L | "m" -> 60_000L
+      | "h"  -> 3_600_000L | "d" -> 86_400_000L | "w" -> 604_800_000L
+      | _    -> 0L
+    if mult > 0L then Some (n * mult) else None
+
+/// Recursive-descent parser for the embedded PromQL subset above.
+let parsePromExpr (input : string) : Result<PromExpr, string> =
+  let s = if isNull input then "" else input
+  let mutable i = 0
+  let skipWs () =
+    while i < s.Length && Char.IsWhiteSpace s.[i] do i <- i + 1
+  let eatChar (c : char) =
+    skipWs ()
+    if i < s.Length && s.[i] = c then i <- i + 1; true else false
+  let isIdStart c = Char.IsLetter c || c = '_' || c = ':'
+  let isIdCont  c = Char.IsLetterOrDigit c || c = '_' || c = ':'
+  let readIdent () =
+    skipWs ()
+    let start = i
+    if i < s.Length && isIdStart s.[i] then
+      i <- i + 1
+      while i < s.Length && isIdCont s.[i] do i <- i + 1
+      Some (s.Substring(start, i - start))
+    else None
+  let readNumber () =
+    skipWs ()
+    let start = i
+    let mutable sawDigit = false
+    let mutable sawDot   = false
+    while i < s.Length && (Char.IsDigit s.[i] || (s.[i] = '.' && not sawDot)) do
+      if s.[i] = '.' then sawDot <- true else sawDigit <- true
+      i <- i + 1
+    if i < s.Length && (s.[i] = 'e' || s.[i] = 'E') then
+      i <- i + 1
+      if i < s.Length && (s.[i] = '+' || s.[i] = '-') then i <- i + 1
+      while i < s.Length && Char.IsDigit s.[i] do i <- i + 1
+    if sawDigit then
+      let raw = s.Substring(start, i - start)
+      match Double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture) with
+      | true, v -> Some v
+      | _       -> None
+    else
+      i <- start; None
+  let readBraceGroup () : Result<string, string> option =
+    skipWs ()
+    if i < s.Length && s.[i] = '{' then
+      let start = i + 1
+      let mutable depth = 1
+      i <- i + 1
+      while depth > 0 && i < s.Length do
+        let c = s.[i]
+        if c = '"' then
+          i <- i + 1
+          while i < s.Length && s.[i] <> '"' do
+            if s.[i] = '\\' && i + 1 < s.Length then i <- i + 2
+            else i <- i + 1
+          if i < s.Length then i <- i + 1
+        elif c = '{' then depth <- depth + 1; i <- i + 1
+        elif c = '}' then depth <- depth - 1; if depth > 0 then i <- i + 1
+        else i <- i + 1
+      if depth <> 0 then Some (Result.Error "unterminated '{'")
+      else
+        let inner = s.Substring(start, i - start)
+        i <- i + 1
+        Some (Result.Ok inner)
+    else None
+  let readBracketDuration () : Result<int64, string> option =
+    skipWs ()
+    if i < s.Length && s.[i] = '[' then
+      i <- i + 1
+      let start = i
+      while i < s.Length && s.[i] <> ']' do i <- i + 1
+      if i >= s.Length then Some (Result.Error "unterminated '['")
+      else
+        let raw = s.Substring(start, i - start).Trim()
+        i <- i + 1
+        match parsePromDurationMs raw with
+        | Some ms -> Some (Result.Ok ms)
+        | None    -> Some (Result.Error (sprintf "invalid duration '%s'" raw))
+    else None
+  let buildSelector (name : string) (innerOpt : string option) : Result<VectorSelector, string> =
+    let withBraces =
+      match innerOpt with
+      | None       -> name
+      | Some inner -> name + "{" + inner + "}"
+    parseVectorSelector withBraces
+
+  let aggFns   = Set.ofList [ "sum"; "avg"; "min"; "max"; "count" ]
+  let rangeFns = Set.ofList [ "rate"; "irate"; "increase" ]
+
+  let rec parseExpr () = parseAddSub ()
+  and parseAddSub () =
+    let mutable left = parseMulDiv ()
+    let mutable keep = true
+    while keep do
+      match left with
+      | Result.Error _ -> keep <- false
+      | Result.Ok l ->
+        skipWs ()
+        if i < s.Length && (s.[i] = '+' || s.[i] = '-') then
+          let op = if s.[i] = '+' then PoAdd else PoSub
+          i <- i + 1
+          match parseMulDiv () with
+          | Result.Error e -> left <- Result.Error e; keep <- false
+          | Result.Ok r    -> left <- Result.Ok (PeBin (op, l, r))
+        else keep <- false
+    left
+  and parseMulDiv () =
+    let mutable left = parseUnary ()
+    let mutable keep = true
+    while keep do
+      match left with
+      | Result.Error _ -> keep <- false
+      | Result.Ok l ->
+        skipWs ()
+        if i < s.Length && (s.[i] = '*' || s.[i] = '/' || s.[i] = '%') then
+          let op =
+            match s.[i] with
+            | '*' -> PoMul
+            | '/' -> PoDiv
+            | _   -> PoMod
+          i <- i + 1
+          match parseUnary () with
+          | Result.Error e -> left <- Result.Error e; keep <- false
+          | Result.Ok r    -> left <- Result.Ok (PeBin (op, l, r))
+        else keep <- false
+    left
+  and parseUnary () =
+    skipWs ()
+    if i < s.Length && s.[i] = '-' then
+      i <- i + 1
+      match parseUnary () with
+      | Result.Ok e -> Result.Ok (PeNeg e)
+      | err -> err
+    elif i < s.Length && s.[i] = '+' then
+      i <- i + 1
+      parseUnary ()
+    else parseAtom ()
+  and parseAtom () =
+    skipWs ()
+    if i >= s.Length then Result.Error "unexpected end of expression"
+    elif s.[i] = '(' then
+      i <- i + 1
+      match parseExpr () with
+      | Result.Error e -> Result.Error e
+      | Result.Ok e ->
+        if eatChar ')' then Result.Ok e else Result.Error "expected ')'"
+    elif Char.IsDigit s.[i] || s.[i] = '.' then
+      match readNumber () with
+      | Some v -> Result.Ok (PeNum v)
+      | None   -> Result.Error "invalid number"
+    elif isIdStart s.[i] then
+      match readIdent () with
+      | None      -> Result.Error "expected identifier"
+      | Some name ->
+        skipWs ()
+        let lower = name.ToLowerInvariant()
+        if i < s.Length && s.[i] = '(' then
+          if not (aggFns.Contains lower || rangeFns.Contains lower) then
+            Result.Error (sprintf "embedded PromQL does not support function '%s'; use --mimir-url= for full PromQL" name)
+          else
+            i <- i + 1
+            match parseExpr () with
+            | Result.Error e -> Result.Error e
+            | Result.Ok arg ->
+              if not (eatChar ')') then Result.Error "expected ')'"
+              elif rangeFns.Contains lower then
+                match arg with
+                | PeRange _ -> Result.Ok (PeCall (lower, arg))
+                | _ -> Result.Error (sprintf "%s() requires a range selector like foo[5m]" lower)
+              else
+                Result.Ok (PeCall (lower, arg))
+        else
+          let innerRes =
+            match readBraceGroup () with
+            | None                   -> Result.Ok None
+            | Some (Result.Ok inner) -> Result.Ok (Some inner)
+            | Some (Result.Error e)  -> Result.Error e
+          match innerRes with
+          | Result.Error e -> Result.Error e
+          | Result.Ok innerOpt ->
+            match buildSelector name innerOpt with
+            | Result.Error e -> Result.Error e
+            | Result.Ok sel ->
+              match readBracketDuration () with
+              | None                -> Result.Ok (PeSel sel)
+              | Some (Result.Ok ms) -> Result.Ok (PeRange (sel, ms))
+              | Some (Result.Error e) -> Result.Error e
+    else
+      Result.Error (sprintf "unexpected character '%c'" s.[i])
+
+  match parseExpr () with
+  | Result.Error e -> Result.Error e
+  | Result.Ok e ->
+    skipWs ()
+    if i < s.Length then
+      Result.Error (sprintf "unexpected trailing input near '%s'" (s.Substring i))
+    else
+      Result.Ok e
+
+// ---------- Evaluator ----------
+
+type PromSeries = { labels : (string*string)[]; value : float }
+
+type EvalVal =
+  | VScalar of float
+  | VVector of PromSeries[]
+
+let private dropName (labels : (string*string)[]) =
+  labels |> Array.filter (fun (k, _) -> k <> "__name__")
+
+let private labelsKey (labels : (string*string)[]) =
+  labels
+  |> Array.sortBy fst
+  |> Array.map (fun (k, v) -> k + "\u0000" + v)
+  |> String.concat "\u0001"
+
+let private staleWindowMs = 5L * 60_000L
+
+let private collectSeries (metricStore : MetricStore) (sel : VectorSelector) =
+  metricStore.Names()
+  |> Array.choose (fun n ->
+      let labels = parseSeriesName n
+      if matchesSelector sel labels then Some (n, labels) else None)
+
+// Most recent sample with ts <= at, within the staleness window.
+let private sampleInstant (points : Point[]) (at : int64) : float option =
+  if points.Length = 0 then None
+  else
+    let mutable lo = 0
+    let mutable hi = points.Length
+    while lo < hi do
+      let mid = (lo + hi) / 2
+      if points.[mid].ts <= at then lo <- mid + 1 else hi <- mid
+    if lo = 0 then None
+    else
+      let p = points.[lo - 1]
+      if at - p.ts > staleWindowMs then None else Some p.value
+
+// Counter-aware rate over (endTs - windowMs, endTs].
+let private rateOver (points : Point[]) (endTs : int64) (windowMs : int64) : float option =
+  let startTs = endTs - windowMs
+  let window = points |> Array.filter (fun p -> p.ts > startTs && p.ts <= endTs)
+  if window.Length < 2 then None
+  else
+    let mutable sum = 0.0
+    let mutable prev = window.[0].value
+    for k in 1 .. window.Length - 1 do
+      let cur = window.[k].value
+      let delta = cur - prev
+      if delta >= 0.0 then sum <- sum + delta
+      else sum <- sum + cur      // counter reset
+      prev <- cur
+    let dt = float (window.[window.Length - 1].ts - window.[0].ts) / 1000.0
+    if dt <= 0.0 then None else Some (sum / dt)
+
+let private irateOver (points : Point[]) (endTs : int64) (windowMs : int64) : float option =
+  let startTs = endTs - windowMs
+  let window = points |> Array.filter (fun p -> p.ts > startTs && p.ts <= endTs)
+  if window.Length < 2 then None
+  else
+    let a = window.[window.Length - 2]
+    let b = window.[window.Length - 1]
+    let delta = if b.value >= a.value then b.value - a.value else b.value
+    let dt = float (b.ts - a.ts) / 1000.0
+    if dt <= 0.0 then None else Some (delta / dt)
+
+let private increaseOver (points : Point[]) (endTs : int64) (windowMs : int64) : float option =
+  match rateOver points endTs windowMs with
+  | None   -> None
+  | Some r -> Some (r * float windowMs / 1000.0)
+
+let private aggregate (op : string) (vs : PromSeries[]) : PromSeries[] =
+  let xs =
+    vs
+    |> Array.map (fun s -> s.value)
+    |> Array.filter (fun v -> not (Double.IsNaN v))
+  if xs.Length = 0 then [||]
+  else
+    let v =
+      match op with
+      | "sum"   -> Array.sum xs
+      | "avg"   -> Array.sum xs / float xs.Length
+      | "min"   -> Array.min xs
+      | "max"   -> Array.max xs
+      | "count" -> float xs.Length
+      | _       -> Double.NaN
+    [| { labels = [||]; value = v } |]
+
+let private applyOp (op : PromOp) (a : float) (b : float) : float =
+  match op with
+  | PoAdd -> a + b
+  | PoSub -> a - b
+  | PoMul -> a * b
+  | PoDiv -> if b = 0.0 then Double.NaN else a / b
+  | PoMod -> if b = 0.0 then Double.NaN else a % b
+
+let private binCombine (op : PromOp) (lhs : EvalVal) (rhs : EvalVal) : EvalVal =
+  match lhs, rhs with
+  | VScalar a, VScalar b -> VScalar (applyOp op a b)
+  | VVector vs, VScalar b ->
+    VVector (vs |> Array.map (fun s -> { s with value = applyOp op s.value b }))
+  | VScalar a, VVector vs ->
+    VVector (vs |> Array.map (fun s -> { s with value = applyOp op a s.value }))
+  | VVector ls, VVector rs ->
+    // 1:1 matching on every label except __name__.
+    let idx = System.Collections.Generic.Dictionary<string, PromSeries>()
+    for r in rs do
+      let k = labelsKey (dropName r.labels)
+      idx.[k] <- r
+    let out = ResizeArray<PromSeries>()
+    for l in ls do
+      let stripped = dropName l.labels
+      let k = labelsKey stripped
+      match idx.TryGetValue k with
+      | true, r -> out.Add { labels = stripped; value = applyOp op l.value r.value }
+      | _ -> ()
+    VVector (out.ToArray())
+
+let rec evalAt (metricStore : MetricStore) (at : int64) (e : PromExpr) : EvalVal =
+  match e with
+  | PeNum v -> VScalar v
+  | PeNeg x ->
+    match evalAt metricStore at x with
+    | VScalar v  -> VScalar (-v)
+    | VVector vs -> VVector (vs |> Array.map (fun s -> { s with value = -s.value }))
+  | PeSel sel ->
+    let series =
+      collectSeries metricStore sel
+      |> Array.choose (fun (n, labels) ->
+          let pts = metricStore.GetSince(n, at - staleWindowMs)
+          sampleInstant pts at
+          |> Option.map (fun v -> { labels = labels; value = v }))
+    VVector series
+  | PeRange _ ->
+    // Range vector outside a range function — unsupported, evaluates to empty.
+    VVector [||]
+  | PeCall (name, PeRange (sel, window))
+      when name = "rate" || name = "irate" || name = "increase" ->
+    let fn =
+      match name with
+      | "rate"     -> rateOver
+      | "irate"    -> irateOver
+      | "increase" -> increaseOver
+      | _          -> rateOver
+    let series =
+      collectSeries metricStore sel
+      |> Array.choose (fun (n, labels) ->
+          let pts = metricStore.GetSince(n, at - window - 1000L)
+          fn pts at window
+          |> Option.map (fun v -> { labels = dropName labels; value = v }))
+    VVector series
+  | PeCall (name, arg) ->
+    match evalAt metricStore at arg with
+    | VScalar _ as s -> s
+    | VVector vs     -> VVector (aggregate name vs)
+  | PeBin (op, a, b) ->
+    binCombine op (evalAt metricStore at a) (evalAt metricStore at b)
+
+// Group per-step EvalVal results into a Prometheus matrix.
+let private toMatrix (perStep : (int64 * EvalVal)[]) : ((string*string)[] * Point[])[] =
+  let bucket =
+    System.Collections.Generic.Dictionary<string, (string*string)[] * ResizeArray<Point>>()
+  let getBucket (k : string) (labels : (string*string)[]) =
+    match bucket.TryGetValue k with
+    | true, pair -> pair
+    | _          ->
+      let pair = labels, ResizeArray<Point>()
+      bucket.[k] <- pair
+      pair
+  for (ts, ev) in perStep do
+    match ev with
+    | VScalar v ->
+      let _, pts = getBucket "" [||]
+      pts.Add { ts = ts; value = v }
+    | VVector ss ->
+      for s in ss do
+        let _, pts = getBucket (labelsKey s.labels) s.labels
+        pts.Add { ts = ts; value = s.value }
+  bucket.Values
+  |> Seq.map (fun (l, pts) -> l, pts.ToArray())
+  |> Seq.toArray
+
 // ---------------------------------------------------------------------
 // Query-string helpers
 // ---------------------------------------------------------------------
@@ -530,25 +953,27 @@ let private promQueryEmbedded
       qp ctx "time"
       |> Option.bind parseTimeSec
       |> Option.defaultValue (nowMs ())
-    match parseVectorSelector query with
+    match parsePromExpr query with
     | Result.Error msg ->
       return! errJson BAD_REQUEST "bad_data" msg ctx
-    | Result.Ok sel ->
-      let series = collectMatchingSeries metricStore sel
-      // Instant vector = the most recent sample <= time per series.
-      let results =
-        series
-        |> Array.choose (fun (n, labels) ->
-            let pts = metricStore.Get n
-            let eligible = pts |> Array.filter (fun p -> p.ts <= timeMs)
-            if eligible.Length = 0 then None
-            else Some (labels, eligible.[eligible.Length - 1]))
-      return! ok (vectorResponse results) ctx
+    | Result.Ok expr ->
+      match evalAt metricStore timeMs expr with
+      | VScalar v ->
+        let body =
+          sprintf """{"status":"success","data":{"resultType":"scalar","result":[%s,%s]}}"""
+            (formatFloat (float timeMs / 1000.0))
+            (JsonString (formatFloat v))
+        return! ok body ctx
+      | VVector ss ->
+        let entries =
+          ss
+          |> Array.map (fun s -> s.labels, { ts = timeMs; value = s.value })
+        return! ok (vectorResponse entries) ctx
   }
 
 let private promQueryRangeEmbedded
               (metricStore : MetricStore)
-              (rollupStore : RollupStore option) : WebPart =
+              (_rollupStore : RollupStore option) : WebPart =
   fun ctx -> async {
     let query = qp ctx "query" |> Option.defaultValue ""
     let startMs =
@@ -563,30 +988,19 @@ let private promQueryRangeEmbedded
       qp ctx "step"
       |> Option.bind parseStepMs
       |> Option.defaultValue 15_000L
-    match parseVectorSelector query with
+    match parsePromExpr query with
     | Result.Error msg ->
       return! errJson BAD_REQUEST "bad_data" msg ctx
-    | Result.Ok sel ->
-      // Prefer rollups whose resolution matches the requested step.
-      let useRollup =
-        rollupStore
-        |> Option.bind (fun rs ->
-            tryParseResolutionMs stepMs |> Option.map (fun r -> rs, r))
-      let series = collectMatchingSeries metricStore sel
-      let results =
-        series
-        |> Array.map (fun (n, labels) ->
-            let pts =
-              match useRollup with
-              | Some (rs, res) ->
-                rs.GetSinceAgg(n, res.Ms, startMs, Agg.Avg)
-                |> Array.filter (fun p -> p.ts <= endMs)
-              | None ->
-                metricStore.GetSince(n, startMs)
-                |> Array.filter (fun p -> p.ts <= endMs)
-            labels, pts)
+    | Result.Ok expr ->
+      let steps = ResizeArray<int64 * EvalVal>()
+      let mutable t = startMs
+      while t <= endMs do
+        steps.Add (t, evalAt metricStore t expr)
+        t <- t + stepMs
+      let matrix =
+        toMatrix (steps.ToArray())
         |> Array.filter (fun (_, pts) -> pts.Length > 0)
-      return! ok (matrixResponse results) ctx
+      return! ok (matrixResponse matrix) ctx
   }
 
 let private promLabelsEmbedded (metricStore : MetricStore) : WebPart =
