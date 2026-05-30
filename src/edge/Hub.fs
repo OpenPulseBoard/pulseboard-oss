@@ -128,30 +128,44 @@ let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext)
   socket {
     let id = hub.Subscribe ws
     let mutable loop = true
+    // Frames received with no intervening I/O wait. If the per-iteration
+    // body of the outer socket-monad while-loop completes synchronously
+    // forever (a Suave reader spin), this counter saturates fast and we
+    // bail. 1000 chosen well above any plausible legitimate client rate
+    // (the hub is push-only; clients should only ever send Ping/Pong/Close).
+    let mutable busyStreak = 0
     try
       while loop do
         let! msg = ws.read()
-        hub.Touch id
         match msg with
         | (Close, _, _) ->
           let empty = ByteSegment [||]
           do! ws.send Close empty true
           loop <- false
         | (Ping, data, _) ->
+          // Real client liveness signal — reset the streak counter and
+          // tell the watchdog the connection is alive.
+          busyStreak <- 0
+          hub.Touch id
           do! ws.send Pong data true
         | (Pong, _, _) ->
-          ()
+          // Reply to our own heartbeat Ping — same treatment.
+          busyStreak <- 0
+          hub.Touch id
         | (Text, _, _) | (Binary, _, _) ->
-          // Hub is push-only; ignore anything the client sends.
-          ()
+          // Hub is push-only; a client has no reason to send data frames.
+          // Do NOT Touch — if these arrive at machine-gun speed they are
+          // the signature of a Suave parser spin, and Touch would mask
+          // the watchdog. Count them; bail if they flood.
+          busyStreak <- busyStreak + 1
+          if busyStreak > 1000 then loop <- false
         | (Continuation, _, _) ->
           // An unsolicited Continuation frame is a protocol violation
           // (RFC 6455 §5.4 — only valid after a Text/Binary start frame,
-          // and we never start a fragmented receive). In practice it is
-          // also the signature of Suave's half-closed-socket spin where
-          // a zero-filled 2-byte header decodes as opcode=0/len=0 and
-          // the read loop returns instantly with no I/O wait. Bail so
-          // the connection dies and the worker thread is freed.
+          // and we never start a fragmented receive). Also the signature
+          // of Suave's half-closed-socket spin where a zero-filled 2-byte
+          // header decodes as opcode=0/len=0 and the read loop returns
+          // instantly with no I/O wait. Bail immediately.
           loop <- false
         | (Reserved, _, _) ->
           // Protocol violation — drop the connection rather than spin.
