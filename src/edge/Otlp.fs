@@ -494,13 +494,165 @@ let private okHeaders accepted : WebPart =
 
 let private partialSuccessBody = """{"partialSuccess":{}}"""
 
+// ---------- OTLP/JSON metrics decoder ----------
+// The OTLP spec defines two wire formats for /v1/metrics: protobuf
+// (application/x-protobuf) and Proto3 JSON (application/json). PulseAgent
+// emits the JSON form, so we decode the same intermediate
+// `ResourceMetricsRec[]` from JSON and feed it into the existing samples
+// extraction loop.
+
+let private jsonAnyValue (el : JsonElement) : AnyVal =
+  if el.ValueKind <> JsonValueKind.Object then VNone
+  else
+    let mutable v = VNone
+    for p in el.EnumerateObject() do
+      match p.Name with
+      | "stringValue" when p.Value.ValueKind = JsonValueKind.String ->
+        v <- VStr (p.Value.GetString())
+      | "boolValue"   when p.Value.ValueKind = JsonValueKind.True
+                      || p.Value.ValueKind = JsonValueKind.False ->
+        v <- VBool (p.Value.GetBoolean())
+      | "intValue" ->
+        match p.Value.ValueKind with
+        | JsonValueKind.String ->
+          match Int64.TryParse(p.Value.GetString()) with
+          | true, n -> v <- VInt n
+          | _ -> ()
+        | JsonValueKind.Number -> v <- VInt (p.Value.GetInt64())
+        | _ -> ()
+      | "doubleValue" when p.Value.ValueKind = JsonValueKind.Number ->
+        v <- VDbl (p.Value.GetDouble())
+      | _ -> ()
+    v
+
+let private jsonAttrs (el : JsonElement) : Attr[] =
+  let mutable arr : Attr[] = [||]
+  let mutable found = false
+  if el.ValueKind = JsonValueKind.Object then
+    match el.TryGetProperty "attributes" with
+    | true, a when a.ValueKind = JsonValueKind.Array ->
+      found <- true
+      arr <-
+        a.EnumerateArray()
+        |> Seq.map (fun kv ->
+            let key =
+              match kv.TryGetProperty "key" with
+              | true, k when k.ValueKind = JsonValueKind.String -> k.GetString()
+              | _ -> ""
+            let value =
+              match kv.TryGetProperty "value" with
+              | true, v -> jsonAnyValue v
+              | _ -> VNone
+            { key = key; value = value })
+        |> Seq.toArray
+    | _ -> ()
+  if found then arr else [||]
+
+let private jsonTsNano (el : JsonElement) : uint64 =
+  match el.TryGetProperty "timeUnixNano" with
+  | true, t ->
+    match t.ValueKind with
+    | JsonValueKind.String ->
+      match UInt64.TryParse(t.GetString()) with
+      | true, n -> n
+      | _ -> 0UL
+    | JsonValueKind.Number -> t.GetUInt64()
+    | _ -> 0UL
+  | _ -> 0UL
+
+let private jsonNumberDataPoint (el : JsonElement) : DataPoint =
+  let attrs  = jsonAttrs el
+  let tsNano = jsonTsNano el
+  let mutable v = 0.0
+  let mutable hasV = false
+  match el.TryGetProperty "asDouble" with
+  | true, x when x.ValueKind = JsonValueKind.Number ->
+    v <- x.GetDouble(); hasV <- true
+  | _ ->
+    match el.TryGetProperty "asInt" with
+    | true, x ->
+      match x.ValueKind with
+      | JsonValueKind.String ->
+        match Int64.TryParse(x.GetString()) with
+        | true, n -> v <- float n; hasV <- true
+        | _ -> ()
+      | JsonValueKind.Number ->
+        v <- float (x.GetInt64()); hasV <- true
+      | _ -> ()
+    | _ -> ()
+  { attrs = attrs; tsNano = tsNano; value = v; hasValue = hasV }
+
+let private jsonNumberPoints (el : JsonElement) : DataPoint[] =
+  if el.ValueKind <> JsonValueKind.Object then [||]
+  else
+    match el.TryGetProperty "dataPoints" with
+    | true, dp when dp.ValueKind = JsonValueKind.Array ->
+      dp.EnumerateArray() |> Seq.map jsonNumberDataPoint |> Seq.toArray
+    | _ -> [||]
+
+let private jsonMetric (el : JsonElement) : MetricRec =
+  let name =
+    match el.TryGetProperty "name" with
+    | true, n when n.ValueKind = JsonValueKind.String -> n.GetString()
+    | _ -> ""
+  let pts =
+    match el.TryGetProperty "gauge" with
+    | true, g -> jsonNumberPoints g
+    | _ ->
+      match el.TryGetProperty "sum" with
+      | true, s -> jsonNumberPoints s
+      | _ -> [||]
+  { name = name; points = pts }
+
+let private jsonScopeMetrics (el : JsonElement) : ScopeMetricsRec =
+  let scopeName =
+    match el.TryGetProperty "scope" with
+    | true, s ->
+      match s.TryGetProperty "name" with
+      | true, n when n.ValueKind = JsonValueKind.String -> n.GetString()
+      | _ -> ""
+    | _ -> ""
+  let metrics =
+    match el.TryGetProperty "metrics" with
+    | true, m when m.ValueKind = JsonValueKind.Array ->
+      m.EnumerateArray() |> Seq.map jsonMetric |> Seq.toArray
+    | _ -> [||]
+  { scope = scopeName; metrics = metrics }
+
+let private jsonResourceMetrics (el : JsonElement) : ResourceMetricsRec =
+  let resAttrs =
+    match el.TryGetProperty "resource" with
+    | true, r -> jsonAttrs r
+    | _ -> [||]
+  let scopes =
+    match el.TryGetProperty "scopeMetrics" with
+    | true, sm when sm.ValueKind = JsonValueKind.Array ->
+      sm.EnumerateArray() |> Seq.map jsonScopeMetrics |> Seq.toArray
+    | _ -> [||]
+  { resource = resAttrs; scopes = scopes }
+
+let private decodeExportMetricsJson (raw : byte[]) : ResourceMetricsRec[] =
+  use doc = JsonDocument.Parse(ReadOnlyMemory<byte>(raw))
+  let root = doc.RootElement
+  match root.TryGetProperty "resourceMetrics" with
+  | true, rm when rm.ValueKind = JsonValueKind.Array ->
+    rm.EnumerateArray() |> Seq.map jsonResourceMetrics |> Seq.toArray
+  | _ -> [||]
+
+let private isJsonContent (ctx : HttpContext) =
+  ctx.request.headers
+  |> Seq.exists (fun (k, v) ->
+       String.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase)
+       && v.IndexOf("application/json", StringComparison.OrdinalIgnoreCase) >= 0)
+
 // ---------- Handlers ----------
 
 /// POST /v1/metrics — OTLP/HTTP metrics. Body is a protobuf
-/// `ExportMetricsServiceRequest`. We map every NumberDataPoint of every
-/// Gauge / Sum metric to a `MetricSample`, naming series with resource
-/// attrs ∪ scope name ∪ point attrs. Histograms / summaries are silently
-/// ignored for now.
+/// `ExportMetricsServiceRequest` (Content-Type: application/x-protobuf)
+/// or Proto3 JSON (Content-Type: application/json). We map every
+/// NumberDataPoint of every Gauge / Sum metric to a `MetricSample`,
+/// naming series with resource attrs ∪ scope name ∪ point attrs.
+/// Histograms / summaries are silently ignored for now.
 let metrics (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
@@ -510,9 +662,13 @@ let metrics (storage : IStorageClient)
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
-      use ms = new MemoryStream(raw)
-      let input = new CodedInputStream(ms)
-      let resourceMetrics = decodeExportMetricsRequest input
+      let resourceMetrics =
+        if isJsonContent ctx then
+          decodeExportMetricsJson raw
+        else
+          use ms = new MemoryStream(raw)
+          let input = new CodedInputStream(ms)
+          decodeExportMetricsRequest input
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
