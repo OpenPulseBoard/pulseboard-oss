@@ -85,7 +85,7 @@ let makeStores () : TestStores =
   let limiter     = Limiter(quotaStore)
   let metricStore = MetricStore(capacityPerMetric = 4096)
   let logStore    = LogStore(capacity = 4096)
-  let hub         = Broadcaster()
+  let hub         = new Broadcaster()
   let metricBack  = EmbeddedMetricBackend(metricStore, None) :> IMetricBackend
   let logBack     = EmbeddedLogBackend(logStore)             :> ILogBackend
   let traceBack   = EmbeddedTraceBackend()                   :> ITraceBackend

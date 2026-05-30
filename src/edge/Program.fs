@@ -329,7 +329,7 @@ let main argv =
 
   let metricStore = MetricStore(capacityPerMetric = 4096)
   let logStore    = LogStore(capacity = 4096)
-  let hub         = Broadcaster()
+  let hub         = new Broadcaster()
 
   // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
   // seam is still `IStorageClient`; `InProcessStorageClient` now
