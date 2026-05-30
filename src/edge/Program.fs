@@ -1102,7 +1102,18 @@ let main argv =
     | _ -> fun _ -> async { return None }
 
   let agentStore : PulseBoard.AgentApi.IAgentStore =
-    PulseBoard.AgentApi.InMemoryAgentStore() :> _
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgAgentStore.ensureSchema cs
+        printfn "  AgentStore:  Postgres (schema ensured)"
+        PulseBoard.PgAgentStore.PgAgentStore(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres agent store: %s" ex.Message
+        exit 2
+    | None ->
+      printfn "  AgentStore:  in-memory (ephemeral — pass --postgres=... to persist enrolled agents)"
+      PulseBoard.AgentApi.InMemoryAgentStore() :> _
   // Agent enroll/checkin are unauthenticated (the agent has no credentials yet).
   // The portal fleet endpoints (GET /api/agents, POST /api/agents/token) need a
   // tenant session — wrap them in the same resolveSession + resolveApiKey chain

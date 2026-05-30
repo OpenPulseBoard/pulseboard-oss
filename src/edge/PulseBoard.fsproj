@@ -55,6 +55,7 @@
     <Compile Include="Rum.fs" />
     <Compile Include="Admin.fs" />
     <Compile Include="AgentApi.fs" />
+    <Compile Include="PgAgentStore.fs" />
     <Compile Include="Signup.fs" />
     <Compile Include="Program.fs" />
     <None Include="wwwroot/index.html">
