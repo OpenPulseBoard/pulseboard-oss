@@ -383,8 +383,12 @@ let meHandler : WebPart =
   fun ctx -> async {
     match PulseBoard.Rbac.tryGetTenant ctx with
     | None ->
+      // Plain 401 with no `WWW-Authenticate: Basic` header — Suave's
+      // RequestErrors.UNAUTHORIZED would add one, triggering the browser's
+      // native auth dialog on the SPA's fetch('/auth/me') call.
       return!
-        (UNAUTHORIZED """{"error":"not signed in"}"""
+        (Response.response HttpCode.HTTP_401
+           (Encoding.UTF8.GetBytes """{"error":"not signed in"}""")
          >=> Writers.setMimeType "application/json") ctx
     | Some t ->
       let (TenantId tid) = t.tenant.id
