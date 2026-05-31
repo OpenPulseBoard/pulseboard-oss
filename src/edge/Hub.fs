@@ -45,7 +45,7 @@ let private buildForceShutdown (ws : WebSocket) : unit -> unit =
 /// Bump this when changing the spin-breaker logic so we can confirm
 /// from inside the deployed container which build is actually loaded:
 ///   strings -el /app/PulseBoard.dll | grep PULSEBOARD_HUB_REV
-let HubRev = "PULSEBOARD_HUB_REV=2026-05-31-zombie-diagnostics"
+let HubRev = "PULSEBOARD_HUB_REV=2026-05-31-deep-trace"
 
 let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 
@@ -152,70 +152,101 @@ type Broadcaster(?heartbeatMs : int, ?idleTimeoutMs : int) =
 /// would turn a half-closed socket into a 100%-CPU spin because `ws.read()`
 /// can return non-data frames with no I/O wait. We also `Touch` on every
 /// frame so the watchdog knows the connection is alive.
+let private handlerInvocationCount = ref 0L
+
 let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext) =
+  // Outside-socket{} log so we know definitively how often Suave invokes
+  // our handler function (vs how often the socket{} body runs).
+  let invN = System.Threading.Interlocked.Increment(handlerInvocationCount)
+  eprintfn "[hub-handler] FN-INVOKE n=%d" invN
   socket {
     let id = hub.Subscribe ws
     let mutable loop = true
-    // Universal spin breaker: count frames per 1-second window. Real
-    // clients on this push-only hub send at most a Pong every ~30s in
-    // reply to our heartbeat Ping; anything faster than ~50 frames/s is
-    // a Suave reader spin (half-closed socket replaying cached bytes
-    // as valid frames with no I/O wait). The opcode doesn't matter —
-    // Pong and Ping decode just as easily from zero-padded buffers, so
-    // we can't trust per-opcode guards.
     let mutable windowStartMs = nowMs ()
     let mutable framesInWindow = 0
     let mutable totalFrames = 0L
-    eprintfn "[hub-handler] enter id=%O" id
+    let mutable iterCount = 0L
+    let mutable lastIterLogMs = nowMs ()
+    eprintfn "[hub-handler] enter id=%O invN=%d" id invN
     try
       while loop do
-        let! msg = ws.read()
-        let now = nowMs ()
-        totalFrames <- totalFrames + 1L
-        if now - windowStartMs >= 1000L then
-          // Log rate at every 1-sec boundary while we're investigating
-          // the spin. Cheap (1 line/sec/connection at most).
-          let op =
-            match msg with
-            | (Close,_,_) -> "Close" | (Ping,_,_) -> "Ping" | (Pong,_,_) -> "Pong"
-            | (Text,_,_) -> "Text" | (Binary,_,_) -> "Binary"
-            | (Continuation,_,_) -> "Cont" | (Reserved,_,_) -> "Reserved"
-          eprintfn "[hub-handler] id=%O rate=%d/s total=%d last=%s"
-            id framesInWindow totalFrames op
-          windowStartMs <- now
-          framesInWindow <- 1
-        else
-          framesInWindow <- framesInWindow + 1
-        if framesInWindow > 100 then
-          // > 100 frames in < 1 second from a single subscriber: spin.
-          eprintfn "[hub-handler] id=%O BAIL spin: %d frames in <1s (total=%d)"
-            id framesInWindow totalFrames
+        iterCount <- iterCount + 1L
+        // Capture ws.read()'s Result without the socket{} bind
+        // short-circuiting on Error: that's how we lose the `exit` log
+        // when the read returns Error.
+        let! readResult =
+          SocketOp.ofTask (task {
+            let task = (ws.read ()).AsTask()
+            let! r = task
+            return Ok r
+          })
+        let nowIter = nowMs ()
+        // Log first 5 iterations always (handshake / settle window),
+        // and at most one line per second thereafter, with the result
+        // kind. This is the canary that proves whether the while-loop
+        // is iterating fast or parked.
+        if iterCount <= 5L || nowIter - lastIterLogMs >= 1000L then
+          lastIterLogMs <- nowIter
+          let tag =
+            match readResult with
+            | Ok (Close,_,_) -> "Ok/Close"
+            | Ok (Ping,_,_) -> "Ok/Ping"
+            | Ok (Pong,_,_) -> "Ok/Pong"
+            | Ok (Text,_,_) -> "Ok/Text"
+            | Ok (Binary,_,_) -> "Ok/Binary"
+            | Ok (Continuation,_,_) -> "Ok/Cont"
+            | Ok (Reserved,_,_) -> "Ok/Reserved"
+            | Result.Error e -> sprintf "Error/%A" e
+          eprintfn "[hub-handler] iter id=%O n=%d total=%d result=%s"
+            id iterCount totalFrames tag
+        match readResult with
+        | Result.Error e ->
+          // ws.read failed: stop the loop ourselves so the finally
+          // runs and we get an exit log. This was previously hidden
+          // because the socket{} `let!` returns the Error from the
+          // whole computation, skipping our finally's eprintfn under
+          // some builder paths.
+          eprintfn "[hub-handler] id=%O READ-ERROR %A total=%d iter=%d" id e totalFrames iterCount
           loop <- false
-        else
-          match msg with
-          | (Close, _, _) ->
-            let empty = ByteSegment [||]
-            do! ws.send Close empty true
+        | Ok msg ->
+          let now = nowMs ()
+          totalFrames <- totalFrames + 1L
+          if now - windowStartMs >= 1000L then
+            let op =
+              match msg with
+              | (Close,_,_) -> "Close" | (Ping,_,_) -> "Ping" | (Pong,_,_) -> "Pong"
+              | (Text,_,_) -> "Text" | (Binary,_,_) -> "Binary"
+              | (Continuation,_,_) -> "Cont" | (Reserved,_,_) -> "Reserved"
+            eprintfn "[hub-handler] id=%O rate=%d/s total=%d last=%s"
+              id framesInWindow totalFrames op
+            windowStartMs <- now
+            framesInWindow <- 1
+          else
+            framesInWindow <- framesInWindow + 1
+          if framesInWindow > 100 then
+            eprintfn "[hub-handler] id=%O BAIL spin: %d frames in <1s (total=%d)"
+              id framesInWindow totalFrames
             loop <- false
-          | (Ping, data, _) ->
-            hub.Touch id
-            do! ws.send Pong data true
-          | (Pong, _, _) ->
-            hub.Touch id
-          | (Text, _, _) | (Binary, _, _) ->
-            // Hub is push-only; ignore data frames from the client.
-            ()
-          | (Continuation, _, _) ->
-            // Unsolicited Continuation (RFC 6455 §5.4) — we never
-            // start a fragmented receive. Also the half-closed-socket
-            // spin signature; bail.
-            eprintfn "[hub-handler] id=%O BAIL unsolicited Continuation (total=%d)" id totalFrames
-            loop <- false
-          | (Reserved, _, _) ->
-            // Protocol violation — drop the connection.
-            eprintfn "[hub-handler] id=%O BAIL Reserved opcode (total=%d)" id totalFrames
-            loop <- false
+          else
+            match msg with
+            | (Close, _, _) ->
+              let empty = ByteSegment [||]
+              do! ws.send Close empty true
+              loop <- false
+            | (Ping, data, _) ->
+              hub.Touch id
+              do! ws.send Pong data true
+            | (Pong, _, _) ->
+              hub.Touch id
+            | (Text, _, _) | (Binary, _, _) ->
+              ()
+            | (Continuation, _, _) ->
+              eprintfn "[hub-handler] id=%O BAIL unsolicited Continuation (total=%d)" id totalFrames
+              loop <- false
+            | (Reserved, _, _) ->
+              eprintfn "[hub-handler] id=%O BAIL Reserved opcode (total=%d)" id totalFrames
+              loop <- false
     finally
-      eprintfn "[hub-handler] exit id=%O total=%d" id totalFrames
+      eprintfn "[hub-handler] exit id=%O total=%d iter=%d invN=%d" id totalFrames iterCount invN
       hub.Unsubscribe id
   }
