@@ -45,7 +45,7 @@ let private buildForceShutdown (ws : WebSocket) : unit -> unit =
 /// Bump this when changing the spin-breaker logic so we can confirm
 /// from inside the deployed container which build is actually loaded:
 ///   strings -el /app/PulseBoard.dll | grep PULSEBOARD_HUB_REV
-let HubRev = "PULSEBOARD_HUB_REV=2026-05-30-spin-breaker-v4-instrumented"
+let HubRev = "PULSEBOARD_HUB_REV=2026-05-31-zombie-diagnostics"
 
 let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 
@@ -64,9 +64,10 @@ type Broadcaster(?heartbeatMs : int, ?idleTimeoutMs : int) =
   // it once in the process log.
   do eprintfn "[hub] %s" HubRev
 
-  let drop (id : Guid) =
+  let drop (id : Guid) (reason : string) =
     match subscribers.TryRemove id with
     | true, s ->
+      eprintfn "[hub-drop] id=%O reason=%s remaining=%d" id reason subscribers.Count
       // Force the underlying socket closed so a wedged reader unblocks
       // and the handler's `finally` actually runs. Safe to call even if
       // the socket is already gone.
@@ -79,24 +80,34 @@ type Broadcaster(?heartbeatMs : int, ?idleTimeoutMs : int) =
         let! r = s.ws.send op seg true
         match r with
         | Ok () -> ()
-        | Result.Error _ -> drop id
-      with _ -> drop id
+        | Result.Error _ -> drop id "send-error"
+      with _ -> drop id "send-exception"
     } :> System.Threading.Tasks.Task
 
   let tick _ =
     let now = nowMs ()
     let empty = ByteSegment [||]
-    for KeyValue(id, s) in subscribers |> Seq.toArray do
+    let snapshot = subscribers |> Seq.toArray
+    let mutable pinged = 0
+    let mutable dropped = 0
+    for KeyValue(id, s) in snapshot do
       if now - s.lastSeenMs > int64 idleTimeoutMs then
         // No frame from the peer in the idle window. Even on a
         // half-closed TCP socket the client should have answered our
         // last Ping with a Pong; absence means the connection is dead.
-        drop id
+        drop id "idle-watchdog"
+        dropped <- dropped + 1
       else
         trySend id s Ping empty |> ignore
+        pinged <- pinged + 1
+    eprintfn "[hub-tick] count=%d pinged=%d dropped=%d" subscribers.Count pinged dropped
 
   let heartbeat =
     new Timer(TimerCallback(tick), null, heartbeatMs, heartbeatMs)
+
+  // Counters so we can sample Publish-rate without per-call logging.
+  let mutable publishCount = 0L
+  let mutable lastPublishLogMs = nowMs ()
 
   member internal _.Touch(id : Guid) =
     match subscribers.TryGetValue id with
@@ -118,11 +129,19 @@ type Broadcaster(?heartbeatMs : int, ?idleTimeoutMs : int) =
   member _.Count = subscribers.Count
 
   /// Fire-and-forget broadcast of a UTF-8 text payload.
-  member _.Publish(json : string) =
+  member this.Publish(json : string) =
     let bytes = Encoding.UTF8.GetBytes json
     let segment = ByteSegment bytes
-    for KeyValue(id, s) in subscribers |> Seq.toArray do
+    let snapshot = subscribers |> Seq.toArray
+    for KeyValue(id, s) in snapshot do
       trySend id s Text segment |> ignore
+    let n = System.Threading.Interlocked.Increment(&publishCount)
+    // Log once a second with rate + fan-out size so we can see how much
+    // work zombies multiply.
+    let now = nowMs ()
+    if now - lastPublishLogMs >= 1000L then
+      lastPublishLogMs <- now
+      eprintfn "[hub-publish] total=%d subs=%d bytes=%d" n snapshot.Length bytes.Length
 
   interface IDisposable with
     member _.Dispose() = heartbeat.Dispose()
