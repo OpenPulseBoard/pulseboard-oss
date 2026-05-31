@@ -45,7 +45,7 @@ let private buildForceShutdown (ws : WebSocket) : unit -> unit =
 /// Bump this when changing the spin-breaker logic so we can confirm
 /// from inside the deployed container which build is actually loaded:
 ///   strings -el /app/PulseBoard.dll | grep PULSEBOARD_HUB_REV
-let HubRev = "PULSEBOARD_HUB_REV=2026-05-30-spin-breaker-v3"
+let HubRev = "PULSEBOARD_HUB_REV=2026-05-30-spin-breaker-v4-instrumented"
 
 let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 
@@ -146,17 +146,31 @@ let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext)
     // we can't trust per-opcode guards.
     let mutable windowStartMs = nowMs ()
     let mutable framesInWindow = 0
+    let mutable totalFrames = 0L
+    eprintfn "[hub-handler] enter id=%O" id
     try
       while loop do
         let! msg = ws.read()
         let now = nowMs ()
+        totalFrames <- totalFrames + 1L
         if now - windowStartMs >= 1000L then
+          // Log rate at every 1-sec boundary while we're investigating
+          // the spin. Cheap (1 line/sec/connection at most).
+          let op =
+            match msg with
+            | (Close,_,_) -> "Close" | (Ping,_,_) -> "Ping" | (Pong,_,_) -> "Pong"
+            | (Text,_,_) -> "Text" | (Binary,_,_) -> "Binary"
+            | (Continuation,_,_) -> "Cont" | (Reserved,_,_) -> "Reserved"
+          eprintfn "[hub-handler] id=%O rate=%d/s total=%d last=%s"
+            id framesInWindow totalFrames op
           windowStartMs <- now
           framesInWindow <- 1
         else
           framesInWindow <- framesInWindow + 1
         if framesInWindow > 100 then
           // > 100 frames in < 1 second from a single subscriber: spin.
+          eprintfn "[hub-handler] id=%O BAIL spin: %d frames in <1s (total=%d)"
+            id framesInWindow totalFrames
           loop <- false
         else
           match msg with
@@ -176,10 +190,13 @@ let handler (hub : Broadcaster) (ws : WebSocket) (_ctx : Suave.Http.HttpContext)
             // Unsolicited Continuation (RFC 6455 §5.4) — we never
             // start a fragmented receive. Also the half-closed-socket
             // spin signature; bail.
+            eprintfn "[hub-handler] id=%O BAIL unsolicited Continuation (total=%d)" id totalFrames
             loop <- false
           | (Reserved, _, _) ->
             // Protocol violation — drop the connection.
+            eprintfn "[hub-handler] id=%O BAIL Reserved opcode (total=%d)" id totalFrames
             loop <- false
     finally
+      eprintfn "[hub-handler] exit id=%O total=%d" id totalFrames
       hub.Unsubscribe id
   }
