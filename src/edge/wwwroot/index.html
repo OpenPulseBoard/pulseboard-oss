@@ -4223,7 +4223,7 @@ router();
   if (!pbBearer()) { pbRedirectSignin(); return; }
   try { await reloadList(); }
   catch (e) { console.warn("dashboard load failed", e); }
-  connectWs();
+  //connectWs();
 })();
 </script>
 </body>
