@@ -59,7 +59,14 @@ let main argv =
   let dataDir =
     match argv |> Array.tryFind (fun a -> a.StartsWith "--data=") with
     | Some s -> s.Substring 7
-    | None   -> Path.Combine(Directory.GetCurrentDirectory(), "pulse-data")
+    | None   ->
+      // PULSE_DATA_DIR is the documented env knob (docs/DEPLOYMENT.md,
+      // Dockerfile, workspace.toml). Falling back to cwd silently puts
+      // state on the container's ephemeral root FS on Fly/K8s — so
+      // dashboards, rules, secrets all evaporate on cold-start.
+      match Environment.GetEnvironmentVariable "PULSE_DATA_DIR" with
+      | s when not (String.IsNullOrWhiteSpace s) -> s
+      | _ -> Path.Combine(Directory.GetCurrentDirectory(), "pulse-data")
 
   // Per-token Basic-Auth for /ingest/* in the legacy / single-tenant mode.
   // Tokens are loaded from --tokens-file=<path> (one `name:secret` per

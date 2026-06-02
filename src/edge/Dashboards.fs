@@ -60,6 +60,12 @@ type Dashboard =
     /// Auto-refresh interval (seconds). 0 = no refresh (live-WS or manual).
     refreshSec   : int
     panels       : Panel array
+    /// Template variables (`$host`, `$instance`, …). Stored as the
+    /// raw JSON array the SPA sent; the backend is intentionally
+    /// schema-less here so we can grow new var fields (regex, multi,
+    /// allOption, hide, …) without a server-side migration. Empty
+    /// dashboards round-trip as `"[]"`.
+    vars         : string
     createdAt    : DateTimeOffset
     updatedAt    : DateTimeOffset }
 
@@ -92,6 +98,10 @@ let private writeDashboard (w : Utf8JsonWriter) (d : Dashboard) =
   w.WriteString("title", d.title)
   w.WriteNumber("timeRangeSec", d.timeRangeSec)
   w.WriteNumber("refreshSec", d.refreshSec)
+  w.WritePropertyName "vars"
+  let varsRaw =
+    if String.IsNullOrWhiteSpace d.vars then "[]" else d.vars
+  w.WriteRawValue(varsRaw, skipInputValidation = false)
   w.WritePropertyName "panels"
   w.WriteStartArray()
   for p in d.panels do writePanel w p
@@ -183,6 +193,10 @@ let parseDashboard (body : string) : Result<Dashboard, string> =
             |> Seq.choose parsePanel
             |> Array.ofSeq
           | _ -> [||]
+        let vars =
+          match r.TryGetProperty "vars" with
+          | true, v when v.ValueKind = JsonValueKind.Array -> v.GetRawText()
+          | _ -> "[]"
         let now = DateTimeOffset.UtcNow
         let readDate name dflt =
           match readString r name with
@@ -196,6 +210,7 @@ let parseDashboard (body : string) : Result<Dashboard, string> =
           timeRangeSec = max 60 (readInt r "timeRangeSec" 3600)
           refreshSec   = max 0  (readInt r "refreshSec"   30)
           panels = panels
+          vars = vars
           createdAt = readDate "createdAt" now
           updatedAt = readDate "updatedAt" now }
     with ex -> Result.Error ex.Message
@@ -325,6 +340,7 @@ let private defaultDashboard () : Dashboard =
     title        = "Overview"
     timeRangeSec = 3600
     refreshSec   = 15
+    vars         = "[]"
     panels =
       [|
         mkPanel "p-cpu" "CPU load"       "timeseries" "native" "cpu_usage"

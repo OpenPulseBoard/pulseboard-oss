@@ -45,6 +45,7 @@ let private metaDashboard () : Dashboard =
     title        = "PulseBoard \u2014 Self-Observability"
     timeRangeSec = 3600
     refreshSec   = 15
+    vars         = "[]"
     panels =
       [|
         mkPanel "p-ingest"      "Ingest throughput"        "timeseries" "native"
