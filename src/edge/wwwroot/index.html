@@ -3502,22 +3502,46 @@ let _libKey = null;
 const LIBRARY_CATALOG = [
   {
     id: "linux-host", icon: "🐧", title: "Linux Host", category: "Infrastructure",
-    description: "CPU, memory, disk I/O, and network throughput via node_exporter.",
+    description: "CPU, memory, disk I/O, and network throughput via node_exporter. Multi-host aware via the $host variable (auto-populated from the `instance` label that pulseagent stamps on every sample).",
     metrics: ["node_cpu_seconds_total","node_memory_MemTotal_bytes","node_disk_read_bytes_total","node_network_receive_bytes_total"],
     alerts: { name:"Linux Host Alerts", intervalMs:15000, rules:[
-      { name:"High CPU", lang:"promql", expr:'100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"CPU > 90%"} },
-      { name:"Low disk space", lang:"promql", expr:'(node_filesystem_avail_bytes{fstype!~"tmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs"}) * 100', cmp:"<", threshold:10, forMs:300000, severity:"critical", labels:{integration:"linux-host"}, annotations:{summary:"Disk free < 10%"} },
-      { name:"High memory", lang:"promql", expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"Memory > 90%"} },
+      { name:"High CPU", lang:"promql", expr:'100 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"CPU > 90% on {{ $labels.instance }}"} },
+      { name:"Low disk space", lang:"promql", expr:'(node_filesystem_avail_bytes{fstype!~"tmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs"}) * 100', cmp:"<", threshold:10, forMs:300000, severity:"critical", labels:{integration:"linux-host"}, annotations:{summary:"Disk free < 10% on {{ $labels.instance }}"} },
+      { name:"High memory", lang:"promql", expr:'(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"Memory > 90% on {{ $labels.instance }}"} },
     ]},
-    dashboard: { title:"Linux Host", timeRangeSec:3600, refreshSec:15, vars:[], panels:[
-      { id:"p1", title:"CPU Usage %", type:"timeseries", queryLang:"promql", expr:'100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', x:0,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
-      { id:"p2", title:"Memory Usage %", type:"timeseries", queryLang:"promql", expr:"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", x:6,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
-      { id:"p3", title:"System Load 1m", type:"stat", queryLang:"promql", expr:"node_load1", x:0,y:3,w:3,h:2, options:{}, links:[] },
-      { id:"p4", title:"Disk Read", type:"timeseries", queryLang:"promql", expr:"rate(node_disk_read_bytes_total[5m])", x:3,y:3,w:4,h:2, options:{unit:"bytes/s"}, links:[] },
-      { id:"p5", title:"Disk Write", type:"timeseries", queryLang:"promql", expr:"rate(node_disk_written_bytes_total[5m])", x:7,y:3,w:5,h:2, options:{unit:"bytes/s"}, links:[] },
-      { id:"p6", title:"Network Rx", type:"timeseries", queryLang:"promql", expr:'rate(node_network_receive_bytes_total{device!="lo"}[5m])', x:0,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
-      { id:"p7", title:"Network Tx", type:"timeseries", queryLang:"promql", expr:'rate(node_network_transmit_bytes_total{device!="lo"}[5m])', x:6,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
-    ]}
+    dashboard: { title:"Linux Host", timeRangeSec:3600, refreshSec:15,
+      vars:[
+        // Populated from any node_exporter / pulseagent series. The agent
+        // auto-stamps `instance=<hostname>` so this list reflects every
+        // host reporting to the workspace.
+        { name:"host", type:"query", label:"Host",
+          query:"label_values(node_cpu_seconds_total, instance)",
+          options:"", regex:"",
+          multi:true, allOption:true, current:["$__all"], hide:false },
+      ],
+      panels:[
+        { id:"p1", title:"CPU Usage % (by host)", type:"timeseries", queryLang:"promql",
+          expr:'100 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle",instance=~"$host"}[5m])) * 100',
+          x:0,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+        { id:"p2", title:"Memory Usage % (by host)", type:"timeseries", queryLang:"promql",
+          expr:'(1 - node_memory_MemAvailable_bytes{instance=~"$host"} / node_memory_MemTotal_bytes{instance=~"$host"}) * 100',
+          x:6,y:0,w:6,h:3, options:{unit:"%"}, links:[] },
+        { id:"p3", title:"System Load 1m", type:"timeseries", queryLang:"promql",
+          expr:'node_load1{instance=~"$host"}',
+          x:0,y:3,w:3,h:2, options:{}, links:[] },
+        { id:"p4", title:"Disk Read", type:"timeseries", queryLang:"promql",
+          expr:'sum by (instance) (rate(node_disk_read_bytes_total{instance=~"$host"}[5m]))',
+          x:3,y:3,w:4,h:2, options:{unit:"bytes/s"}, links:[] },
+        { id:"p5", title:"Disk Write", type:"timeseries", queryLang:"promql",
+          expr:'sum by (instance) (rate(node_disk_written_bytes_total{instance=~"$host"}[5m]))',
+          x:7,y:3,w:5,h:2, options:{unit:"bytes/s"}, links:[] },
+        { id:"p6", title:"Network Rx", type:"timeseries", queryLang:"promql",
+          expr:'sum by (instance) (rate(node_network_receive_bytes_total{device!="lo",instance=~"$host"}[5m]))',
+          x:0,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
+        { id:"p7", title:"Network Tx", type:"timeseries", queryLang:"promql",
+          expr:'sum by (instance) (rate(node_network_transmit_bytes_total{device!="lo",instance=~"$host"}[5m]))',
+          x:6,y:5,w:6,h:3, options:{unit:"bytes/s"}, links:[] },
+      ]}
   },
   {
     id: "docker", icon: "🐳", title: "Docker", category: "Container",
