@@ -1074,25 +1074,37 @@ function panelChrome(p) {
 async function renderPanel(p) {
   const cached = state.panels.get(p.id);
   let el;
+  let isNewPanel = false;
   if (cached && cached.dom && cached.dom.isConnected) {
     el = cached.dom;
-    if (cached.uplot) { try { cached.uplot.destroy(); } catch {} }
     placePanel(el, p);
     el.querySelector(".title").textContent = p.title || "(untitled)";
     el.querySelector(".badge").textContent = p.queryLang;
   } else {
     el = panelChrome(p);
     $("dash-grid").appendChild(el);
+    isNewPanel = true;
   }
-  // Register the DOM in the cache up front so refreshAll() reuses the
-  // same element for every panel type (stat/logs/table renderers don't
-  // touch state.panels themselves; without this we'd append duplicates
-  // on every refresh tick).
-  const prev = state.panels.get(p.id);
-  state.panels.set(p.id, { dom: el, uplot: prev && prev.uplot });
   const body = el.querySelector(".body");
+  // Keep any existing chart visible across refreshes; only swap the
+  // body to a "loading…" placeholder on first render or when the panel
+  // type changes (in which case the old contents are no longer valid).
+  const prevType  = body.dataset.panelType;
+  const typeChanged = !!prevType && prevType !== p.type;
+  body.dataset.panelType = p.type;
   body.className = "body " + p.type;
-  body.innerHTML = '<div class="empty">loading…</div>';
+
+  const prev = state.panels.get(p.id) || {};
+  if (typeChanged && prev.uplot) {
+    try { prev.uplot.destroy(); } catch {}
+    prev.uplot = null;
+  }
+  const hasLivePlot = !!prev.uplot;
+  const isEmpty = !hasLivePlot && (!body.firstChild || !!body.querySelector(".empty, .err"));
+  if (isNewPanel || typeChanged || isEmpty) {
+    body.innerHTML = '<div class="empty">loading…</div>';
+  }
+  state.panels.set(p.id, { dom: el, uplot: prev.uplot || null });
 
   const now = Date.now();
   const start = now - state.current.timeRangeSec * 1000;
@@ -1115,6 +1127,8 @@ async function renderPanel(p) {
       } catch { /* compare is best-effort */ }
     }
   } catch (err) {
+    const cur = state.panels.get(p.id);
+    if (cur && cur.uplot) { try { cur.uplot.destroy(); } catch {} }
     body.innerHTML = "";
     const e = document.createElement("div");
     e.className = "err"; e.textContent = err.message;
@@ -1123,12 +1137,15 @@ async function renderPanel(p) {
     return;
   }
 
-  body.innerHTML = "";
   const def = PulseBoard.getPanel(p.type);
   if (def) {
-    body.className = "body " + p.type;
+    // Renderers are responsible for clearing/reusing the body so that
+    // chart instances can be mutated in place (no destroy/recreate
+    // flash on every refresh tick).
     def.render(body, result, p.options || {}, p);
   } else {
+    const cur = state.panels.get(p.id);
+    if (cur && cur.uplot) { try { cur.uplot.destroy(); } catch {} }
     // Unknown panel type — show a clear message rather than silently nothing.
     body.className = "body";
     const d = document.createElement("div");
@@ -1140,7 +1157,9 @@ async function renderPanel(p) {
 
 function renderTimeseries(body, result, p) {
   const series = result.series || [];
+  const cached = state.panels.get(p.id) || {};
   if (series.length === 0) {
+    if (cached.uplot) { try { cached.uplot.destroy(); } catch {} state.panels.set(p.id, { dom: cached.dom }); }
     body.innerHTML = '<div class="empty">no data in range</div>'; return;
   }
   // Build common x-axis from union of all xs.
@@ -1156,6 +1175,25 @@ function renderTimeseries(body, result, p) {
     }
     data.push(arr);
   }
+  // Reuse the existing uPlot if its schema still matches — mutating
+  // data in place lets uPlot animate the transition smoothly instead of
+  // blanking the panel and rebuilding from scratch every refresh tick.
+  const existing = cached.uplot;
+  const sameSchema = existing
+    && existing.series && existing.series.length === series.length + 1
+    && series.every((s, i) => (existing.series[i + 1].label || "") === s.name)
+    && body.contains(existing.root);
+  if (sameSchema) {
+    try {
+      existing.setData(data);
+      if (existing.width !== body.clientWidth || existing.height !== body.clientHeight) {
+        existing.setSize({ width: body.clientWidth, height: body.clientHeight });
+      }
+      return;
+    } catch { /* fall through to recreate */ }
+  }
+  if (existing) { try { existing.destroy(); } catch {} }
+  body.innerHTML = "";
   const opts = {
     width: body.clientWidth || 300,
     height: body.clientHeight || 100,
@@ -1757,7 +1795,11 @@ function renderHeatmap(body, result, p) {
 // timestamp. opts: unit, xLabel
 function renderTrend(body, result, p) {
   const series = (result.series || []);
-  if (series.length === 0) { body.innerHTML = '<div class="empty">no data</div>'; return; }
+  const cached = state.panels.get(p.id) || {};
+  if (series.length === 0) {
+    if (cached.uplot) { try { cached.uplot.destroy(); } catch {} state.panels.set(p.id, { dom: cached.dom }); }
+    body.innerHTML = '<div class="empty">no data</div>'; return;
+  }
 
   const xset = new Set();
   for (const s of series) for (const x of s.xs) xset.add(x);
@@ -1771,6 +1813,25 @@ function renderTrend(body, result, p) {
     }
     data.push(arr);
   }
+
+  // Reuse existing uPlot when schema matches to avoid the
+  // destroy/recreate flash on refresh.
+  const existing = cached.uplot;
+  const sameSchema = existing
+    && existing.series && existing.series.length === series.length + 1
+    && series.every((s, i) => (existing.series[i + 1].label || "") === s.name)
+    && body.contains(existing.root);
+  if (sameSchema) {
+    try {
+      existing.setData(data);
+      if (existing.width !== body.clientWidth || existing.height !== body.clientHeight) {
+        existing.setSize({ width: body.clientWidth, height: body.clientHeight });
+      }
+      return;
+    } catch { /* fall through to recreate */ }
+  }
+  if (existing) { try { existing.destroy(); } catch {} }
+  body.innerHTML = "";
 
   const opts = {
     width:  body.clientWidth  || 300,
