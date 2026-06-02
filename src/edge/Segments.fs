@@ -3,6 +3,7 @@ module PulseBoard.Segments
 open System
 open System.IO
 open System.Collections.Concurrent
+open System.Security.Cryptography
 open PulseBoard.TimeSeries
 
 /// Binary record layout (little-endian, matches BitConverter on x64/ARM64):
@@ -16,13 +17,28 @@ let private invalidChars =
   Set.ofArray arr
 
 /// Map an arbitrary metric name to a safe directory name.
+/// If the sanitized form exceeds 200 bytes (well under the 255-byte OS
+/// limit, with headroom for the `seg-<ts>.bin` child files), we replace
+/// it with `sha256_<hex>` so no path component can ever be too long.
+/// The mapping is one-way but stable — the same series name always maps
+/// to the same directory — so existing data is not invalidated for names
+/// that were already short enough.
 let sanitize (name : string) : string =
   if String.IsNullOrEmpty name then "_"
   else
-    name
-    |> Seq.map (fun c -> if Set.contains c invalidChars then '_' else c)
-    |> Seq.toArray
-    |> String
+    let safe =
+      name
+      |> Seq.map (fun c -> if Set.contains c invalidChars then '_' else c)
+      |> Seq.toArray
+      |> String
+    if safe.Length <= 200 then safe
+    else
+      let hash =
+        use sha = SHA256.Create()
+        sha.ComputeHash(Text.Encoding.UTF8.GetBytes name)
+        |> Array.map (fun b -> b.ToString("x2"))
+        |> String.concat ""
+      "sha256_" + hash
 
 let private segPattern = "seg-*.bin"
 
