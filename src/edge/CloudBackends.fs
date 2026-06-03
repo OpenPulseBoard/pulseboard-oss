@@ -110,7 +110,20 @@ let private parseSeriesName (full : string) : PromLabel[] =
         while i < inner.Length && inner.[i] <> '=' do
           sb.Append inner.[i] |> ignore
           i <- i + 1
-        let name = sb.ToString().Trim()
+        let rawName = sb.ToString().Trim()
+        // Prometheus label names must match [a-zA-Z_][a-zA-Z0-9_]*; OTel
+        // resource attributes use dots (e.g. `agent.id`, `host.name`).
+        // Replace every invalid character with '_' so Mimir accepts them.
+        let name =
+          if rawName.Length = 0 then rawName
+          else
+            let arr = rawName.ToCharArray()
+            for j in 0 .. arr.Length - 1 do
+              let c = arr.[j]
+              if not (Char.IsLetterOrDigit c || c = '_') then arr.[j] <- '_'
+            // Label names must start with a letter or '_'; prefix if digit.
+            if Char.IsDigit arr.[0] then "_" + String arr
+            else String arr
         if i < inner.Length then i <- i + 1     // skip '='
         // Optional opening quote.
         if i < inner.Length && inner.[i] = '"' then i <- i + 1
