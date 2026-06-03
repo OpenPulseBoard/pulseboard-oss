@@ -138,6 +138,61 @@ let private readJson (path : string) : DekFile =
     | _ -> 0
   { v = v; nonce = getStr "nonce"; ct = getStr "ct" }
 
+// -- public helpers for DB-backed stores ------------------------------------
+
+/// Wrap a DEK with the KEK and return the JSON envelope as a string
+/// suitable for storing in a TEXT column.
+let serialiseDekEnvelope (kek : byte[]) (dek : byte[]) : string =
+  let env = wrap kek dek
+  sprintf """{"v":%d,"nonce":"%s","ct":"%s"}""" env.v env.nonce env.ct
+
+/// Parse and unwrap a DEK from a JSON envelope string (from a TEXT column).
+let deserialiseDekEnvelope (kek : byte[]) (json : string) : byte[] =
+  use doc = JsonDocument.Parse json
+  let r = doc.RootElement
+  let getStr (name : string) =
+    match r.TryGetProperty(name) with
+    | true, el when el.ValueKind = JsonValueKind.String -> el.GetString()
+    | _ -> ""
+  let ver =
+    match r.TryGetProperty("v") with
+    | true, x when x.ValueKind = JsonValueKind.Number ->
+      let mutable n = 0
+      if x.TryGetInt32 &n then n else 1
+    | _ -> 1
+  unwrap kek { v = ver; nonce = getStr "nonce"; ct = getStr "ct" }
+
+/// Encrypt `plaintext` with `dek` (AES-256-GCM). Returns `enc:v1:...`.
+let encryptWithDek (dek : byte[]) (plaintext : string) : string =
+  let nonce = genBytes 12
+  let pt    = Encoding.UTF8.GetBytes plaintext
+  let ct    = Array.zeroCreate pt.Length
+  let tag   = Array.zeroCreate 16
+  use aes = new AesGcm(dek, 16)
+  aes.Encrypt(ReadOnlySpan nonce, ReadOnlySpan pt, Span ct, Span tag)
+  "enc:v1:" + b64url nonce + ":" + b64url (Array.append ct tag)
+
+/// Decrypt a token produced by `encryptWithDek`. Returns `None` on failure.
+let decryptWithDek (dek : byte[]) (token : string) : string option =
+  try
+    if isNull token || not (token.StartsWith("enc:v1:", StringComparison.Ordinal)) then None
+    else
+      let rest = token.Substring 7
+      let i = rest.IndexOf ':'
+      if i <= 0 then None
+      else
+        let nonce = fromB64url (rest.Substring(0, i))
+        let blob  = fromB64url (rest.Substring(i + 1))
+        if blob.Length < 16 then None
+        else
+          let ct  = blob.[0 .. blob.Length - 17]
+          let tag = blob.[blob.Length - 16 .. blob.Length - 1]
+          let pt  = Array.zeroCreate ct.Length
+          use aes = new AesGcm(dek, 16)
+          aes.Decrypt(ReadOnlySpan nonce, ReadOnlySpan ct, ReadOnlySpan tag, Span pt)
+          Some (Encoding.UTF8.GetString pt)
+  with _ -> None
+
 /// Per-tenant DEK store. DEKs are 32-byte AES-256 keys, wrapped with the
 /// KEK and persisted at `<root>/<tenantId>.dek.json`. The unwrapped value
 /// is cached in memory for the process lifetime.
@@ -170,43 +225,9 @@ type FileSecretsStore(root : string, kek : byte[]) =
   interface ISecretsStore with
     member _.GetOrCreateDek tid = getDek tid
 
-    member _.Encrypt (tid, plaintext) =
-      let dek   = getDek tid
-      let nonce = genBytes 12
-      let pt    = Encoding.UTF8.GetBytes (plaintext : string)
-      let ct    = Array.zeroCreate pt.Length
-      let tag   = Array.zeroCreate 16
-      use aes = new AesGcm(dek, 16)
-      aes.Encrypt(ReadOnlySpan nonce,
-                  ReadOnlySpan pt,
-                  Span ct,
-                  Span tag)
-      sprintf "%s%s:%s" prefix (b64url nonce) (b64url (Array.append ct tag))
+    member _.Encrypt (tid, plaintext) = encryptWithDek (getDek tid) plaintext
 
-    member _.Decrypt (tid, token) =
-      try
-        if isNull token then None
-        elif not (token.StartsWith(prefix, StringComparison.Ordinal)) then None
-        else
-          let rest = token.Substring prefix.Length
-          let i = rest.IndexOf ':'
-          if i <= 0 then None
-          else
-            let nonce = fromB64url (rest.Substring(0, i))
-            let blob  = fromB64url (rest.Substring(i + 1))
-            if blob.Length < 16 then None
-            else
-              let ct  = blob.[ 0 .. blob.Length - 17 ]
-              let tag = blob.[ blob.Length - 16 .. blob.Length - 1 ]
-              let pt  = Array.zeroCreate ct.Length
-              let dek = getDek tid
-              use aes = new AesGcm(dek, 16)
-              aes.Decrypt(ReadOnlySpan nonce,
-                          ReadOnlySpan ct,
-                          ReadOnlySpan tag,
-                          Span pt)
-              Some (Encoding.UTF8.GetString pt)
-      with _ -> None
+    member _.Decrypt (tid, token) = decryptWithDek (getDek tid) token
 
 // ---------------------------------------------------------------------------
 // Per-tenant PII policy: a list of field names that should be encrypted on

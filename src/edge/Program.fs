@@ -590,11 +590,26 @@ let main argv =
   // persisted yet.
 
   let routingStore : PulseBoard.Routing.IConfigStore =
-    PulseBoard.Routing.FileConfigStore(Path.Combine(dataDir, "routing")) :> _
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgRoutingStore.ensureSchema cs
+      PulseBoard.PgRoutingStore.PgConfigStore(cs) :> _
+    | None ->
+      PulseBoard.Routing.FileConfigStore(Path.Combine(dataDir, "routing")) :> _
   let notifyQueue : PulseBoard.NotifyQueue.INotifyQueue =
-    PulseBoard.NotifyQueue.FileNotifyQueue(Path.Combine(dataDir, "notify")) :> _
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgNotifyQueue.ensureSchema cs
+      PulseBoard.PgNotifyQueue.PgNotifyQueue(cs) :> _
+    | None ->
+      PulseBoard.NotifyQueue.FileNotifyQueue(Path.Combine(dataDir, "notify")) :> _
   let ruleStore : PulseBoard.Rules.IRuleStore =
-    PulseBoard.Rules.FileRuleStore(Path.Combine(dataDir, "rules")) :> _
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgRulesStore.ensureSchema cs
+      PulseBoard.PgRulesStore.PgRuleStore(cs) :> _
+    | None ->
+      PulseBoard.Rules.FileRuleStore(Path.Combine(dataDir, "rules")) :> _
 
   // Seed default rule group + default routing config (with legacy
   // webhook/slack URLs lifted into receivers) for single-tenant mode.
@@ -651,9 +666,16 @@ let main argv =
 
   // On-call schedules + escalation policies + acks (PLAN.md Phase 5 #4).
   let onCallCatalog : PulseBoard.OnCall.ICatalogStore =
-    PulseBoard.OnCall.FileCatalogStore(Path.Combine(dataDir, "oncall")) :> _
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgOnCallStore.ensureSchema cs
+      PulseBoard.PgOnCallStore.PgCatalogStore(cs) :> _
+    | None ->
+      PulseBoard.OnCall.FileCatalogStore(Path.Combine(dataDir, "oncall")) :> _
   let onCallAcks    : PulseBoard.OnCall.IAckStore =
-    PulseBoard.OnCall.FileAckStore(Path.Combine(dataDir, "acks")) :> _
+    match pgConn with
+    | Some cs -> PulseBoard.PgOnCallStore.PgAckStore(cs) :> _
+    | None    -> PulseBoard.OnCall.FileAckStore(Path.Combine(dataDir, "acks")) :> _
   let escalator     = PulseBoard.OnCall.Escalator(onCallCatalog, onCallAcks)
   alertingPipeline.SetEscalator(escalator :> PulseBoard.Routing.IEscalator)
 
@@ -811,9 +833,16 @@ let main argv =
   let secretsDir = Path.Combine(dataDir, "secrets")
   let kek = PulseBoard.Secrets.loadOrCreateKek secretsDir
   let secretsStore : PulseBoard.Secrets.ISecretsStore =
-    PulseBoard.Secrets.FileSecretsStore(secretsDir, kek) :> _
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgSecretsStore.ensureSchema cs
+      PulseBoard.PgSecretsStore.PgSecretsStore(cs, kek) :> _
+    | None ->
+      PulseBoard.Secrets.FileSecretsStore(secretsDir, kek) :> _
   let piiPolicyStore : PulseBoard.Secrets.IPiiPolicyStore =
-    PulseBoard.Secrets.FilePiiPolicyStore(secretsDir) :> _
+    match pgConn with
+    | Some cs -> PulseBoard.PgSecretsStore.PgPiiPolicyStore(cs) :> _
+    | None    -> PulseBoard.Secrets.FilePiiPolicyStore(secretsDir) :> _
   printfn "  Secrets: KEK + per-tenant DEKs at %s (PII markers auto-encrypted)" secretsDir
 
   let ingestQuotas : PulseBoard.Ingest.IngestQuotas option =
@@ -862,17 +891,29 @@ let main argv =
   describeQueryBackend "LogQL  API" lokiUpstream
 
   // -- Dashboards (PLAN.md Phase 4 step 2) --------------------------------
-  // File-backed per-tenant dashboard store. Auto-seeds an overview
-  // dashboard the first time each tenant is observed (single-tenant
-  // mode pins everything to `singleTenantId`).
+  // Postgres-backed when --postgres= is provided; falls back to the
+  // file-backed repo so single-binary / dev deployments keep working
+  // without a database. Auto-seeds an overview dashboard the first
+  // time each tenant is observed (single-tenant mode pins everything
+  // to `singleTenantId`).
   let dashboardRepo : PulseBoard.Dashboards.IDashboardRepo =
-    PulseBoard.Dashboards.FileDashboardRepo(Path.Combine(dataDir, "dashboards")) :> _
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgDashboardRepo.ensureSchema cs
+        printfn "  Dashboards: Postgres (schema ensured)"
+        PulseBoard.PgDashboardRepo.PgDashboardRepo(cs) :> _
+      with ex ->
+        eprintfn "  [WARN] failed to initialise Postgres dashboard repo (%s); falling back to file-backed" ex.Message
+        PulseBoard.Dashboards.FileDashboardRepo(Path.Combine(dataDir, "dashboards")) :> _
+    | None ->
+      printfn "  Dashboards: file-backed at %s (pass --postgres=... to persist in DB)"
+        (Path.Combine(dataDir, "dashboards"))
+      PulseBoard.Dashboards.FileDashboardRepo(Path.Combine(dataDir, "dashboards")) :> _
   if not multiTenant then
     PulseBoard.Dashboards.seedIfEmpty dashboardRepo PulseBoard.Dashboards.singleTenantId
   let dashboardsInner =
     PulseBoard.Dashboards.webPart multiTenant dashboardRepo
-  printfn "  Dashboards: file-backed at %s"
-    (Path.Combine(dataDir, "dashboards"))
 
   // -- Self-observability (PLAN.md Phase 6 #6) -----------------------------
   // Reserve the `__meta__` tenant, seed its dashboard, and start an SLO
@@ -1045,10 +1086,14 @@ let main argv =
   // The `InMemoryBillingMeter` itself is defined above so the ingest
   // receivers can record usage. Here we attach the file provider, kick
   // off the daily rollup loop, and compose the admin endpoints.
-  let billingFileProvider =
-    PulseBoard.Billing.FileBillingProvider(Path.Combine(dataDir, "billing"))
   let billingProviders : PulseBoard.Billing.IBillingProvider[] =
-    [| billingFileProvider :> PulseBoard.Billing.IBillingProvider |]
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgBillingStore.ensureSchema cs
+      [| PulseBoard.PgBillingStore.PgBillingProvider(cs) :> PulseBoard.Billing.IBillingProvider |]
+    | None ->
+      let fileProv = PulseBoard.Billing.FileBillingProvider(Path.Combine(dataDir, "billing"))
+      [| fileProv :> PulseBoard.Billing.IBillingProvider |]
   let billingPlanFor (tid : PulseBoard.Tenancy.TenantId) =
     match tenantStore.TryGetTenant tid with
     | Some t -> t.plan
