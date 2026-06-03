@@ -50,7 +50,7 @@ type PgDashboardRepo(connectionString : string) =
       use conn = openConn ()
       use cmd =
         new NpgsqlCommand(
-          "SELECT body FROM pb_dashboards WHERE tenant_id = @tid ORDER BY body->'title'",
+          "SELECT body FROM pb_dashboards WHERE tenant_id = @tid",
           conn)
       cmd.Parameters.AddWithValue("tid", tid tenantId) |> ignore
       use reader = cmd.ExecuteReader()
