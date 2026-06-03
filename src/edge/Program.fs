@@ -365,6 +365,21 @@ let main argv =
   let tempoOrg   = envOr "PULSE_TEMPO_ORG_HEADER" (argValue "--tempo-org-header=")
                    |> Option.defaultValue "X-Scope-OrgID"
   let tempoToken = envOr "PULSE_TEMPO_BEARER" (argValue "--tempo-bearer=")
+  // Mimir read-path options
+  let mimirReadTenant = envOr "PULSE_MIMIR_READ_TENANT" (argValue "--mimir-read-tenant=")
+                        |> Option.defaultValue ""
+  let mimirStepMs     = envOr "PULSE_MIMIR_STEP_MS" (argValue "--mimir-step-ms=")
+                        |> Option.bind (fun s ->
+                            match System.Int64.TryParse s with
+                            | true, n when n > 0L -> Some n
+                            | _ -> None)
+                        |> Option.defaultValue 15_000L
+  // S3 object storage for metric segments (SeaweedFS / Ceph / AWS S3)
+  let metricS3Bucket   = envOr "PULSE_METRICS_S3_BUCKET"   (argValue "--metrics-s3-bucket=")
+  let metricS3Prefix   = envOr "PULSE_METRICS_S3_PREFIX"   (argValue "--metrics-s3-prefix=")
+                         |> Option.defaultValue "metrics/"
+  let metricS3Region   = envOr "PULSE_METRICS_S3_REGION"   (argValue "--metrics-s3-region=")
+  let metricS3Endpoint = envOr "PULSE_METRICS_S3_ENDPOINT" (argValue "--metrics-s3-endpoint=")
   let optOrg (h : string) =
     if h = "none" || String.IsNullOrWhiteSpace h then None else Some h
   let metricBackend : PulseBoard.Storage.IMetricBackend =
@@ -375,7 +390,9 @@ let main argv =
       let opts =
         { PulseBoard.CloudBackends.MimirOptions.Default url with
             OrgIdHeader = optOrg mimirOrg
-            Bearer      = mimirToken }
+            Bearer      = mimirToken
+            ReadTenant  = mimirReadTenant
+            StepSec     = float mimirStepMs / 1000.0 }
       new PulseBoard.CloudBackends.MimirMetricBackend(opts) :> _
     | None ->
       PulseBoard.Storage.EmbeddedMetricBackend(
@@ -466,7 +483,7 @@ let main argv =
     retentionInterval
   // Only run the compactor for pillars that are still embedded.
   let compactorMetricStore =
-    if mimirUrl.IsNone then Some metricStore else None
+    if mimirUrl.IsNone && metricS3Bucket.IsNone then Some metricStore else None
   let compactorLogStore =
     if lokiUrl.IsNone then Some logStore else None
   let retentionCompactor =
@@ -532,13 +549,44 @@ let main argv =
       PulseBoard.Gateway.InProcessStorageClient(
         metricBackend, logBackend, traceBackend, hub) :> _
 
-  // On-disk segment store: 1 MiB per segment (~65k points per file).
-  let segments = new PulseBoard.Segments.SegmentStore(dataDir)
-  metricStore.SetOnAppend   segments.Append
-  metricStore.SetHistory    segments.ReadSince
-  metricStore.SetExtraNames segments.KnownNames
-
-  printfn "PulseBoard persisting metric history under %s" dataDir
+  // Metric segment persistence — three tiers:
+  //   1. Mimir active       → read-proxy delegates Names/GetSince to Mimir HTTP API
+  //   2. S3 bucket set      → SeaweedFS / Ceph / AWS S3 segment objects
+  //   3. Neither (default)  → local filesystem segments under dataDir
+  let segmentFlush, segmentDispose =
+    match mimirUrl, metricS3Bucket with
+    | Some _, _ ->
+      // Mimir is the write target; delegate reads through the Mimir query API.
+      metricStore.SetExtraNames(fun ()           -> metricBackend.NamesFor mimirReadTenant)
+      metricStore.SetHistory   (fun name sinceMs -> metricBackend.GetSinceFor(mimirReadTenant, name, sinceMs))
+      printfn "  MetricSegments: read-proxy via Mimir (read-tenant=%s, step=%dms)"
+        (if mimirReadTenant = "" then "<none>" else mimirReadTenant) mimirStepMs
+      (fun () -> ()), (fun () -> ())
+    | None, Some bucket ->
+      // S3-compatible object store (SeaweedFS recommended for self-hosted).
+      let s3Opts =
+        { PulseBoard.S3SegmentBackend.S3Options.Default bucket with
+            Prefix   = metricS3Prefix
+            Region   = metricS3Region
+            Endpoint = metricS3Endpoint }
+      let s3 = new PulseBoard.S3SegmentBackend.S3SegmentStore(s3Opts)
+      metricStore.SetOnAppend   s3.Append
+      metricStore.SetHistory    s3.ReadSince
+      metricStore.SetExtraNames s3.KnownNames
+      printfn "  MetricSegments: S3 object storage s3://%s/%s%s"
+        bucket metricS3Prefix
+        (metricS3Endpoint |> Option.map (fun e -> " via " + e) |> Option.defaultValue " (AWS)")
+      s3.Flush,
+      (fun () -> try (s3 :> IDisposable).Dispose() with _ -> ())
+    | None, None ->
+      // Default: local filesystem segments under dataDir.
+      let fileSegs = new PulseBoard.Segments.SegmentStore(dataDir)
+      metricStore.SetOnAppend   fileSegs.Append
+      metricStore.SetHistory    fileSegs.ReadSince
+      metricStore.SetExtraNames fileSegs.KnownNames
+      printfn "PulseBoard persisting metric history under %s" dataDir
+      fileSegs.Flush,
+      (fun () -> try (fileSegs :> IDisposable).Dispose() with _ -> ())
 
   // -- Apex heartbeat (Phase 10.1) ----------------------------------------
   // When this binary runs as a per-customer workspace under
@@ -750,15 +798,12 @@ let main argv =
   // Flush segment writers every second so readers (and crash recovery)
   // observe data without a clean shutdown.
   let flushTimer =
-    new Timer((fun _ -> try segments.Flush() with _ -> ()),
+    new Timer((fun _ -> try segmentFlush() with _ -> ()),
               null, TimeSpan.FromSeconds 1., TimeSpan.FromSeconds 1.)
 
   // Flush segment writers on graceful shutdown (Ctrl+C / SIGTERM).
-  let flushAndDispose () =
-    try segments.Flush() with _ -> ()
-    try (segments :> IDisposable).Dispose() with _ -> ()
-  AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> flushAndDispose ())
-  Console.CancelKeyPress.Add(fun _ -> flushAndDispose ())
+  AppDomain.CurrentDomain.ProcessExit.Add(fun _ -> segmentDispose())
+  Console.CancelKeyPress.Add(fun _ -> segmentDispose())
 
   let wwwroot = resolveWwwRoot ()
   printfn "PulseBoard serving static files from %s" wwwroot

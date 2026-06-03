@@ -273,14 +273,23 @@ type MimirOptions =
     Bearer        : string option
     FlushMs       : int
     MaxBatch      : int
-    QueueCapacity : int }
+    QueueCapacity : int
+    /// Tenant ID forwarded in read (query) requests. For single-tenant
+    /// Mimir use "" or "anonymous"; for multi-tenant set to the
+    /// PulseBoard tenant whose data the dashboard reads should reflect.
+    ReadTenant    : string
+    /// Resolution (seconds) for query_range read-proxy calls.
+    /// Default 15 s matches a typical Prometheus scrape interval.
+    StepSec       : float }
   static member Default(baseUrl : string) =
     { BaseUrl       = baseUrl.TrimEnd '/'
       OrgIdHeader   = Some "X-Scope-OrgID"
       Bearer        = None
       FlushMs       = defaultFlushMs
       MaxBatch      = defaultMaxBatch
-      QueueCapacity = defaultQueueCap }
+      QueueCapacity = defaultQueueCap
+      ReadTenant    = ""
+      StepSec       = 15.0 }
 
 type MimirMetricBackend(opts : MimirOptions, ?http : HttpClient) =
   let client = defaultArg http sharedClient
@@ -318,11 +327,43 @@ type MimirMetricBackend(opts : MimirOptions, ?http : HttpClient) =
     new FlushPump<string * PromSample>(
       opts.QueueCapacity, opts.FlushMs, opts.MaxBatch, flush)
 
+  // Read-proxy helpers: build a GET request with the correct tenant and
+  // Bearer headers, then return the response body (or None on failure).
+  let addReadHeaders (tenant : string) (req : HttpRequestMessage) =
+    if not (String.IsNullOrEmpty tenant) then
+      match opts.OrgIdHeader with
+      | Some h -> req.Headers.TryAddWithoutValidation(h, tenant) |> ignore
+      | None   -> ()
+    match opts.Bearer with
+    | Some t ->
+      req.Headers.Authorization <-
+        Net.Http.Headers.AuthenticationHeaderValue("Bearer", t)
+    | None -> ()
+
+  let readGet (url : string) (tenant : string) : string option =
+    try
+      let req = new HttpRequestMessage(HttpMethod.Get, url)
+      addReadHeaders tenant req
+      let resp = client.SendAsync(req).GetAwaiter().GetResult()
+      if resp.IsSuccessStatusCode then
+        Some (resp.Content.ReadAsStringAsync().GetAwaiter().GetResult())
+      else
+        resp.Dispose()
+        None
+    with _ -> None
+
   member _.Stop() = pump.Stop()
   member _.OverflowDropped(tid) =
     match dropped.TryGetValue tid with
     | true, c -> Volatile.Read &c.contents
     | _ -> 0L
+
+  // -- Read proxy ---------------------------------------------------------
+  // Mimir exposes a Prometheus-compatible HTTP query API at
+  // <BaseUrl>/prometheus/. We use it to serve NamesFor / GetSinceFor
+  // calls so the dashboard and alert engine keep working when all write
+  // traffic flows through the Mimir remote_write path and nothing lands
+  // in the in-process MetricStore ring.
 
   interface IMetricBackend with
     member _.Record(tid, name, p) =
@@ -344,6 +385,53 @@ type MimirMetricBackend(opts : MimirOptions, ?http : HttpClient) =
       match dropped.TryGetValue tid with
       | true, c -> Volatile.Read &c.contents
       | _ -> 0L
+
+    member _.NamesFor (tenant : string) : string[] =
+      let url = opts.BaseUrl + "/prometheus/api/v1/label/__name__/values"
+      match readGet url tenant with
+      | None -> [||]
+      | Some body ->
+        try
+          use doc = JsonDocument.Parse body
+          let data = doc.RootElement.GetProperty "data"
+          [| for el in data.EnumerateArray() do
+               if el.ValueKind = JsonValueKind.String then
+                 yield el.GetString() |]
+        with _ -> [||]
+
+    member _.GetSinceFor (tenant : string, name : string, sinceMs : int64) : Point[] =
+      let nowMs  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+      let startS = sprintf "%.3f" (float sinceMs / 1000.0)
+      let endS   = sprintf "%.3f" (float nowMs   / 1000.0)
+      let stepS  = sprintf "%.0f" opts.StepSec
+      let url =
+        sprintf "%s/prometheus/api/v1/query_range?query=%s&start=%s&end=%s&step=%s"
+          opts.BaseUrl (Uri.EscapeDataString name) startS endS stepS
+      match readGet url tenant with
+      | None -> [||]
+      | Some body ->
+        try
+          use doc  = JsonDocument.Parse body
+          let result =
+            doc.RootElement
+               .GetProperty("data")
+               .GetProperty("result")
+          let pts = ResizeArray<Point>()
+          for series in result.EnumerateArray() do
+            let values = series.GetProperty "values"
+            for pair in values.EnumerateArray() do
+              let arr = pair.EnumerateArray() |> Seq.toArray
+              if arr.Length = 2 then
+                let tsSec = arr.[0].GetDouble()
+                let mutable v = 0.0
+                if System.Double.TryParse(
+                     arr.[1].GetString(),
+                     System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture,
+                     &v) then
+                  pts.Add { ts = int64 (tsSec * 1000.0); value = v }
+          pts.ToArray() |> Array.sortBy (fun p -> p.ts)
+        with _ -> [||]
 
   interface IDisposable with
     member x.Dispose() = x.Stop()

@@ -33,6 +33,7 @@
     <Compile Include="Notify.fs" />
     <Compile Include="Storage.fs" />
     <Compile Include="CloudBackends.fs" />
+    <Compile Include="S3SegmentBackend.fs" />
     <Compile Include="Retention.fs" />
     <Compile Include="PgRetentionOverrides.fs" />
     <Compile Include="Gateway.fs" />

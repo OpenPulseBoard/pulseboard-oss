@@ -51,6 +51,13 @@ type IMetricBackend =
   /// Monotonically-increasing count of samples dropped for `tenantId`
   /// because of cardinality rejection. Resets on process restart.
   abstract DroppedCardinality : tenantId : string -> int64
+  /// Names of all metrics visible to `tenantId`.
+  /// In-process backends return the same as `Names()`; cloud backends
+  /// (e.g. Mimir) scope the call to the given tenant.
+  abstract NamesFor    : tenantId : string -> string[]
+  /// Points for `name` in `tenantId`'s series since `sinceMs` (ms).
+  /// In-process backends delegate to `GetSince`.
+  abstract GetSinceFor : tenantId : string * name : string * sinceMs : int64 -> Point[]
 
 type ILogBackend =
   abstract Add  : tenantId : string * entry : LogEntry -> unit
@@ -104,6 +111,9 @@ type EmbeddedMetricBackend(store : MetricStore, limiter : Limiter option) =
       match dropped.TryGetValue tid with
       | true, cell -> Volatile.Read &cell.contents
       | _          -> 0L
+
+    member _.NamesFor _              = store.Names()
+    member _.GetSinceFor(_, name, s) = store.GetSince(name, s)
 
 
 type EmbeddedLogBackend(store : LogStore) =
