@@ -145,6 +145,27 @@
     .editor .field-row > * { flex: 1; }
     .editor footer { padding: 10px 14px; border-top: 1px solid var(--border);
                      display: flex; gap: 8px; }
+    /* Display-options collapsible section inside the editor */
+    .editor details.opt-section { margin-bottom: 10px; }
+    .editor details.opt-section > summary {
+      cursor: pointer; user-select: none; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 1px; color: var(--accent);
+      padding: 4px 0; list-style: none; display: flex; align-items: center; gap: 4px;
+    }
+    .editor details.opt-section > summary::before {
+      content: "▶"; font-size: 9px; transition: transform 0.15s;
+    }
+    .editor details.opt-section[open] > summary::before { transform: rotate(90deg); }
+    .editor details.opt-section > .opt-body { padding-top: 6px; }
+    /* Per-series color row */
+    .ed-color-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .ed-color-row label { margin: 0; flex: 1; color: var(--ink); font-size: 11px;
+                          text-transform: none; letter-spacing: 0; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+    .ed-color-row input[type=color] { width: 32px; height: 24px; padding: 1px 2px;
+                                      border: 1px solid var(--border); border-radius: 3px;
+                                      cursor: pointer; background: none; flex-shrink: 0; }
+    .ed-color-row input[type=text] { flex: 1; min-width: 0; font-size: 11px; }
 
     /* --- Explore view --- */
     .explore { display: flex; flex-direction: column; height: calc(100vh - 49px); }    .explore .controls {
@@ -786,6 +807,115 @@
     <div class="field"><label>Options (key=value per line)</label>
       <textarea id="ed-opts" placeholder="unit=bytes&#10;tail=200"></textarea>
     </div>
+
+    <!-- Structured display options — shown for uPlot-based panel types -->
+    <details class="opt-section" id="ed-display" style="display:none;">
+      <summary>Display options</summary>
+      <div class="opt-body">
+        <div class="field-row">
+          <div class="field">
+            <label>Unit</label>
+            <select id="ed-unit">
+              <option value="">None</option>
+              <optgroup label="Data">
+                <option value="bytes">Bytes (KiB / MiB / GiB)</option>
+                <option value="bytes_si">Bytes SI (KB / MB / GB)</option>
+                <option value="bits">Bits (Kb / Mb / Gb)</option>
+                <option value="bps">Throughput (Bps / KBps…)</option>
+                <option value="pps">Packets / s</option>
+                <option value="ops">Operations / s</option>
+              </optgroup>
+              <optgroup label="Time">
+                <option value="ns">Nanoseconds (ns)</option>
+                <option value="us">Microseconds (µs)</option>
+                <option value="ms">Milliseconds (ms)</option>
+                <option value="s">Seconds (s)</option>
+              </optgroup>
+              <optgroup label="Physics">
+                <option value="m/s">Speed — m/s</option>
+                <option value="km/h">Speed — km/h</option>
+                <option value="mph">Speed — mph</option>
+                <option value="m/s2">Acceleration — m/s²</option>
+                <option value="deg">Angle — degrees (°)</option>
+                <option value="rad">Angle — radians (rad)</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="percent">Percent (%)</option>
+                <option value="rpm">RPM</option>
+                <option value="custom">Custom…</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="field" id="ed-unit-custom-wrap" style="display:none;">
+            <label>Custom unit label</label>
+            <input id="ed-unit-custom" placeholder="e.g. req/s" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Style</label>
+            <select id="ed-style">
+              <option value="lines">Lines</option>
+              <option value="bars">Bars</option>
+              <option value="points">Points</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Line interpolation</label>
+            <select id="ed-interp">
+              <option value="linear">Linear</option>
+              <option value="smooth">Smooth (spline)</option>
+              <option value="stepBefore">Step — before</option>
+              <option value="stepAfter">Step — after</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Line style</label>
+            <select id="ed-linestyle">
+              <option value="solid">Solid</option>
+              <option value="dash">Dashed</option>
+              <option value="dots">Dotted</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Legend</label>
+            <select id="ed-legend">
+              <option value="">Auto (show if &gt;1 series)</option>
+              <option value="show">Always show</option>
+              <option value="hide">Hidden</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Line width (px)</label>
+            <input id="ed-linewidth" type="number" min="0.5" max="10" step="0.5" placeholder="1.5" />
+          </div>
+          <div class="field">
+            <label>Fill opacity (0–1)</label>
+            <input id="ed-fill" type="number" min="0" max="1" step="0.05" placeholder="0" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Y axis min</label>
+            <input id="ed-ymin" type="number" placeholder="auto" />
+          </div>
+          <div class="field">
+            <label>Y axis max</label>
+            <input id="ed-ymax" type="number" placeholder="auto" />
+          </div>
+        </div>
+        <!-- Per-series color overrides — populated by JS when a panel is loaded -->
+        <div class="field">
+          <label>Series colors</label>
+          <div id="ed-colors-rows"></div>
+        </div>
+      </div>
+    </details>
+
     <div class="field"><label>Drilldown links (title|url per line; use $var, ${__value}, ${__series})</label>
       <textarea id="ed-links" placeholder="Open traces|/traces?service=${__series}&#10;Dashboard|/d/abc?service=$service"></textarea>
     </div>
@@ -1155,9 +1285,125 @@ async function renderPanel(p) {
   }
 }
 
+// =====================================================================
+// Plot helpers — unit formatting + uPlot series builder
+// =====================================================================
+
+// Panel types that use uPlot and show the structured Display-options section.
+const PLOT_PANEL_TYPES = new Set(["timeseries", "trend", "xychart"]);
+
+// Returns a value-formatter function for the given unit key.
+function makeUnitFmt(unit) {
+  const TIERED = {
+    bytes:    [[1 << 30, "GiB"], [1 << 20, "MiB"], [1 << 10, "KiB"], [1, "B"]],
+    bytes_si: [[1e9, "GB"], [1e6, "MB"], [1e3, "KB"], [1, "B"]],
+    bits:     [[1e9, "Gb"], [1e6, "Mb"], [1e3, "Kb"], [1, "b"]],
+    bps:      [[1e9, "GBps"], [1e6, "MBps"], [1e3, "KBps"], [1, "Bps"]],
+  };
+  const SUFFIX = {
+    ns: " ns", us: " µs", ms: " ms", s: " s",
+    pps: " p/s", ops: " ops/s",
+    percent: "%", rpm: " rpm",
+    "m/s": " m/s", "km/h": " km/h", mph: " mph",
+    "m/s2": " m/s²", deg: "°", rad: " rad",
+  };
+  if (TIERED[unit]) {
+    const tiers = TIERED[unit];
+    return (v) => {
+      if (!Number.isFinite(v)) return String(v);
+      const a = Math.abs(v);
+      for (const [thresh, label] of tiers) {
+        if (a >= thresh) return (v / thresh).toFixed(2) + " " + label;
+      }
+      return v.toFixed(0) + " " + tiers[tiers.length - 1][1];
+    };
+  }
+  if (SUFFIX[unit]) {
+    const sfx = SUFFIX[unit];
+    return (v) => fmtNum(v) + sfx;
+  }
+  // Custom or empty: use generic formatter with optional suffix.
+  return (v) => fmtNum(v) + (unit ? (" " + unit) : "");
+}
+
+// Parse a hex color string (3 or 6 chars) and add alpha → "rgba(r,g,b,a)".
+function hexToRgba(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.length === 3 ? h[0] + h[0] : h.slice(0, 2), 16);
+  const g = parseInt(h.length === 3 ? h[1] + h[1] : h.slice(2, 4), 16);
+  const b = parseInt(h.length === 3 ? h[2] + h[2] : h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// Build the uPlot series-definition array from panel options.
+// seriesNames: string[]  (one per data series, excluding x)
+// xs: number[]           (x-axis data, used for default point visibility)
+// opts: p.options object
+function buildSeriesDefs(seriesNames, xs, opts) {
+  const style     = opts.style      || "lines";
+  const interp    = opts.interpolation || "linear";
+  const lineStyle = opts.lineStyle  || "solid";
+  const lineWidth = opts.lineWidth  ? +opts.lineWidth : 1.5;
+  const fillAlpha = opts.fill       ? +opts.fill : 0;
+  // Colors: prefer per-series keys (color0, color1, …) then fall back to
+  // the legacy comma-sep `colors` key, then the palette.
+  const legacyColors = (opts.colors || "").split(",").map(c => c.trim()).filter(Boolean);
+  const colorOf = (i) => {
+    const perSeries = opts["color" + i];
+    if (perSeries && perSeries.startsWith("#")) return perSeries;
+    return legacyColors[i] || colorFor(i);
+  };
+
+  // Determine the uPlot paths function.
+  let pathsFn = null;
+  if (style === "bars" && typeof uPlot.bars === "function") {
+    pathsFn = uPlot.bars({ size: [0.6, 100], gap: 1 });
+  } else if (style !== "bars") {
+    if (interp === "smooth" && typeof uPlot.spline === "function") {
+      pathsFn = uPlot.spline();
+    } else if (interp === "stepBefore" && typeof uPlot.stepped === "function") {
+      pathsFn = uPlot.stepped({ align: -1 });
+    } else if (interp === "stepAfter" && typeof uPlot.stepped === "function") {
+      pathsFn = uPlot.stepped({ align: 1 });
+    }
+  }
+
+  // Dash array for line style.
+  const dashArr = lineStyle === "dash" ? [8, 4]
+                : lineStyle === "dots" ? [2, 4]
+                : undefined;
+
+  const showPoints = style === "points" || (style === "lines" && xs.length < 60);
+
+  return seriesNames.map((name, i) => {
+    const stroke = colorOf(i);
+    const def = {
+      label:  name,
+      stroke,
+      width:  lineWidth,
+      points: { show: showPoints, size: style === "points" ? 5 : 3 },
+    };
+    if (pathsFn) def.paths = pathsFn;
+    if (dashArr) def.dash  = dashArr;
+    if (fillAlpha > 0) {
+      try { def.fill = hexToRgba(stroke, fillAlpha); } catch { /* ignore invalid hex */ }
+    }
+    return def;
+  });
+}
+
+// Build a spec-key string that captures everything that would require a
+// uPlot destroy+recreate rather than a simple setData call.
+function plotSpecKey(seriesNames, opts) {
+  const ks = ["style","interpolation","lineStyle","lineWidth","fill","colors","legend","yMin","yMax"];
+  const perColorKeys = seriesNames.map((_, i) => opts["color" + i] || "").join(",");
+  return seriesNames.join("|") + "/" + ks.map(k => opts[k] || "").join(",") + "/" + perColorKeys;
+}
+
 function renderTimeseries(body, result, p) {
-  const series = result.series || [];
-  const cached = state.panels.get(p.id) || {};
+  const series  = result.series || [];
+  const popts   = p.options || {};
+  const cached  = state.panels.get(p.id) || {};
   if (series.length === 0) {
     if (cached.uplot) { try { cached.uplot.destroy(); } catch {} state.panels.set(p.id, { dom: cached.dom }); }
     body.innerHTML = '<div class="empty">no data in range</div>'; return;
@@ -1175,14 +1421,11 @@ function renderTimeseries(body, result, p) {
     }
     data.push(arr);
   }
-  // Reuse the existing uPlot if its schema still matches — mutating
-  // data in place lets uPlot animate the transition smoothly instead of
-  // blanking the panel and rebuilding from scratch every refresh tick.
+  // Reuse the existing uPlot if its spec still matches — mutating data in
+  // place lets uPlot animate refreshes smoothly without a destroy/recreate flash.
+  const specKey = plotSpecKey(series.map(s => s.name), popts);
   const existing = cached.uplot;
-  const sameSchema = existing
-    && existing.series && existing.series.length === series.length + 1
-    && series.every((s, i) => (existing.series[i + 1].label || "") === s.name)
-    && body.contains(existing.root);
+  const sameSchema = existing && existing._specKey === specKey && body.contains(existing.root);
   if (sameSchema) {
     try {
       existing.setData(data);
@@ -1194,26 +1437,34 @@ function renderTimeseries(body, result, p) {
   }
   if (existing) { try { existing.destroy(); } catch {} }
   body.innerHTML = "";
-  const opts = {
-    width: body.clientWidth || 300,
+
+  const legendOpt = popts.legend || "";
+  const showLegend = legendOpt === "show" ? true
+                   : legendOpt === "hide" ? false
+                   : series.length > 1;
+  const unitFmt   = makeUnitFmt(popts.unit || "");
+  const yMin      = popts.yMin !== "" && popts.yMin != null ? +popts.yMin : undefined;
+  const yMax      = popts.yMax !== "" && popts.yMax != null ? +popts.yMax : undefined;
+  const seriesDefs = buildSeriesDefs(series.map(s => s.name), xs, popts);
+
+  const uopts = {
+    width:  body.clientWidth  || 300,
     height: body.clientHeight || 100,
     cursor: { drag: { x: true, y: false } },
-    legend: { show: series.length > 1 },
-    scales: { x: { time: true } },
+    legend: { show: showLegend },
+    scales: {
+      x: { time: true },
+      y: { min: yMin, max: yMax },
+    },
     axes: [
       { stroke: "#8a93a1", grid: { stroke: "#232833" } },
       { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
-        values: (u, vals) => vals.map(v => fmtNum(v)) },
+        values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
-    series: [
-      {},
-      ...series.map((s, i) => ({
-        label: s.name, stroke: colorFor(i), width: 1.5,
-        points: { show: xs.length < 60 },
-      })),
-    ],
+    series: [{}, ...seriesDefs],
   };
-  const plot = new uPlot(opts, data, body);
+  const plot = new uPlot(uopts, data, body);
+  plot._specKey = specKey;
   state.panels.set(p.id, { dom: body.closest(".panel"), uplot: plot });
   // ResizeObserver keeps the chart in sync as the user drags the grid.
   if (!body._ro) {
@@ -1794,8 +2045,9 @@ function renderHeatmap(body, result, p) {
 // Like timeseries but x-axis is treated as a plain number, not a Unix
 // timestamp. opts: unit, xLabel
 function renderTrend(body, result, p) {
-  const series = (result.series || []);
-  const cached = state.panels.get(p.id) || {};
+  const series  = (result.series || []);
+  const popts   = p.options || {};
+  const cached  = state.panels.get(p.id) || {};
   if (series.length === 0) {
     if (cached.uplot) { try { cached.uplot.destroy(); } catch {} state.panels.set(p.id, { dom: cached.dom }); }
     body.innerHTML = '<div class="empty">no data</div>'; return;
@@ -1814,13 +2066,9 @@ function renderTrend(body, result, p) {
     data.push(arr);
   }
 
-  // Reuse existing uPlot when schema matches to avoid the
-  // destroy/recreate flash on refresh.
+  const specKey = plotSpecKey(series.map(s => s.name), popts);
   const existing = cached.uplot;
-  const sameSchema = existing
-    && existing.series && existing.series.length === series.length + 1
-    && series.every((s, i) => (existing.series[i + 1].label || "") === s.name)
-    && body.contains(existing.root);
+  const sameSchema = existing && existing._specKey === specKey && body.contains(existing.root);
   if (sameSchema) {
     try {
       existing.setData(data);
@@ -1833,28 +2081,36 @@ function renderTrend(body, result, p) {
   if (existing) { try { existing.destroy(); } catch {} }
   body.innerHTML = "";
 
-  const opts = {
+  const legendOpt  = popts.legend || "";
+  const showLegend = legendOpt === "show" ? true
+                   : legendOpt === "hide" ? false
+                   : series.length > 1;
+  const unitFmt    = makeUnitFmt(popts.unit || "");
+  const xLabel     = popts.xLabel || "";
+  const yMin       = popts.yMin !== "" && popts.yMin != null ? +popts.yMin : undefined;
+  const yMax       = popts.yMax !== "" && popts.yMax != null ? +popts.yMax : undefined;
+  const seriesDefs = buildSeriesDefs(series.map(s => s.name), xs, popts);
+
+  const uopts = {
     width:  body.clientWidth  || 300,
     height: body.clientHeight || 100,
     cursor: { drag: { x: true, y: false } },
-    legend: { show: series.length > 1 },
-    scales: { x: { time: false } },   // <-- key difference from timeseries
+    legend: { show: showLegend },
+    scales: {
+      x: { time: false },   // key difference from timeseries
+      y: { min: yMin, max: yMax },
+    },
     axes: [
       { stroke: "#8a93a1", grid: { stroke: "#232833" },
+        label: xLabel || undefined,
         values: (u, vals) => vals.map(v => fmtNum(v)) },
       { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
-        values: (u, vals) => vals.map(v => fmtNum(v)) },
+        values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
-    series: [
-      {},
-      ...series.map((s, i) => ({
-        label: s.name, stroke: colorFor(i), width: 1.5,
-        points: { show: xs.length < 60 },
-      })),
-    ],
+    series: [{}, ...seriesDefs],
   };
-  const plot = new uPlot(opts, data, body);
-  // Store so resizes work via the same mechanism as timeseries.
+  const plot = new uPlot(uopts, data, body);
+  plot._specKey = specKey;
   state.panels.set(p.id, { dom: body.closest(".panel"), uplot: plot });
   if (!body._tro) {
     body._tro = new ResizeObserver(() => {
@@ -3254,6 +3510,140 @@ async function saveCurrent() {
 }
 
 // =====================================================================
+// Editor drawer — display-options helpers
+// =====================================================================
+
+// Option keys that are managed by the structured Display-options section.
+// These are kept out of the raw `ed-opts` textarea to avoid duplication.
+const DISPLAY_OPT_KEYS = new Set([
+  "style","interpolation","lineStyle","lineWidth","fill","legend","yMin","yMax","unit",
+]);
+// Per-series color keys match /^color\d+$/.
+function isDisplayKey(k) { return DISPLAY_OPT_KEYS.has(k) || /^color\d+$/.test(k); }
+
+// Show or hide the Display-options section based on the current panel type.
+function syncEdDisplay(panelType) {
+  const show = PLOT_PANEL_TYPES.has(panelType || $("ed-type").value);
+  $("ed-display").style.display = show ? "" : "none";
+}
+
+// Populate the Display-options fields from a panel options map.
+// Also rebuilds the per-series color rows based on the series already
+// in the live rendered chart (if any), falling back to the options map.
+function loadPlotFields(opts, panelId) {
+  const o = opts || {};
+
+  // Unit: check if the value matches a known key or is custom.
+  const unitEl  = $("ed-unit");
+  const unitVal = o.unit || "";
+  const knownUnits = Array.from(unitEl.options).map(opt => opt.value);
+  if (knownUnits.includes(unitVal)) {
+    unitEl.value = unitVal;
+    $("ed-unit-custom-wrap").style.display = "none";
+  } else if (unitVal) {
+    unitEl.value = "custom";
+    $("ed-unit-custom").value = unitVal;
+    $("ed-unit-custom-wrap").style.display = "";
+  } else {
+    unitEl.value = "";
+    $("ed-unit-custom-wrap").style.display = "none";
+  }
+
+  $("ed-style").value     = o.style       || "lines";
+  $("ed-interp").value    = o.interpolation || "linear";
+  $("ed-linestyle").value = o.lineStyle   || "solid";
+  $("ed-legend").value    = o.legend      || "";
+  $("ed-linewidth").value = o.lineWidth   || "";
+  $("ed-fill").value      = o.fill        || "";
+  $("ed-ymin").value      = o.yMin        != null ? o.yMin : "";
+  $("ed-ymax").value      = o.yMax        != null ? o.yMax : "";
+
+  // Per-series color rows — derive series names from live chart if possible.
+  const cached  = panelId ? (state.panels.get(panelId) || {}) : {};
+  const uplot   = cached.uplot;
+  const seriesNames = uplot && uplot.series
+    ? uplot.series.slice(1).map(s => s.label || "")
+    : [];
+  rebuildColorRows(seriesNames, o);
+}
+
+// Build the per-series color picker rows inside #ed-colors-rows.
+function rebuildColorRows(seriesNames, opts) {
+  const container = $("ed-colors-rows");
+  container.innerHTML = "";
+  if (seriesNames.length === 0) {
+    container.innerHTML = '<span style="font-size:11px;color:var(--muted);">Preview the panel first to see series</span>';
+    return;
+  }
+  seriesNames.forEach((name, i) => {
+    const currentColor = opts["color" + i] || colorFor(i);
+    const row = document.createElement("div");
+    row.className = "ed-color-row";
+    // Color swatch + hex text input pair — kept in sync with each other.
+    row.innerHTML =
+      `<label title="${escapeHtml(name)}">${escapeHtml(name.length > 22 ? name.slice(0,21)+"…" : name)}</label>` +
+      `<input type="color" id="ed-color-swatch-${i}" value="${escapeHtml(currentColor.startsWith("#") ? currentColor : colorFor(i))}" />` +
+      `<input type="text"  id="ed-color-hex-${i}"   value="${escapeHtml(currentColor)}" placeholder="${colorFor(i)}" style="width:76px;" />`;
+    container.appendChild(row);
+    const swatch = row.querySelector(`#ed-color-swatch-${i}`);
+    const hex    = row.querySelector(`#ed-color-hex-${i}`);
+    swatch.addEventListener("input", () => { hex.value = swatch.value; });
+    hex.addEventListener("input", () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(hex.value)) swatch.value = hex.value;
+    });
+  });
+}
+
+// Collect the current Display-options field values into a partial opts map.
+function collectPlotFields() {
+  const out = {};
+  const unitSel = $("ed-unit").value;
+  if (unitSel === "custom") {
+    const custom = $("ed-unit-custom").value.trim();
+    if (custom) out.unit = custom;
+  } else if (unitSel) {
+    out.unit = unitSel;
+  }
+
+  const style = $("ed-style").value;
+  if (style && style !== "lines") out.style = style;
+  else if (style) out.style = style;  // always write so reset works
+
+  const interp = $("ed-interp").value;
+  if (interp && interp !== "linear") out.interpolation = interp;
+  else if (interp) out.interpolation = interp;
+
+  const ls = $("ed-linestyle").value;
+  if (ls && ls !== "solid") out.lineStyle = ls;
+  else if (ls) out.lineStyle = ls;
+
+  const legend = $("ed-legend").value;
+  if (legend) out.legend = legend;
+
+  const lw = $("ed-linewidth").value.trim();
+  if (lw) out.lineWidth = lw;
+
+  const fill = $("ed-fill").value.trim();
+  if (fill) out.fill = fill;
+
+  const ymin = $("ed-ymin").value.trim();
+  if (ymin !== "") out.yMin = ymin;
+
+  const ymax = $("ed-ymax").value.trim();
+  if (ymax !== "") out.yMax = ymax;
+
+  // Per-series color keys.
+  const container = $("ed-colors-rows");
+  container.querySelectorAll("input[type=text][id^='ed-color-hex-']").forEach(inp => {
+    const idx = inp.id.replace("ed-color-hex-", "");
+    const val = inp.value.trim();
+    if (val) out["color" + idx] = val;
+  });
+
+  return out;
+}
+
+// =====================================================================
 // Editor drawer
 // =====================================================================
 function openEditor(panelId) {
@@ -3267,9 +3657,16 @@ function openEditor(panelId) {
   $("ed-expr").value  = p.expr;
   $("ed-w").value     = p.w;
   $("ed-h").value     = p.h;
-  $("ed-opts").value  = Object.entries(p.options || {}).map(([k,v]) => `${k}=${v}`).join("\n");
+  // Raw opts textarea: omit keys handled by the structured display section.
+  const rawOpts = Object.entries(p.options || {})
+    .filter(([k]) => !isDisplayKey(k))
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+  $("ed-opts").value  = rawOpts;
   $("ed-links").value = (p.links || []).map(lk => `${lk.title}|${lk.url}`).join("\n");
   $("ed-preview").innerHTML = "";
+  syncEdDisplay(p.type);
+  loadPlotFields(p.options || {}, panelId);
   $("editor").classList.add("open");
 }
 
@@ -3291,6 +3688,10 @@ function parseOpts(text) {
 function readEditorPanel() {
   const id = state.editingPanel;
   const base = state.current.panels.find(x => x.id === id);
+  // Merge: raw textarea opts + structured display-options fields.
+  // The display section only contributes keys when its panel type is shown.
+  const rawOpts     = parseOpts($("ed-opts").value);
+  const displayOpts = PLOT_PANEL_TYPES.has($("ed-type").value) ? collectPlotFields() : {};
   return {
     ...base,
     title:     $("ed-title").value || "untitled",
@@ -3299,7 +3700,7 @@ function readEditorPanel() {
     expr:      $("ed-expr").value,
     w:         Math.max(1, Math.min(12, +$("ed-w").value || base.w)),
     h:         Math.max(1, +$("ed-h").value || base.h),
-    options:   parseOpts($("ed-opts").value),
+    options:   { ...rawOpts, ...displayOpts },
     links:     parseLinks($("ed-links").value),
   };
 }
@@ -3327,6 +3728,10 @@ async function previewEditor() {
       def.render(host, r, p.options || {}, p);
     } else {
       renderTimeseries(host, r, p);
+    }
+    // Refresh per-series color rows now that we know the series names.
+    if (PLOT_PANEL_TYPES.has(p.type) && r.series) {
+      rebuildColorRows(r.series.map(s => s.name), p.options || {});
     }
   } catch (err) {
     host.innerHTML = `<div class="err" style="padding:8px;">${err.message}</div>`;
@@ -4153,6 +4558,14 @@ $("editor-close").addEventListener("click", closeEditor);
 $("ed-apply").addEventListener("click", applyEditor);
 $("ed-delete").addEventListener("click", deleteEditorPanel);
 $("ed-preview-btn").addEventListener("click", previewEditor);
+
+// Show/hide Display-options section when panel type changes.
+$("ed-type").addEventListener("change", () => syncEdDisplay());
+
+// Toggle custom unit input visibility.
+$("ed-unit").addEventListener("change", () => {
+  $("ed-unit-custom-wrap").style.display = $("ed-unit").value === "custom" ? "" : "none";
+});
 
 // Library
 $("lib-search").addEventListener("input", (e) => renderLibrary(_libCatFilter, e.target.value));
