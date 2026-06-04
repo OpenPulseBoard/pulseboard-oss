@@ -96,7 +96,8 @@ type Rule =
     forMs       : int64               // pending → firing dwell
     severity    : Severity
     labels      : Map<string,string>
-    annotations : Map<string,string> }
+    annotations : Map<string,string>
+    runbook     : string option }     // optional markdown runbook (PLAN-NEXT 14.1)
 
 [<NoComparison>]
 type RuleGroup =
@@ -130,7 +131,8 @@ type AlertInstance =
     activeAt    : int64               // first breach
     firedAt     : int64 option
     resolvedAt  : int64 option
-    lastEvalAt  : int64 }
+    lastEvalAt  : int64
+    runbook     : string option }     // copied from the originating rule (14.1)
 
 // -- JSON -------------------------------------------------------------------
 
@@ -152,6 +154,9 @@ let private writeRule (w : Utf8JsonWriter) (r : Rule) =
   w.WriteString("severity",    severityToStr r.severity)
   writeMap w "labels"      r.labels
   writeMap w "annotations" r.annotations
+  match r.runbook with
+  | Some rb -> w.WriteString("runbook", rb)
+  | None    -> ()
   w.WriteEndObject()
 
 let private writeGroup (w : Utf8JsonWriter) (g : RuleGroup) =
@@ -231,7 +236,8 @@ let private parseRule (el : JsonElement) : Rule option =
         forMs       = readInt64 el "forMs" 0L
         severity    = readStr el "severity" |> Option.map strToSeverity |> Option.defaultValue Severity.Warning
         labels      = readMap el "labels"
-        annotations = readMap el "annotations" }
+        annotations = readMap el "annotations"
+        runbook     = readStr el "runbook" }
     | _ -> None
   | _ -> None
 
@@ -478,6 +484,7 @@ type Evaluator(metricStore : MetricStore,
             severity    = rule.severity
             labels      = mergedLabels
             annotations = rule.annotations
+            runbook     = rule.runbook
             value       = value
             state       =
               if rule.forMs <= 0L then AlertState.Firing else AlertState.Pending
@@ -576,6 +583,9 @@ let writeAlert (w : Utf8JsonWriter) (a : AlertInstance) =
   w.WriteNumber("lastEvalAt", a.lastEvalAt)
   writeMap w "labels"      a.labels
   writeMap w "annotations" a.annotations
+  match a.runbook with
+  | Some rb -> w.WriteString("runbook", rb)
+  | None    -> ()
   w.WriteEndObject()
 
 let serialiseAlerts (xs : AlertInstance seq) : string =
@@ -681,7 +691,14 @@ let private defaultGroup () : RuleGroup =
           forMs       = 30_000L
           severity    = Severity.Warning
           labels      = Map.ofList [ "team", "infra" ]
-          annotations = Map.ofList [ "summary", "CPU sustained above 90%" ] }
+          annotations = Map.ofList [ "summary", "CPU sustained above 90%" ]
+          runbook     =
+            Some (
+              "## CPU high runbook\n\n\
+               - [ ] Check the top CPU consumers (`top` / process metrics)\n\
+               - [ ] Confirm the spike is not a deploy or batch job\n\
+               - [ ] Scale out or shed load if sustained\n\
+               - [ ] Page the service owner if unresolved after 15m") }
       |]
     createdAt = now
     updatedAt = now }

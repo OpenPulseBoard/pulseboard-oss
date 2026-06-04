@@ -19,7 +19,8 @@ let private makeRule name lang expr cmp threshold : Rule =
       forMs       = 0L
       severity    = Severity.Warning
       labels      = Map.empty
-      annotations = Map.empty }
+      annotations = Map.empty
+      runbook     = None }
 
 let private makeGroup name (rules : Rule[]) : RuleGroup =
     let now = DateTimeOffset.UtcNow

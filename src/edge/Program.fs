@@ -727,11 +727,25 @@ let main argv =
   let escalator     = PulseBoard.OnCall.Escalator(onCallCatalog, onCallAcks)
   alertingPipeline.SetEscalator(escalator :> PulseBoard.Routing.IEscalator)
 
+  // Portal base URL for runbook deep links embedded in notifications
+  // (PLAN-NEXT 14.1). Empty → a relative `#/alerts/<fp>` hash link.
+  let publicUrl =
+    envOr "PULSE_PUBLIC_URL" (argValue "--public-url=") |> Option.defaultValue ""
+  alertingPipeline.SetPublicUrl publicUrl
+
+  // Inline runbooks (PLAN-NEXT 14.1): per-alert markdown checklists with
+  // progress tracking + a post-incident view. The file store doubles as
+  // both the single- and multi-tenant backend (journalled per tenant).
+  let runbookStore : PulseBoard.Runbooks.IRunbookStore =
+    PulseBoard.Runbooks.FileRunbookStore(Path.Combine(dataDir, "runbooks"))
+  let runbookTracker = PulseBoard.Runbooks.Tracker(runbookStore)
+
   let alertSink =
     { new PulseBoard.Rules.IAlertSink with
         member _.OnAlert a =
           try consoleAlertSink a with _ -> ()
           try hubAlertSink a    with _ -> ()
+          try runbookTracker.Observe a with _ -> ()
           try alertingPipeline.OnAlert a with ex ->
             eprintfn "[routing] OnAlert failed: %s" ex.Message }
 
@@ -756,6 +770,9 @@ let main argv =
   let routingInner     = PulseBoard.Routing.webPart     multiTenant routingStore
   let notifyQueueInner = PulseBoard.NotifyQueue.webPart multiTenant notifyQueue
   let onCallInner      = PulseBoard.OnCall.webPart      multiTenant onCallCatalog onCallAcks
+  let runbookInner     =
+    PulseBoard.Runbooks.webPart multiTenant runbookStore metricStore
+      (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
 
   printfn "  Alerting: rule store under %s; routing under %s; queue under %s"
     (Path.Combine(dataDir, "rules"))
@@ -1186,7 +1203,7 @@ let main argv =
 
   let query : WebPart =
     let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; aiExplainInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; aiExplainInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (

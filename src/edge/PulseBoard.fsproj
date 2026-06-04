@@ -52,6 +52,7 @@
     <Compile Include="PgNotifyQueue.fs" />
     <Compile Include="Rules.fs" />
     <Compile Include="PgRulesStore.fs" />
+    <Compile Include="Runbooks.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="PgRoutingStore.fs" />
     <Compile Include="OnCall.fs" />

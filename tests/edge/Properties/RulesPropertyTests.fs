@@ -49,7 +49,8 @@ let private makeRule (name : string) (lang : RuleLang) (expr : string)
       forMs       = 0L
       severity    = Severity.Warning
       labels      = Map.empty
-      annotations = Map.empty }
+      annotations = Map.empty
+      runbook     = None }
 
 let private makeGroup (name : string) (rules : Rule[]) : RuleGroup =
     let now = DateTimeOffset.UtcNow

@@ -622,7 +622,18 @@ type private TenantGroups =
 
 /// Envelope that goes onto the outbound queue. The transport layer in
 /// `NotifyQueue.fs` does receiver-specific HTTP shaping.
-let private envelope (recv : Receiver) (groupKey : string) (alerts : AlertInstance[]) : string =
+///
+/// When an alert carries an inline runbook (PLAN-NEXT 14.1) we attach a
+/// top-level `runbooks` array carrying a truncated excerpt plus a deep
+/// link into the portal so the on-call engineer can open the full
+/// checklist straight from the notification body.
+let private runbookExcerptLen = 280
+
+let private deepLinkFor (publicUrl : string) (fp : string) =
+  if String.IsNullOrWhiteSpace publicUrl then "#/alerts/" + fp
+  else publicUrl.TrimEnd('/') + "/#/alerts/" + fp
+
+let private envelope (publicUrl : string) (recv : Receiver) (groupKey : string) (alerts : AlertInstance[]) : string =
   use ms = new MemoryStream()
   (
     use w = new Utf8JsonWriter(ms)
@@ -634,12 +645,37 @@ let private envelope (recv : Receiver) (groupKey : string) (alerts : AlertInstan
     w.WriteStartArray()
     for a in alerts do writeAlert w a
     w.WriteEndArray()
+    let withRunbooks =
+      alerts |> Array.filter (fun a ->
+        match a.runbook with
+        | Some rb -> not (String.IsNullOrWhiteSpace rb)
+        | None -> false)
+    if withRunbooks.Length > 0 then
+      w.WritePropertyName "runbooks"
+      w.WriteStartArray()
+      for a in withRunbooks do
+        let rb = a.runbook |> Option.defaultValue ""
+        let excerpt =
+          if rb.Length <= runbookExcerptLen then rb
+          else rb.Substring(0, runbookExcerptLen) + "\u2026"
+        w.WriteStartObject()
+        w.WriteString("fingerprint", a.fingerprint)
+        w.WriteString("ruleName", a.ruleName)
+        w.WriteString("excerpt", excerpt)
+        w.WriteBoolean("truncated", rb.Length > runbookExcerptLen)
+        w.WriteString("deepLink", deepLinkFor publicUrl a.fingerprint)
+        w.WriteEndObject()
+      w.WriteEndArray()
     w.WriteEndObject())
   Encoding.UTF8.GetString(ms.ToArray())
 
 type Pipeline(configStore : IConfigStore,
               queue       : INotifyQueue,
               selfMetrics : MetricStore) =
+
+  // Portal base URL used to build runbook deep links in notification
+  // bodies. Empty → emit a relative `#/alerts/<fp>` hash link.
+  let mutable publicUrl = ""
 
   // (tenant) -> grouping state
   let perTenant = ConcurrentDictionary<string, TenantGroups>()
@@ -698,7 +734,7 @@ type Pipeline(configStore : IConfigStore,
         let bucket = firingBucket tid
         let enqueueFor (recv : Receiver) (state : GroupState) (groupId : string)
                        (alerts : AlertInstance[]) =
-          let body = envelope recv groupId alerts
+          let body = envelope publicUrl recv groupId alerts
           let msg : OutboundMessage =
             { id = Guid.NewGuid().ToString("N")
               tenantId = tid
@@ -873,6 +909,11 @@ type Pipeline(configStore : IConfigStore,
 
   member _.SetEscalator(esc : IEscalator) =
     escalator <- Some esc
+
+  /// Portal base URL used to render runbook deep links in notification
+  /// bodies (PLAN-NEXT 14.1). Empty disables the absolute prefix.
+  member _.SetPublicUrl(url : string) =
+    publicUrl <- (if isNull url then "" else url)
 
   member _.Stop() = flushTimer.Dispose()
 

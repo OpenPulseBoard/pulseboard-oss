@@ -794,6 +794,17 @@
   </div>
 </div>
 
+<!-- Inline runbook modal (PLAN-NEXT 14.1) -->
+<div class="modal-backdrop" id="runbook-modal">
+  <div class="modal" style="max-width:640px;">
+    <header>
+      <h2 id="runbook-modal-title">Runbook</h2>
+      <button id="runbook-modal-close">×</button>
+    </header>
+    <div class="body" id="runbook-modal-body"></div>
+  </div>
+</div>
+
 <!-- Editor drawer -->
 <aside class="editor" id="editor">
   <header>
@@ -2009,13 +2020,19 @@ async function renderAlertList(body, result, p) {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const alerts = await r.json();
     if (alerts.length === 0) { body.innerHTML = '<div class="empty">no alerts</div>'; return; }
-    body.innerHTML = alerts.map(a =>
-      `<div class="al-row">
+    body.innerHTML = alerts.map(a => {
+      const name = a.ruleName || a.name || a.alertname || (a.labels && a.labels.alertname) || "—";
+      const rb = a.runbook
+        ? `<button style="font-size:10px;padding:1px 6px;"
+                   onclick='openRunbook(${JSON.stringify(a.fingerprint)}, ${JSON.stringify(name)})'>Runbook</button>`
+        : "";
+      return `<div class="al-row">
          <span class="al-state ${escapeHtml(a.state || "ok")}">${escapeHtml(a.state || "ok")}</span>
-         <span style="flex:1;">${escapeHtml(a.name || a.alertname || "—")}</span>
+         <span style="flex:1;">${escapeHtml(name)}</span>
          <span style="color:var(--muted);font-size:11px;">${escapeHtml(a.labels && a.labels.severity || "")}</span>
-       </div>`
-    ).join("");
+         ${rb}
+       </div>`;
+    }).join("");
   } catch (e) {
     body.innerHTML = `<div class="err">${escapeHtml(e.message)}</div>`;
   }
@@ -4844,6 +4861,118 @@ $("trace-modal-close").addEventListener("click", () => $("trace-modal").classLis
 $("trace-modal").addEventListener("click", (e) => {
   if (e.target === $("trace-modal")) $("trace-modal").classList.remove("open");
 });
+
+// ── Inline runbook (PLAN-NEXT 14.1) ──────────────────────────────────
+// Presents the acker with the alert's runbook as a tracked checklist.
+// Toggling a step PATCHes progress server-side (which records the
+// `pulse_runbook_step_seconds` metric); an "Acknowledge" button reuses
+// the existing on-call ack endpoint.
+let _runbookFp = null;
+
+window.openRunbook = async function (fp, name) {
+  _runbookFp = fp;
+  $("runbook-modal-title").textContent = "Runbook — " + (name || fp);
+  $("runbook-modal-body").innerHTML = "<div class='meta'>loading…</div>";
+  $("runbook-modal").classList.add("open");
+  await refreshRunbook();
+};
+
+async function refreshRunbook() {
+  const fp = _runbookFp;
+  try {
+    const r = await authFetch("/api/alerts/" + encodeURIComponent(fp) + "/runbook");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderRunbook(await r.json());
+  } catch (e) {
+    $("runbook-modal-body").innerHTML =
+      "<div class='meta'>error: " + escapeHtml(e.message) + "</div>";
+  }
+}
+
+function renderRunbook(p) {
+  const steps = p.steps || [];
+  const done  = steps.filter(s => s.done).length;
+  const pct   = steps.length ? Math.round((done / steps.length) * 100) : 0;
+  const mttr  = p.resolvedAt
+    ? "MTTR " + fmtDur(p.resolvedAt - p.firedAt)
+    : "open " + fmtDur(Date.now() - p.firedAt);
+  const rows = steps.length
+    ? steps.map(s => `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;
+               border-bottom:1px solid var(--border);cursor:pointer;">
+          <input type="checkbox" data-idx="${s.idx}" ${s.done ? "checked" : ""}
+                 style="margin-top:2px;" />
+          <span style="flex:1;${s.done ? "color:var(--muted);text-decoration:line-through;" : ""}">
+            ${escapeHtml(s.text)}
+            ${s.done ? `<span style="color:var(--muted);font-size:10px;">
+                          — ${escapeHtml(s.user || "")} ${fmtTs(s.at)}</span>` : ""}
+          </span>
+        </label>`).join("")
+    : `<div class="meta">This runbook has no checklist steps.</div>`;
+  $("runbook-modal-body").innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-size:12px;color:var(--muted);">${done}/${steps.length} steps · ${pct}% · ${escapeHtml(mttr)}</span>
+      <button id="runbook-ack" class="primary">Acknowledge</button>
+    </div>
+    <div style="height:6px;background:var(--bg);border-radius:3px;margin-bottom:10px;">
+      <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px;"></div>
+    </div>
+    <div>${rows}</div>
+    <details style="margin-top:12px;">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted);">Full runbook</summary>
+      <pre style="background:var(--panel-2);border-radius:6px;padding:10px;font-size:12px;
+           margin-top:8px;overflow-x:auto;white-space:pre-wrap;">${escapeHtml(p.runbook || "")}</pre>
+    </details>`;
+
+  $("runbook-modal-body").querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", async () => {
+      const idx = +cb.getAttribute("data-idx");
+      cb.disabled = true;
+      try {
+        const r = await authFetch(
+          "/api/alerts/" + encodeURIComponent(_runbookFp) + "/runbook/step",
+          { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idx, done: cb.checked, user: currentUser() }) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        renderRunbook(await r.json());
+      } catch (e) {
+        cb.disabled = false;
+        alert("Failed to update step: " + e.message);
+      }
+    });
+  });
+
+  const ackBtn = $("runbook-ack");
+  if (ackBtn) ackBtn.addEventListener("click", async () => {
+    ackBtn.disabled = true;
+    try {
+      const r = await authFetch(
+        "/api/alerts/" + encodeURIComponent(_runbookFp) + "/ack",
+        { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user: currentUser() }) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      ackBtn.textContent = "Acknowledged";
+      ackBtn.classList.remove("primary");
+      ackBtn.classList.add("saved");
+    } catch (e) {
+      ackBtn.disabled = false;
+      alert("Failed to acknowledge: " + e.message);
+    }
+  });
+}
+
+function currentUser() {
+  try { return (window.PULSE_USER || localStorage.getItem("pb_user") || "operator"); }
+  catch { return "operator"; }
+}
+
+$("runbook-modal-close").addEventListener("click", () => $("runbook-modal").classList.remove("open"));
+$("runbook-modal").addEventListener("click", (e) => {
+  if (e.target === $("runbook-modal")) $("runbook-modal").classList.remove("open");
+});
+
 
 // =====================================================================
 // Service Map tab — SVG with nodes on a circle (Phase 4 #4)

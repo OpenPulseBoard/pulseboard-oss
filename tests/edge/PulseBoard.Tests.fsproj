@@ -18,8 +18,8 @@
     <Compile Include="Unit/SecretsTests.fs" />
     <Compile Include="Unit/AiAssistTests.fs" />
     <Compile Include="Unit/RulesTests.fs" />
-    <Compile Include="Unit/RoutingTests.fs" />
-    <Compile Include="Unit/NotifyQueueTests.fs" />
+    <Compile Include="Unit/RunbooksTests.fs" />
+    <Compile Include="Unit/RoutingTests.fs" />    <Compile Include="Unit/NotifyQueueTests.fs" />
     <Compile Include="Unit/OnCallTests.fs" />
     <Compile Include="Unit/RetentionTests.fs" />
     <Compile Include="Unit/PlansTests.fs" />

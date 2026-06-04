@@ -81,7 +81,8 @@ type RoutingFlapTests () =
           activeAt    = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
           firedAt     = Some (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
           resolvedAt  = None
-          lastEvalAt  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+          lastEvalAt  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+          runbook     = None }
 
     // ------------------------------------------------------------------
 
