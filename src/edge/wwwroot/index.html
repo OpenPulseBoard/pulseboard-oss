@@ -1415,48 +1415,58 @@ function buildSeriesDefs(seriesNames, xs, opts) {
 // uPlot plugin — floating tooltip showing values at the cursor x position.
 function tooltipPlugin(seriesNames, unitFmt, isTime) {
   let tip;
+
+  function hideTip() { if (tip) tip.style.display = "none"; }
+
+  function updateTip(u) {
+    const { left, top, idx } = u.cursor;
+    if (idx == null) { hideTip(); return; }
+    const xVal = u.data[0][idx];
+    if (xVal == null) { hideTip(); return; }
+    const hdr = isTime
+      ? new Date(xVal * 1000).toLocaleString([], {
+          month: "short", day: "numeric",
+          hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      : fmtNum(xVal);
+    let html = `<div class="pt-time">${escapeHtml(hdr)}</div>`;
+    for (let i = 0; i < seriesNames.length; i++) {
+      const si = i + 1;
+      const sdef = u.series[si];
+      // _show is the internal boolean uPlot uses; show may be wrapped in a fn
+      if (!sdef || sdef._show === false || sdef.show === false) continue;
+      const v = u.data[si] ? u.data[si][idx] : null;
+      if (v == null) continue;
+      const stroke = typeof sdef.stroke === "function"
+        ? sdef.stroke(u, si) : (sdef.stroke || "#8a93a1");
+      html += `<div class="pt-row">` +
+        `<span class="pt-dot" style="background:${escapeHtml(stroke)}"></span>` +
+        `<span class="pt-name">${escapeHtml(seriesNames[i])}</span>` +
+        `<span class="pt-val">${escapeHtml(unitFmt(v))}</span></div>`;
+    }
+    // Measure tip with a temporary visible-but-transparent render
+    tip.innerHTML = html;
+    tip.style.visibility = "hidden";
+    tip.style.display = "";
+    const ow = u.over.offsetWidth;
+    const oh = u.over.offsetHeight;
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    tip.style.visibility = "";
+    const x = (left + 14 + tw > ow) ? left - tw - 8 : left + 14;
+    const y = Math.max(4, Math.min(oh - th - 4, top - th / 2));
+    tip.style.left = x + "px";
+    tip.style.top  = y + "px";
+  }
+
   return {
     hooks: {
       init(u) {
         tip = document.createElement("div");
         tip.className = "plot-tip";
         u.over.appendChild(tip);
+        u.over.addEventListener("mouseleave", hideTip);
       },
-      setCursor(u) {
-        const { left, top, idx } = u.cursor;
-        if (idx == null || left < 0) { tip.style.display = "none"; return; }
-        const xVal = u.data[0][idx];
-        if (xVal == null) { tip.style.display = "none"; return; }
-        const hdr = isTime
-          ? new Date(xVal * 1000).toLocaleString([], {
-              month: "short", day: "numeric",
-              hour: "2-digit", minute: "2-digit", second: "2-digit" })
-          : fmtNum(xVal);
-        let html = `<div class="pt-time">${escapeHtml(hdr)}</div>`;
-        for (let i = 0; i < seriesNames.length; i++) {
-          const si = i + 1;
-          if (!u.series[si] || !u.series[si].show) continue;
-          const v = u.data[si] ? u.data[si][idx] : null;
-          if (v == null) continue;
-          const sdef   = u.series[si];
-          const stroke = typeof sdef.stroke === "function"
-            ? sdef.stroke(u, si) : (sdef.stroke || "#8a93a1");
-          html += `<div class="pt-row">` +
-            `<span class="pt-dot" style="background:${escapeHtml(stroke)}"></span>` +
-            `<span class="pt-name">${escapeHtml(seriesNames[i])}</span>` +
-            `<span class="pt-val">${escapeHtml(unitFmt(v))}</span></div>`;
-        }
-        tip.innerHTML = html;
-        const ow = u.over.offsetWidth;
-        const oh = u.over.offsetHeight;
-        const tw = tip.offsetWidth  || 140;
-        const th = tip.offsetHeight || 48;
-        const x  = (left + 14 + tw > ow) ? left - tw - 8 : left + 14;
-        const y  = Math.max(4, Math.min(oh - th - 4, top - th / 2));
-        tip.style.left    = x + "px";
-        tip.style.top     = y + "px";
-        tip.style.display = "";
-      },
+      setCursor: updateTip,
     },
   };
 }
