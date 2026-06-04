@@ -1525,7 +1525,7 @@ function renderTimeseries(body, result, p) {
     },
     axes: [
       { stroke: "#8a93a1", grid: { stroke: "#232833" } },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 72,
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: makeYAxisSize(unitFmt),
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
     plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, true)],
@@ -2172,7 +2172,7 @@ function renderTrend(body, result, p) {
       { stroke: "#8a93a1", grid: { stroke: "#232833" },
         label: xLabel || undefined,
         values: (u, vals) => vals.map(v => fmtNum(v)) },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 72,
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: makeYAxisSize(unitFmt),
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
     plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, false)],
@@ -3575,7 +3575,9 @@ async function saveCurrent() {
   const saved = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id),
                           state.current);
   state.current = saved;
-  await reloadList(saved.id);
+  // Update the picker label in-place — no need to refetch/re-render all panels.
+  const opt = $('dash-picker').querySelector(`option[value="${CSS.escape(saved.id)}"]`);
+  if (opt) opt.textContent = saved.title;
 }
 
 // =====================================================================
@@ -3589,6 +3591,18 @@ const DISPLAY_OPT_KEYS = new Set([
 ]);
 // Per-series color keys match /^color\d+$/.
 function isDisplayKey(k) { return DISPLAY_OPT_KEYS.has(k) || /^color\d+$/.test(k); }
+
+// Returns a uPlot axis `size` function that measures the widest formatted
+// tick label using canvas measureText so the Y-axis is never truncated.
+function makeYAxisSize(unitFmt) {
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.font = '12px system-ui, sans-serif';
+  return (_u, vals) => {
+    if (!vals || vals.length === 0) return 50;
+    const maxW = Math.max(...vals.map(v => ctx.measureText(v).width));
+    return Math.ceil(maxW) + 24; // 24 = tick(6) + gap(4) + padding(14)
+  };
+}
 
 // Show or hide the Display-options section based on the current panel type.
 function syncEdDisplay(panelType) {
