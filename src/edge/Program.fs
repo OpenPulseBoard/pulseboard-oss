@@ -338,6 +338,13 @@ let main argv =
   let logStore    = LogStore(capacity = 4096)
   let hub         = new Broadcaster()
 
+  // In-process ring of recent spans per tenant (PLAN Phase 4 #4). Declared
+  // up front so the alert sink can capture trace correlation at fire time
+  // (PLAN-NEXT 14.4); the Traces / Service Map REST surface is mounted later.
+  let spanStoreCapacity = 10_000
+  let spanStore : PulseBoard.Spans.ISpanStore =
+    PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
+
   // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
   // seam is still `IStorageClient`; `InProcessStorageClient` now
   // delegates to these. With `--mimir-url=`, `--loki-url=`, or
@@ -745,12 +752,27 @@ let main argv =
       PulseBoard.Runbooks.FileRunbookStore(Path.Combine(dataDir, "runbooks")) :> _
   let runbookTracker = PulseBoard.Runbooks.Tracker(runbookStore)
 
+  // End-to-end correlation (PLAN-NEXT 14.4): when an alert starts firing we
+  // freeze the top log lines + slowest trace from the breach window into a
+  // bounded per-tenant cache, so the portal and notifications can show the
+  // correlated signal even minutes later. Reads the same in-process log +
+  // span stores the SPA queries.
+  let correlationSnapshotter =
+    PulseBoard.Correlation.Snapshotter(logStore, spanStore)
+
+  // Feed fire-time correlation snapshots into outbound notifications so each
+  // alert carries its top log lines + slowest trace (PLAN-NEXT 14.4).
+  alertingPipeline.SetCorrelationProvider(fun a ->
+    correlationSnapshotter.TryGet(a.tenantId, a.fingerprint)
+    |> Option.map PulseBoard.Correlation.serialiseSnapshot)
+
   let alertSink =
     { new PulseBoard.Rules.IAlertSink with
         member _.OnAlert a =
           try consoleAlertSink a with _ -> ()
           try hubAlertSink a    with _ -> ()
           try runbookTracker.Observe a with _ -> ()
+          try correlationSnapshotter.Observe a with _ -> ()
           try alertingPipeline.OnAlert a with ex ->
             eprintfn "[routing] OnAlert failed: %s" ex.Message }
 
@@ -777,6 +799,13 @@ let main argv =
   let onCallInner      = PulseBoard.OnCall.webPart      multiTenant onCallCatalog onCallAcks
   let runbookInner     =
     PulseBoard.Runbooks.webPart multiTenant runbookStore metricStore
+      (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
+  // Correlation REST surface (PLAN-NEXT 14.4): per-alert fire-time snapshots
+  // plus ad-hoc window correlation + trace exemplars. Shares the active-alert
+  // lookup with the runbook surface so a snapshot can be computed live for an
+  // alert that fired before the snapshotter observed it.
+  let correlationInner =
+    PulseBoard.Correlation.webPart multiTenant logStore spanStore correlationSnapshotter
       (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
 
   printfn "  Alerting: rule store under %s; routing under %s; queue under %s"
@@ -1000,10 +1029,8 @@ let main argv =
   // In-process ring of recent spans per tenant. Real persistence still
   // happens via the Tempo passthrough (`--tempo-url=`); this store
   // powers the SPA's Traces + Service Map tabs without depending on
-  // an external trace backend.
-  let spanStoreCapacity = 10_000
-  let spanStore : PulseBoard.Spans.ISpanStore =
-    PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
+  // an external trace backend. (The store itself is declared up front,
+  // near `metricStore`, so the alert sink can read it at fire time.)
   let traceApiInner = PulseBoard.TraceApi.webPart multiTenant spanStore
   let rumInner      = PulseBoard.Rum.webPart      multiTenant metricStore logStore
   printfn "  Spans: in-memory ring (capacity=%d per tenant)" spanStoreCapacity
@@ -1208,7 +1235,7 @@ let main argv =
 
   let query : WebPart =
     let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; aiExplainInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; aiExplainInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (

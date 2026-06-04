@@ -633,7 +633,9 @@ let private deepLinkFor (publicUrl : string) (fp : string) =
   if String.IsNullOrWhiteSpace publicUrl then "#/alerts/" + fp
   else publicUrl.TrimEnd('/') + "/#/alerts/" + fp
 
-let private envelope (publicUrl : string) (recv : Receiver) (groupKey : string) (alerts : AlertInstance[]) : string =
+let private envelope (publicUrl : string)
+                     (correlationJson : AlertInstance -> string option)
+                     (recv : Receiver) (groupKey : string) (alerts : AlertInstance[]) : string =
   use ms = new MemoryStream()
   (
     use w = new Utf8JsonWriter(ms)
@@ -666,6 +668,24 @@ let private envelope (publicUrl : string) (recv : Receiver) (groupKey : string) 
         w.WriteString("deepLink", deepLinkFor publicUrl a.fingerprint)
         w.WriteEndObject()
       w.WriteEndArray()
+    // End-to-end correlation (PLAN-NEXT 14.4): attach the fire-time snapshot
+    // (top log lines + slowest trace) captured by the correlation
+    // snapshotter. The provider returns a ready-made JSON object string so
+    // Routing stays decoupled from the Correlation module.
+    let correlations =
+      alerts
+      |> Array.choose (fun a -> correlationJson a |> Option.map (fun j -> a.fingerprint, j))
+    if correlations.Length > 0 then
+      w.WritePropertyName "correlations"
+      w.WriteStartArray()
+      for (fp, j) in correlations do
+        w.WriteStartObject()
+        w.WriteString("fingerprint", fp)
+        w.WriteString("deepLink", deepLinkFor publicUrl fp)
+        w.WritePropertyName "snapshot"
+        w.WriteRawValue(j, skipInputValidation = false)
+        w.WriteEndObject()
+      w.WriteEndArray()
     w.WriteEndObject())
   Encoding.UTF8.GetString(ms.ToArray())
 
@@ -676,6 +696,12 @@ type Pipeline(configStore : IConfigStore,
   // Portal base URL used to build runbook deep links in notification
   // bodies. Empty → emit a relative `#/alerts/<fp>` hash link.
   let mutable publicUrl = ""
+
+  // Correlation snapshot provider (PLAN-NEXT 14.4). Returns a ready-made
+  // JSON object string (the serialized fire-time snapshot) for an alert, or
+  // None when no snapshot is available. Wired post-construction by
+  // `Program.fs` so Routing stays decoupled from the Correlation module.
+  let mutable correlationProvider : (AlertInstance -> string option) = fun _ -> None
 
   // (tenant) -> grouping state
   let perTenant = ConcurrentDictionary<string, TenantGroups>()
@@ -734,7 +760,7 @@ type Pipeline(configStore : IConfigStore,
         let bucket = firingBucket tid
         let enqueueFor (recv : Receiver) (state : GroupState) (groupId : string)
                        (alerts : AlertInstance[]) =
-          let body = envelope publicUrl recv groupId alerts
+          let body = envelope publicUrl correlationProvider recv groupId alerts
           let msg : OutboundMessage =
             { id = Guid.NewGuid().ToString("N")
               tenantId = tid
@@ -914,6 +940,12 @@ type Pipeline(configStore : IConfigStore,
   /// bodies (PLAN-NEXT 14.1). Empty disables the absolute prefix.
   member _.SetPublicUrl(url : string) =
     publicUrl <- (if isNull url then "" else url)
+
+  /// Correlation snapshot provider (PLAN-NEXT 14.4): maps a firing alert to
+  /// a serialized fire-time snapshot JSON object embedded into notification
+  /// bodies. Pass `fun _ -> None` to disable.
+  member _.SetCorrelationProvider(f : AlertInstance -> string option) =
+    correlationProvider <- (if obj.ReferenceEquals(f, null) then (fun _ -> None) else f)
 
   member _.Stop() = flushTimer.Dispose()
 

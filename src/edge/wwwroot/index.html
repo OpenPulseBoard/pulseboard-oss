@@ -194,8 +194,9 @@
     .traces .errcol { color: #ff7a7a; }
     .waterfall { padding: 8px 0; }
     .waterfall .row { display: flex; align-items: center; gap: 8px; height: 22px; }
-    .waterfall .row .lbl { width: 320px; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; font-size: 11px; color: var(--fg); }
+    .waterfall .row .lbl { width: 320px; display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--fg); }
+    .waterfall .row .lbl .lbl-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .waterfall .row .bar-track { flex: 1; position: relative; height: 14px;
       background: var(--bg); border-radius: 2px; }
     .waterfall .row .bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
@@ -226,6 +227,39 @@
       padding: 6px 10px; border-radius: 4px; font-size: 11px; pointer-events: none;
       display: none; white-space: pre;
     }
+
+    /* Correlation context menu (PLAN-NEXT 14.4) */
+    .ctx-menu {
+      position: fixed; z-index: 200; background: var(--panel-2);
+      border: 1px solid var(--border); border-radius: 6px; padding: 4px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45); min-width: 200px; display: none;
+      font-size: 12px;
+    }
+    .ctx-menu.open { display: block; }
+    .ctx-menu button {
+      display: block; width: 100%; text-align: left; background: none; border: none;
+      color: var(--fg); padding: 7px 10px; border-radius: 4px; cursor: pointer;
+      font-size: 12px;
+    }
+    .ctx-menu button:hover { background: var(--panel-3); }
+    .ctx-menu .ctx-sub { color: var(--muted); font-size: 10px; padding: 4px 10px 2px; }
+    /* Correlation panels (alert detail + notification preview) */
+    .corr-section { margin-bottom: 14px; }
+    .corr-section h4 { margin: 0 0 6px; font-size: 12px; color: var(--accent); }
+    .corr-log { display: flex; gap: 8px; align-items: flex-start; padding: 4px 6px;
+      border-bottom: 1px solid var(--border); font-size: 12px; }
+    .corr-log .lvl { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex: 0 0 auto;
+      text-transform: uppercase; }
+    .corr-log .lvl.error, .corr-log .lvl.fatal, .corr-log .lvl.critical { background:#3d1a1a; color:var(--err); }
+    .corr-log .lvl.warn, .corr-log .lvl.warning { background:#3d3010; color:var(--warn); }
+    .corr-log .lvl.info, .corr-log .lvl.debug { background:var(--panel-3); color:var(--muted); }
+    .corr-log .msg { flex: 1; font-family: monospace; white-space: pre-wrap; word-break: break-word; }
+    .corr-log .ts { color: var(--muted); font-size: 10px; flex: 0 0 auto; }
+    .corr-trace-link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+    .corr-empty { color: var(--muted); font-size: 12px; padding: 6px; }
+    .wf-metrics-link { color: var(--accent); cursor: pointer; font-size: 10px;
+      text-decoration: none; margin-left: 8px; opacity: 0.75; flex: 0 0 auto; white-space: nowrap; }
+    .wf-metrics-link:hover { opacity: 1; text-decoration: underline; }
 
     .badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
              background: var(--panel-3); font-size: 10px; color: var(--muted); }
@@ -922,6 +956,21 @@
   </div>
 </div>
 
+<!-- Correlation modal (PLAN-NEXT 14.4) — top logs + slowest trace for an alert -->
+<div class="modal-backdrop" id="corr-modal">
+  <div class="modal" style="max-width:760px;">
+    <header>
+      <h2 id="corr-modal-title">Correlated signals</h2>
+      <button id="corr-modal-close">×</button>
+    </header>
+    <div class="body" id="corr-modal-body"></div>
+  </div>
+</div>
+
+<!-- Right-click correlation menu (PLAN-NEXT 14.4) -->
+<div class="ctx-menu" id="corr-ctx"></div>
+
+
 <!-- Editor drawer -->
 <aside class="editor" id="editor">
   <header>
@@ -1347,6 +1396,8 @@ function panelChrome(p) {
       }
     });
   }
+  // Right-click → "show logs for this spike" / "show metrics for this service".
+  wirePanelCorrelation(el, p);
   return el;
 }
 
@@ -1991,6 +2042,48 @@ function renderHistogram(body, result, p) {
     body._hro = new ResizeObserver(() => { if (body.isConnected) renderHistogram(body, result, p); });
     body._hro.observe(body);
   }
+  // Exemplars on by default (PLAN-NEXT 14.4): place trace markers along the
+  // latency (le) axis at the x matching each exemplar's durationMs, clickable
+  // to open the trace. No opt-in config required.
+  overlayHistogramExemplars(body, p, buckets, { svgW, svgH, unit });
+}
+
+// Fetch exemplars for the panel's window/service and draw clickable markers
+// at the x-position corresponding to each exemplar's latency bucket.
+async function overlayHistogramExemplars(body, p, buckets, geom) {
+  if (!buckets.length) return;
+  const svc = panelServices(p.id)[0] || deriveServiceFromExpr(p.expr) || null;
+  const now = Date.now();
+  const fromMs = now - (state.current.timeRangeSec || 3600) * 1000;
+  const xs = await fetchExemplars(svc, fromMs, now, 100);
+  if (!xs.length || !body.isConnected) return;
+  const svg = body.querySelector("svg");
+  if (!svg) return;
+  const { svgW, svgH } = geom;
+  const colW = (svgW - 20) / buckets.length;
+  const ns = "http://www.w3.org/2000/svg";
+  const yBase = svgH - 20;
+  for (const ex of xs) {
+    // Find the first bucket whose le >= the exemplar latency.
+    let idx = buckets.findIndex(b => ex.durationMs <= b.le);
+    if (idx < 0) idx = buckets.length - 1;
+    const cx = 10 + idx * colW + colW / 2;
+    const cy = yBase + 6;
+    const half = 4;
+    const poly = document.createElementNS(ns, "polygon");
+    poly.setAttribute("points",
+      `${cx},${cy-half} ${cx+half},${cy} ${cx},${cy+half} ${cx-half},${cy}`);
+    poly.setAttribute("fill", ex.error ? "#ff5d5d" : "#34c759");
+    poly.setAttribute("stroke", "var(--panel)");
+    poly.setAttribute("stroke-width", "0.5");
+    poly.style.cursor = "pointer";
+    const title = document.createElementNS(ns, "title");
+    title.textContent =
+      `${ex.service} · ${ex.operation}\n${fmtDur(ex.durationMs)}${ex.error ? " · error" : ""}\nclick to open trace`;
+    poly.appendChild(title);
+    poly.addEventListener("click", (e) => { e.stopPropagation(); openTrace(ex.traceId); });
+    svg.appendChild(poly);
+  }
 }
 
 // ── State timeline ────────────────────────────────────────────────────
@@ -2148,10 +2241,17 @@ async function renderAlertList(body, result, p) {
         ? `<button style="font-size:10px;padding:1px 6px;"
                    onclick='openRunbook(${JSON.stringify(a.fingerprint)}, ${JSON.stringify(name)})'>Runbook</button>`
         : "";
+      // Correlated signals (PLAN-NEXT 14.4): offered for active/firing alerts.
+      const st = (a.state || "ok").toLowerCase();
+      const corr = (st === "firing" || st === "alerting" || st === "active" || st === "pending")
+        ? `<button style="font-size:10px;padding:1px 6px;"
+                   onclick='openCorrelation(${JSON.stringify(a.fingerprint)}, ${JSON.stringify(name)})'>Correlate</button>`
+        : "";
       return `<div class="al-row">
          <span class="al-state ${escapeHtml(a.state || "ok")}">${escapeHtml(a.state || "ok")}</span>
          <span style="flex:1;">${escapeHtml(name)}</span>
          <span style="color:var(--muted);font-size:11px;">${escapeHtml(a.labels && a.labels.severity || "")}</span>
+         ${corr}
          ${rb}
        </div>`;
     }).join("");
@@ -2257,6 +2357,46 @@ function renderHeatmap(body, result, p) {
   if (!body._hmro) {
     body._hmro = new ResizeObserver(() => { if (body.isConnected) renderHeatmap(body, result, p); });
     body._hmro.observe(body);
+  }
+  // Exemplars on by default (PLAN-NEXT 14.4): overlay clickable trace markers
+  // at (time, latency) positions on top of the heatmap canvas.
+  overlayHeatmapExemplars(body, p, buckets, { W, H, numT });
+}
+
+// Overlay clickable exemplar diamonds on the heatmap canvas, positioned by
+// time (x) and latency bucket (y). Uses absolutely-positioned DOM markers so
+// they remain interactive (canvas pixels are not).
+async function overlayHeatmapExemplars(body, p, buckets, geom) {
+  // Clear any markers from a previous render pass.
+  body.querySelectorAll(".hm-exemplar").forEach(n => n.remove());
+  if (!buckets.length) return;
+  const xsArr = buckets[0].xs || [];
+  if (xsArr.length < 2) return;
+  const svc = panelServices(p.id)[0] || deriveServiceFromExpr(p.expr) || null;
+  const t0 = xsArr[0] * 1000, t1 = xsArr[xsArr.length - 1] * 1000;
+  const xs = await fetchExemplars(svc, t0, t1, 100);
+  if (!xs.length || !body.isConnected) return;
+  if (getComputedStyle(body).position === "static") body.style.position = "relative";
+  const { W, H } = geom;
+  const span = Math.max(1, t1 - t0);
+  // Map an exemplar latency to its le-bucket row index (top = largest le).
+  const numB = buckets.length - 1;
+  for (const ex of xs) {
+    const exMs = ex.ts;
+    if (exMs < t0 || exMs > t1) continue;
+    let bi = buckets.findIndex(b => ex.durationMs <= b.le);
+    if (bi < 0) bi = numB;
+    const x = ((exMs - t0) / span) * W;
+    const y = ((numB - 1 - Math.min(bi, numB - 1)) / Math.max(1, numB)) * H + (H / Math.max(1, numB)) / 2;
+    const d = document.createElement("div");
+    d.className = "hm-exemplar";
+    d.style.cssText =
+      `position:absolute;width:8px;height:8px;transform:translate(-50%,-50%) rotate(45deg);` +
+      `left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;cursor:pointer;border:1px solid var(--panel);` +
+      `background:${ex.error ? "#ff5d5d" : "#34c759"};z-index:2;`;
+    d.title = `${ex.service} · ${ex.operation}\n${fmtDur(ex.durationMs)}${ex.error ? " · error" : ""}\nclick to open trace`;
+    d.addEventListener("click", (e) => { e.stopPropagation(); openTrace(ex.traceId); });
+    body.appendChild(d);
   }
 }
 
@@ -4108,8 +4248,275 @@ async function runExplore() {
 }
 
 // =====================================================================
-// Live WS (used by synthetic stat sources + connection indicator)
+// End-to-end correlation (PLAN-NEXT 14.4)
 // =====================================================================
+// One place that ties metrics ↔ logs ↔ traces together:
+//   • gotoExplore       — programmatically open the Explore tab on a query
+//   • panel right-click  — "show logs for this spike" (metric → logs)
+//   • trace span link    — "metrics →" (trace → metrics)
+//   • openCorrelation    — alert detail: top logs + slowest trace
+//   • fetchExemplars     — trace exemplars for histogram/heatmap panels
+
+// Recognised service label keys, mirroring Correlation.deriveService server-side.
+const SERVICE_LABEL_KEYS = ["service","service_name","service.name","job","app",
+                            "application","container","deployment","pod"];
+
+// Parse `metric{a="b",service="x"}` → { __name__, a, service, … }.
+function parseSeriesLabels(name) {
+  const out = {};
+  if (!name) return out;
+  const brace = name.indexOf("{");
+  if (brace < 0) { out.__name__ = name.trim(); return out; }
+  out.__name__ = name.slice(0, brace).trim();
+  let inner = name.slice(brace + 1);
+  if (inner.endsWith("}")) inner = inner.slice(0, -1);
+  // key="value" pairs, tolerant of escaped quotes.
+  const re = /([A-Za-z_][\w.]*)\s*=\s*"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(inner)) !== null) out[m[1]] = m[2].replace(/\\"/g, '"');
+  return out;
+}
+
+// Best-effort service name from a series label-set (or a panel expr fallback).
+function deriveServiceFromLabels(labels) {
+  for (const k of SERVICE_LABEL_KEYS) {
+    if (labels[k] && labels[k].trim()) return labels[k].trim();
+  }
+  return null;
+}
+
+// Best-effort service name from a raw query expression, e.g.
+//   histogram_quantile(0.9, rate(http_dur_bucket{service="checkout"}[5m]))
+//   {service="checkout"} |= "error"
+function deriveServiceFromExpr(expr) {
+  if (!expr) return null;
+  for (const k of SERVICE_LABEL_KEYS) {
+    const re = new RegExp(k.replace(/[.]/g, "\\.") + '\\s*=~?\\s*"([^"]+)"');
+    const m = expr.match(re);
+    if (m && m[1] && !m[1].includes("|") && !/[.+*]/.test(m[1])) return m[1];
+  }
+  return null;
+}
+
+// Switch to Explore and run a query. rangeSec optional (defaults to current).
+function gotoExplore(lang, expr, rangeSec) {
+  $("explore-lang").value = lang;
+  $("explore-expr").value = expr;
+  if (rangeSec) {
+    // Snap to the closest preset ≥ requested range so the dropdown stays valid.
+    const opts = Array.from($("explore-range").options).map(o => +o.value);
+    const pick = opts.filter(v => v >= rangeSec).sort((a,b)=>a-b)[0] || opts[opts.length-1];
+    $("explore-range").value = String(pick);
+  }
+  location.hash = "#/explore";
+  showView("explore");
+  runExplore();
+}
+
+// Open Explore showing logs for a service around a spike timestamp.
+function showLogsForSpike(service, spikeMs) {
+  const expr = service ? `{service="${service}"}` : `{service=~".+"}`;
+  // Window the Explore range so the spike sits inside it (use 15m around).
+  gotoExplore("logql", expr, 900);
+  if (spikeMs) {
+    $("explore-meta").textContent =
+      `logs near ${new Date(spikeMs).toISOString().substr(11,8)}` +
+      (service ? ` for ${service}` : "");
+  }
+}
+
+// Open Explore showing the rate/throughput-style metrics for a service.
+function showMetricsForService(service) {
+  if (!service) return;
+  // Prefer a labelled selector; the embedded PromQL surface matches on labels.
+  gotoExplore("promql", `{service="${service}"}`, 3600);
+}
+
+// ── Panel right-click context menu ───────────────────────────────────
+// Attached to every panel body; derives a service from the panel's series
+// and offers "show logs for this spike" + "show metrics for this service".
+const _corrCtx = () => document.getElementById("corr-ctx");
+
+function hideCorrCtx() { const m = _corrCtx(); if (m) m.classList.remove("open"); }
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#corr-ctx")) hideCorrCtx();
+});
+window.addEventListener("blur", hideCorrCtx);
+window.addEventListener("scroll", hideCorrCtx, true);
+
+// Collect the distinct candidate services for a panel from its cached frame.
+function panelServices(panelId) {
+  const cache = state.panels.get(panelId);
+  const set = new Set();
+  // uPlot series labels live on the live plot; fall back to the dom legend.
+  const plot = cache && cache.uplot;
+  if (plot && plot.series) {
+    for (let i = 1; i < plot.series.length; i++) {
+      const svc = deriveServiceFromLabels(parseSeriesLabels(plot.series[i].label || ""));
+      if (svc) set.add(svc);
+    }
+  }
+  // Fall back to a service named explicitly in the panel's query expression.
+  if (set.size === 0) {
+    const def = (state.current.panels || []).find(p => p.id === panelId);
+    const svc = def && deriveServiceFromExpr(def.expr);
+    if (svc) set.add(svc);
+  }
+  return Array.from(set);
+}
+
+function showPanelContextMenu(ev, p, spikeMs) {
+  ev.preventDefault();
+  const menu = _corrCtx();
+  if (!menu) return;
+  const services = panelServices(p.id);
+  let html = `<div class="ctx-sub">Correlate (${spikeMs ? new Date(spikeMs).toISOString().substr(11,8) : "panel"})</div>`;
+  if (services.length) {
+    for (const svc of services) {
+      html += `<button data-act="logs" data-svc="${escapeHtml(svc)}">Show logs for “${escapeHtml(svc)}” spike</button>`;
+      html += `<button data-act="metrics" data-svc="${escapeHtml(svc)}">Show metrics for “${escapeHtml(svc)}”</button>`;
+    }
+  } else {
+    html += `<button data-act="logs" data-svc="">Show logs in this window</button>`;
+  }
+  menu.innerHTML = html;
+  menu.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const svc = btn.getAttribute("data-svc") || null;
+      if (btn.getAttribute("data-act") === "logs") showLogsForSpike(svc, spikeMs);
+      else showMetricsForService(svc);
+      hideCorrCtx();
+    });
+  });
+  // Position within the viewport.
+  menu.style.left = Math.min(ev.clientX, window.innerWidth - 240) + "px";
+  menu.style.top  = Math.min(ev.clientY, window.innerHeight - 120) + "px";
+  menu.classList.add("open");
+}
+
+// Wire a panel body for right-click correlation. Called from panelChrome.
+function wirePanelCorrelation(el, p) {
+  const body = el.querySelector(".body");
+  if (!body || body._corrWired) return;
+  body._corrWired = true;
+  body.addEventListener("contextmenu", (ev) => {
+    if (state.editMode) return;          // don't hijack while editing layout
+    // Map the cursor x back to a timestamp via the live uPlot, if any.
+    let spikeMs = null;
+    const cache = state.panels.get(p.id);
+    const plot = cache && cache.uplot;
+    if (plot && typeof plot.posToVal === "function") {
+      try {
+        const rect = plot.over.getBoundingClientRect();
+        const xVal = plot.posToVal(ev.clientX - rect.left, "x");
+        if (Number.isFinite(xVal)) spikeMs = Math.round(xVal * 1000);
+      } catch { /* ignore */ }
+    }
+    showPanelContextMenu(ev, p, spikeMs);
+  });
+}
+
+// ── Alert correlation detail ─────────────────────────────────────────
+window.openCorrelation = async function (fp, name) {
+  $("corr-modal-title").textContent = "Correlated signals — " + (name || fp);
+  $("corr-modal-body").innerHTML = "<div class='corr-empty'>loading…</div>";
+  $("corr-modal").classList.add("open");
+  try {
+    const r = await authFetch("/api/alerts/" + encodeURIComponent(fp) + "/correlation");
+    if (r.status === 404) {
+      $("corr-modal-body").innerHTML =
+        "<div class='corr-empty'>No correlated signals captured for this alert yet.</div>";
+      return;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderCorrelation(await r.json());
+  } catch (e) {
+    $("corr-modal-body").innerHTML =
+      "<div class='corr-empty'>error: " + escapeHtml(e.message) + "</div>";
+  }
+};
+
+function renderCorrelation(snap) {
+  const body = $("corr-modal-body");
+  const svc = snap.service ? escapeHtml(snap.service) : "all services";
+  const win = `${new Date(snap.fromMs).toISOString().substr(11,8)}–${new Date(snap.toMs).toISOString().substr(11,8)}`;
+  const logs = snap.logs || [];
+  const logRows = logs.length
+    ? logs.map(e => {
+        const lvl = (e.level || "info").toLowerCase();
+        return `<div class="corr-log">
+          <span class="lvl ${escapeHtml(lvl)}">${escapeHtml(e.level || "log")}</span>
+          <span class="msg">${escapeHtml(e.message)}</span>
+          <span class="ts">${new Date(e.ts).toISOString().substr(11,12)}</span>
+        </div>`;
+      }).join("")
+    : `<div class="corr-empty">No logs in the breach window.</div>`;
+
+  let traceHtml;
+  const t = snap.slowestTrace;
+  if (t && t.summary) {
+    const s = t.summary;
+    traceHtml = `<div style="font-size:12px;line-height:1.6;">
+        <span class="corr-trace-link" data-trace="${escapeHtml(s.traceId)}">${escapeHtml(s.traceId.substring(0,16))}…</span>
+        — ${escapeHtml(s.rootService)} · ${escapeHtml(s.rootOperation)}<br/>
+        ${fmtDur(s.durationMs)} · ${s.spanCount} spans ·
+        <span style="${s.errorCount>0?"color:#ff7a7a;":""}">${s.errorCount} error${s.errorCount===1?"":"s"}</span> ·
+        services: ${(s.services||[]).map(escapeHtml).join(", ")}
+      </div>`;
+  } else {
+    traceHtml = `<div class="corr-empty">No trace touched this service in the window.</div>`;
+  }
+
+  body.innerHTML = `
+    <div class="corr-section">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">
+        ${svc} · window ${win}
+        <button id="corr-explore-logs" style="font-size:10px;padding:1px 6px;margin-left:8px;">Open in Explore →</button>
+      </div>
+    </div>
+    <div class="corr-section">
+      <h4>Top log lines</h4>
+      ${logRows}
+    </div>
+    <div class="corr-section">
+      <h4>Slowest trace</h4>
+      ${traceHtml}
+    </div>`;
+
+  const exploreBtn = $("corr-explore-logs");
+  if (exploreBtn) exploreBtn.addEventListener("click", () => {
+    $("corr-modal").classList.remove("open");
+    showLogsForSpike(snap.service, snap.fromMs);
+  });
+  const traceLink = body.querySelector(".corr-trace-link");
+  if (traceLink) traceLink.addEventListener("click", () => {
+    $("corr-modal").classList.remove("open");
+    openTrace(traceLink.getAttribute("data-trace"));
+  });
+}
+
+$("corr-modal-close").addEventListener("click", () => $("corr-modal").classList.remove("open"));
+$("corr-modal").addEventListener("click", (e) => {
+  if (e.target === $("corr-modal")) $("corr-modal").classList.remove("open");
+});
+
+// ── Exemplars (PLAN-NEXT 14.4) ───────────────────────────────────────
+// Trace exemplars for a (service, window) — surfaced on histogram/heatmap
+// panels by default (no exemplar-ingest path or opt-in config required).
+async function fetchExemplars(service, fromMs, toMs, limit) {
+  const params = new URLSearchParams();
+  if (service) params.set("service", service);
+  if (fromMs)  params.set("fromMs", String(Math.round(fromMs)));
+  if (toMs)    params.set("toMs", String(Math.round(toMs)));
+  params.set("limit", String(limit || 100));
+  try {
+    const r = await authFetch("/api/exemplars?" + params.toString());
+    if (!r.ok) return [];
+    return await r.json();
+  } catch { return []; }
+}
+
+
 state.liveMetrics = new Map();
 state.liveAlerts  = 0;
 function connectWs() {
@@ -4959,7 +5366,7 @@ function renderWaterfall(data) {
     const lbl = `${s.service} · ${s.operation}`;
     return `
       <div class="row" title="${escapeHtml(lbl)} — ${fmtDur(s.durationMs)} (status=${s.statusCode})">
-        <div class="lbl">${escapeHtml(lbl)}</div>
+        <div class="lbl"><span class="lbl-txt">${escapeHtml(lbl)}</span><a class="wf-metrics-link" data-svc="${escapeHtml(s.service)}" title="Show metrics for ${escapeHtml(s.service)}">metrics →</a></div>
         <div class="bar-track">
           <div class="bar ${s.error?"err":""}"
                style="left:${leftPct}%;width:${widthPct}%;background:${colour};"></div>
@@ -4976,6 +5383,14 @@ function renderWaterfall(data) {
       services: ${summary.services.map(escapeHtml).join(", ")}
     </div>
     <div class="waterfall">${rows}</div>`;
+  // Trace → metrics jump (PLAN-NEXT 14.4): each span links to its service's metrics.
+  $("trace-modal-body").querySelectorAll(".wf-metrics-link").forEach(a => {
+    a.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      $("trace-modal").classList.remove("open");
+      showMetricsForService(a.getAttribute("data-svc"));
+    });
+  });
 }
 
 $("traces-refresh").addEventListener("click", loadTraces);
