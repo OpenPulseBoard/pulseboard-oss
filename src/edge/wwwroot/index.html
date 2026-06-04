@@ -33,7 +33,10 @@
     }
     button { cursor: pointer; background: var(--panel-3); }
     button:hover { background: #2f3645; }
+    button:active { transform: translateY(1px); box-shadow: inset 0 1px 3px rgba(0,0,0,0.4); }
+    button:disabled { opacity: 0.55; cursor: default; pointer-events: none; }
     button.primary { background: var(--accent); color: #04121d; border-color: var(--accent); font-weight: bold; }
+    button.saved   { background: #276034 !important; color: #a6f7b8 !important; border-color: #276034 !important; }
     button.danger  { background: #391d1d; border-color: var(--err); color: var(--err); }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -231,6 +234,20 @@
     /* uPlot theming */
     .u-legend { font-size: 11px !important; color: var(--muted) !important; }
     .u-legend .u-marker { width: 8px !important; height: 8px !important; }
+
+    /* uPlot hover tooltip */
+    .plot-tip {
+      position: absolute; z-index: 10; pointer-events: none; display: none;
+      background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
+      padding: 5px 9px; font-size: 11px; white-space: nowrap;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.35);
+    }
+    .plot-tip .pt-time { color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+    .plot-tip .pt-row  { display: flex; align-items: center; gap: 5px; line-height: 1.6; }
+    .plot-tip .pt-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .plot-tip .pt-name { color: var(--muted); max-width: 130px;
+                         overflow: hidden; text-overflow: ellipsis; }
+    .plot-tip .pt-val  { margin-left: auto; padding-left: 10px; font-weight: bold; color: var(--fg); }
 
     /* ── Wave A panel types (Phase 12.2) ─────────────────────────── */
 
@@ -926,7 +943,8 @@
   <footer>
     <button id="ed-preview-btn">Preview</button>
     <button id="ed-delete" class="danger">Delete panel</button>
-    <button id="ed-apply" class="primary" style="margin-left:auto;">Apply</button>
+    <button id="ed-cancel" style="margin-left:auto;">Cancel</button>
+    <button id="ed-apply" class="primary">Apply</button>
   </footer>
 </aside>
 
@@ -1394,6 +1412,55 @@ function buildSeriesDefs(seriesNames, xs, opts) {
 
 // Build a spec-key string that captures everything that would require a
 // uPlot destroy+recreate rather than a simple setData call.
+// uPlot plugin — floating tooltip showing values at the cursor x position.
+function tooltipPlugin(seriesNames, unitFmt, isTime) {
+  let tip;
+  return {
+    hooks: {
+      init(u) {
+        tip = document.createElement("div");
+        tip.className = "plot-tip";
+        u.over.appendChild(tip);
+      },
+      setCursor(u) {
+        const { left, top, idx } = u.cursor;
+        if (idx == null || left < 0) { tip.style.display = "none"; return; }
+        const xVal = u.data[0][idx];
+        if (xVal == null) { tip.style.display = "none"; return; }
+        const hdr = isTime
+          ? new Date(xVal * 1000).toLocaleString([], {
+              month: "short", day: "numeric",
+              hour: "2-digit", minute: "2-digit", second: "2-digit" })
+          : fmtNum(xVal);
+        let html = `<div class="pt-time">${escapeHtml(hdr)}</div>`;
+        for (let i = 0; i < seriesNames.length; i++) {
+          const si = i + 1;
+          if (!u.series[si] || !u.series[si].show) continue;
+          const v = u.data[si] ? u.data[si][idx] : null;
+          if (v == null) continue;
+          const sdef   = u.series[si];
+          const stroke = typeof sdef.stroke === "function"
+            ? sdef.stroke(u, si) : (sdef.stroke || "#8a93a1");
+          html += `<div class="pt-row">` +
+            `<span class="pt-dot" style="background:${escapeHtml(stroke)}"></span>` +
+            `<span class="pt-name">${escapeHtml(seriesNames[i])}</span>` +
+            `<span class="pt-val">${escapeHtml(unitFmt(v))}</span></div>`;
+        }
+        tip.innerHTML = html;
+        const ow = u.over.offsetWidth;
+        const oh = u.over.offsetHeight;
+        const tw = tip.offsetWidth  || 140;
+        const th = tip.offsetHeight || 48;
+        const x  = (left + 14 + tw > ow) ? left - tw - 8 : left + 14;
+        const y  = Math.max(4, Math.min(oh - th - 4, top - th / 2));
+        tip.style.left    = x + "px";
+        tip.style.top     = y + "px";
+        tip.style.display = "";
+      },
+    },
+  };
+}
+
 function plotSpecKey(seriesNames, opts) {
   const ks = ["style","interpolation","lineStyle","lineWidth","fill","colors","legend","yMin","yMax"];
   const perColorKeys = seriesNames.map((_, i) => opts["color" + i] || "").join(",");
@@ -1458,9 +1525,10 @@ function renderTimeseries(body, result, p) {
     },
     axes: [
       { stroke: "#8a93a1", grid: { stroke: "#232833" } },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 72,
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
+    plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, true)],
     series: [{}, ...seriesDefs],
   };
   const plot = new uPlot(uopts, data, body);
@@ -2104,9 +2172,10 @@ function renderTrend(body, result, p) {
       { stroke: "#8a93a1", grid: { stroke: "#232833" },
         label: xLabel || undefined,
         values: (u, vals) => vals.map(v => fmtNum(v)) },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 50,
+      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: 72,
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
+    plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, false)],
     series: [{}, ...seriesDefs],
   };
   const plot = new uPlot(uopts, data, body);
@@ -4486,7 +4555,26 @@ $("edit-toggle").addEventListener("click", () => {
 });
 $("vars-edit-btn").addEventListener("click", openVarsEditor);
 $("add-panel").addEventListener("click", addPanel);
-$("save-dash").addEventListener("click", saveCurrent);
+$("save-dash").addEventListener("click", async () => {
+  const btn  = $("save-dash");
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Saving\u2026";
+  btn.classList.remove("saved");
+  try {
+    await saveCurrent();
+    btn.textContent = "Saved \u2713";
+    btn.classList.add("saved");
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.classList.remove("saved");
+      btn.disabled = false;
+    }, 1800);
+  } catch (err) {
+    btn.textContent = "Error";
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2200);
+  }
+});
 
 // History modal
 $("hist-close").addEventListener("click", () => $("history-modal").classList.add("hidden"));
@@ -4555,9 +4643,22 @@ $("vars-add-btn").addEventListener("click", () => {
 });
 
 $("editor-close").addEventListener("click", closeEditor);
-$("ed-apply").addEventListener("click", applyEditor);
+$("ed-cancel").addEventListener("click", closeEditor);
 $("ed-delete").addEventListener("click", deleteEditorPanel);
 $("ed-preview-btn").addEventListener("click", previewEditor);
+
+$("ed-apply").addEventListener("click", async () => {
+  const btn = $("ed-apply");
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Applying\u2026";
+  try {
+    await applyEditor();
+  } catch {
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+});
 
 // Show/hide Display-options section when panel type changes.
 $("ed-type").addEventListener("change", () => syncEdDisplay());
