@@ -500,6 +500,34 @@
   .lib-metrics-wrap { max-height:260px; overflow-y:auto; margin:10px 0;
     border:1px solid var(--border); border-radius:4px; padding:4px 8px; }
   .lib-import-sum { font-size:12px; color:var(--muted); margin:6px 0; }
+  /* Alert rule editor */
+  .rules-group { background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    margin:0 20px 14px; }
+  .rules-group-head { display:flex; align-items:center; gap:10px; padding:10px 14px;
+    border-bottom:1px solid var(--border); }
+  .rules-group-head h3 { margin:0; font-size:14px; }
+  .rules-group-head .meta { color:var(--muted); font-size:11px; }
+  .rules-group-head .grow { flex:1; }
+  .rules-group-head button { font-size:11px; padding:2px 8px; }
+  .rule-row { display:flex; align-items:center; gap:10px; padding:8px 14px;
+    border-bottom:1px solid var(--border); }
+  .rule-row:last-child { border-bottom:none; }
+  .rule-row .name { font-weight:600; font-size:13px; }
+  .rule-row .expr { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px;
+    color:var(--muted); }
+  .rule-row .grow { flex:1; min-width:0; }
+  .rule-row .sev { font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+    padding:1px 6px; border-radius:3px; border:1px solid var(--border); }
+  .rule-row .sev.info { color:#6ad; } .rule-row .sev.warning { color:var(--warn); }
+  .rule-row .sev.critical, .rule-row .sev.page { color:var(--err); }
+  .rule-row .rb-flag { font-size:10px; color:var(--accent); }
+  .rule-row button { font-size:11px; padding:2px 8px; }
+  .rules-empty { color:var(--muted); font-size:13px; padding:8px 0; }
+  .rule-field { margin-bottom:10px; }
+  .rule-field label { display:block; font-size:11px; color:var(--muted); margin-bottom:3px; }
+  .rule-field .hint { color:var(--muted); font-size:10px; font-weight:normal; }
+  .rule-field-row { display:flex; gap:12px; }
+  .rule-field-row .rule-field { flex:1; }
   </style>
 </head>
 <body>
@@ -512,6 +540,7 @@
     <a href="#/traces"     id="tab-traces">Traces</a>
     <a href="#/map"        id="tab-map">Service Map</a>
     <a href="#/library"    id="tab-library">Library</a>
+    <a href="#/alerts"     id="tab-alerts">Alerts</a>
     <a href="#/agents"     id="tab-agents">Agents</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
@@ -758,6 +787,94 @@
     </thead>
     <tbody id="agents-body"></tbody>
   </table>
+</div>
+
+<!-- Alert rules editor view -->
+<div id="view-alerts" class="hidden">
+  <div class="lib-header">
+    <h2>Alert Rules</h2>
+    <p>Define alert rules and their inline runbooks. Rules are grouped; each
+       group is evaluated on its own interval. Editing requires the Admin scope.</p>
+    <button id="rules-new-group-btn" class="primary" style="margin-top:8px;">+ New rule group</button>
+  </div>
+  <div id="rules-list" style="padding-bottom:24px;"></div>
+</div>
+
+<!-- Rule editor modal -->
+<div class="modal-backdrop" id="rule-modal">
+  <div class="modal" style="max-width:680px;">
+    <header>
+      <h2 id="rule-modal-title">Edit rule</h2>
+      <button id="rule-modal-close">×</button>
+    </header>
+    <div class="body">
+      <div class="rule-field">
+        <label>Name</label>
+        <input id="rule-f-name" type="text" placeholder="high-error-rate" style="width:100%;" />
+      </div>
+      <div class="rule-field-row">
+        <div class="rule-field">
+          <label>Language</label>
+          <select id="rule-f-lang" style="width:100%;">
+            <option value="promql">PromQL</option>
+            <option value="logql">LogQL</option>
+          </select>
+        </div>
+        <div class="rule-field">
+          <label>Severity</label>
+          <select id="rule-f-severity" style="width:100%;">
+            <option value="info">info</option>
+            <option value="warning">warning</option>
+            <option value="critical">critical</option>
+            <option value="page">page</option>
+          </select>
+        </div>
+      </div>
+      <div class="rule-field">
+        <label>Expression <span class="hint">— selector only (e.g. <code>cpu</code> or <code>{service="api"} |= "error"</code>)</span></label>
+        <textarea id="rule-f-expr" style="width:100%;min-height:46px;" placeholder="cpu"></textarea>
+      </div>
+      <div class="rule-field-row">
+        <div class="rule-field">
+          <label>Comparison</label>
+          <select id="rule-f-cmp" style="width:100%;">
+            <option value="&gt;">&gt;</option>
+            <option value="&lt;">&lt;</option>
+            <option value="&gt;=">&gt;=</option>
+            <option value="&lt;=">&lt;=</option>
+            <option value="==">==</option>
+            <option value="!=">!=</option>
+          </select>
+        </div>
+        <div class="rule-field">
+          <label>Threshold</label>
+          <input id="rule-f-threshold" type="number" step="any" value="0" style="width:100%;" />
+        </div>
+        <div class="rule-field">
+          <label>For <span class="hint">(seconds)</span></label>
+          <input id="rule-f-for" type="number" min="0" step="1" value="0" style="width:100%;" />
+        </div>
+      </div>
+      <div class="rule-field-row">
+        <div class="rule-field">
+          <label>Labels <span class="hint">— one <code>key=value</code> per line</span></label>
+          <textarea id="rule-f-labels" style="width:100%;min-height:60px;" placeholder="team=infra"></textarea>
+        </div>
+        <div class="rule-field">
+          <label>Annotations <span class="hint">— one <code>key=value</code> per line</span></label>
+          <textarea id="rule-f-annotations" style="width:100%;min-height:60px;" placeholder="summary=CPU above 90%"></textarea>
+        </div>
+      </div>
+      <div class="rule-field">
+        <label>Runbook <span class="hint">— markdown; <code>- [ ]</code> items become tracked checklist steps</span></label>
+        <textarea id="rule-f-runbook" style="width:100%;min-height:120px;" placeholder="## Runbook&#10;- [ ] First step&#10;- [ ] Second step"></textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button id="rule-f-save" class="primary">Save rule</button>
+        <span id="rule-f-err" style="color:var(--err);font-size:12px;"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Enrollment token modal -->
@@ -1067,16 +1184,19 @@ function showView(name) {
   $("view-traces").classList.toggle("hidden",     name !== "traces");
   $("view-map").classList.toggle("hidden",        name !== "map");
   $("view-library").classList.toggle("hidden",    name !== "library");
+  $("view-alerts").classList.toggle("hidden",     name !== "alerts");
   $("view-agents").classList.toggle("hidden",     name !== "agents");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
   $("tab-traces").classList.toggle("active",     name === "traces");
   $("tab-map").classList.toggle("active",        name === "map");
   $("tab-library").classList.toggle("active",    name === "library");
+  $("tab-alerts").classList.toggle("active",     name === "alerts");
   $("tab-agents").classList.toggle("active",     name === "agents");
   if (name === "traces")  loadTraces();
   if (name === "map")     loadServiceMap();
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
+  if (name === "alerts")  loadRules();
   if (name === "agents")  loadAgents();
 }
 
@@ -2015,12 +2135,14 @@ function renderDashList(body, result, p) {
 // Fetches /api/alerts and shows name + state.
 async function renderAlertList(body, result, p) {
   body.innerHTML = '<div class="empty">loading…</div>';
+  const editLink = `<div style="text-align:right;margin-bottom:4px;">
+       <a href="#/alerts" style="font-size:10px;color:var(--accent);">Edit rules →</a></div>`;
   try {
     const r = await authFetch("/api/alerts");
     if (!r.ok) throw new Error("HTTP " + r.status);
     const alerts = await r.json();
-    if (alerts.length === 0) { body.innerHTML = '<div class="empty">no alerts</div>'; return; }
-    body.innerHTML = alerts.map(a => {
+    if (alerts.length === 0) { body.innerHTML = editLink + '<div class="empty">no alerts</div>'; return; }
+    body.innerHTML = editLink + alerts.map(a => {
       const name = a.ruleName || a.name || a.alertname || (a.labels && a.labels.alertname) || "—";
       const rb = a.runbook
         ? `<button style="font-size:10px;padding:1px 6px;"
@@ -4537,6 +4659,7 @@ function router() {
   else if (h.startsWith("#/explore")) showView("explore");
   else if (h.startsWith("#/traces"))  showView("traces");
   else if (h.startsWith("#/library")) showView("library");
+  else if (h.startsWith("#/alerts"))  showView("alerts");
   else if (h.startsWith("#/agents"))  showView("agents");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
@@ -4971,6 +5094,210 @@ function currentUser() {
 $("runbook-modal-close").addEventListener("click", () => $("runbook-modal").classList.remove("open"));
 $("runbook-modal").addEventListener("click", (e) => {
   if (e.target === $("runbook-modal")) $("runbook-modal").classList.remove("open");
+});
+
+// ── Alert rule + runbook editor ──────────────────────────────────────
+// CRUD over /api/rules. Rules are nested inside groups, so editing a
+// single rule means mutating its group's `rules` array and PUTting the
+// whole group back. The runbook is just the rule's `runbook` markdown.
+let _ruleGroups = [];               // cached [{id,name,intervalMs,rules,...}]
+let _ruleEditCtx = null;            // { groupId, ruleIndex }  (ruleIndex -1 = new)
+
+function mapToLines(m) {
+  return Object.entries(m || {}).map(([k, v]) => k + "=" + v).join("\n");
+}
+function linesToMap(text) {
+  const m = {};
+  for (const raw of (text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const k = line.slice(0, eq).trim();
+    const v = line.slice(eq + 1).trim();
+    if (k) m[k] = v;
+  }
+  return m;
+}
+
+async function loadRules() {
+  const host = $("rules-list");
+  host.innerHTML = '<div class="rules-empty" style="padding:0 20px;">Loading…</div>';
+  try {
+    const groups = await api("GET", "/api/rules");
+    _ruleGroups = Array.isArray(groups) ? groups : [];
+    renderRules();
+  } catch (e) {
+    host.innerHTML = `<div class="rules-empty" style="padding:0 20px;color:var(--err);">Failed to load rules: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderRules() {
+  const host = $("rules-list");
+  if (!_ruleGroups.length) {
+    host.innerHTML = '<div class="rules-empty" style="padding:0 20px;">No rule groups yet. Create one to get started.</div>';
+    return;
+  }
+  host.innerHTML = _ruleGroups.map(g => {
+    const rules = g.rules || [];
+    const rows = rules.length
+      ? rules.map((r, i) => {
+          const sev = (r.severity || "warning").toLowerCase();
+          return `<div class="rule-row">
+            <div class="grow">
+              <div class="name">${escapeHtml(r.name || "(unnamed)")}
+                ${r.runbook ? '<span class="rb-flag" title="Has a runbook">● runbook</span>' : ""}
+              </div>
+              <div class="expr">${escapeHtml(r.expr || "")} ${escapeHtml(r.cmp || "")} ${escapeHtml(String(r.threshold ?? ""))}</div>
+            </div>
+            <span class="sev ${sev}">${escapeHtml(sev)}</span>
+            <button data-act="edit-rule" data-g="${escapeHtml(g.id)}" data-i="${i}">Edit</button>
+            <button class="danger" data-act="del-rule" data-g="${escapeHtml(g.id)}" data-i="${i}">Delete</button>
+          </div>`;
+        }).join("")
+      : '<div class="rule-row"><span class="rules-empty">No rules in this group yet.</span></div>';
+    return `<div class="rules-group">
+      <div class="rules-group-head">
+        <h3>${escapeHtml(g.name || g.id)}</h3>
+        <span class="meta">every ${Math.round((g.intervalMs || 0) / 1000)}s · ${rules.length} rule(s)</span>
+        <span class="grow"></span>
+        <button data-act="add-rule" data-g="${escapeHtml(g.id)}">+ Add rule</button>
+        <button data-act="interval" data-g="${escapeHtml(g.id)}">Interval</button>
+        <button data-act="rename" data-g="${escapeHtml(g.id)}">Rename</button>
+        <button class="danger" data-act="del-group" data-g="${escapeHtml(g.id)}">Delete group</button>
+      </div>
+      ${rows}
+    </div>`;
+  }).join("");
+
+  host.querySelectorAll("button[data-act]").forEach(btn => {
+    btn.addEventListener("click", () => onRulesAction(
+      btn.getAttribute("data-act"),
+      btn.getAttribute("data-g"),
+      btn.hasAttribute("data-i") ? +btn.getAttribute("data-i") : -1));
+  });
+}
+
+function groupById(id) { return _ruleGroups.find(g => g.id === id); }
+
+async function onRulesAction(act, groupId, ruleIndex) {
+  const g = groupById(groupId);
+  try {
+    if (act === "add-rule")  { openRuleEditor(groupId, -1); return; }
+    if (act === "edit-rule") { openRuleEditor(groupId, ruleIndex); return; }
+    if (act === "del-rule") {
+      if (!g) return;
+      const r = g.rules[ruleIndex];
+      if (!confirm(`Delete rule "${r && r.name}"?`)) return;
+      const next = { ...g, rules: g.rules.filter((_, i) => i !== ruleIndex) };
+      await api("PUT", "/api/rules/" + encodeURIComponent(groupId), next);
+      await loadRules();
+      return;
+    }
+    if (act === "rename") {
+      if (!g) return;
+      const name = prompt("Group name", g.name || "");
+      if (!name) return;
+      await api("PUT", "/api/rules/" + encodeURIComponent(groupId), { ...g, name });
+      await loadRules();
+      return;
+    }
+    if (act === "interval") {
+      if (!g) return;
+      const sec = prompt("Evaluation interval (seconds)", String(Math.round((g.intervalMs || 30000) / 1000)));
+      if (sec === null) return;
+      const n = Math.max(1, Math.round(+sec || 0));
+      await api("PUT", "/api/rules/" + encodeURIComponent(groupId), { ...g, intervalMs: n * 1000 });
+      await loadRules();
+      return;
+    }
+    if (act === "del-group") {
+      if (!confirm(`Delete group "${g && g.name}" and all its rules?`)) return;
+      await api("DELETE", "/api/rules/" + encodeURIComponent(groupId));
+      await loadRules();
+      return;
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function openRuleEditor(groupId, ruleIndex) {
+  const g = groupById(groupId);
+  if (!g) return;
+  _ruleEditCtx = { groupId, ruleIndex };
+  const r = ruleIndex >= 0 ? g.rules[ruleIndex] : {};
+  $("rule-modal-title").textContent =
+    (ruleIndex >= 0 ? "Edit rule" : "New rule") + " — " + (g.name || g.id);
+  $("rule-f-name").value        = r.name || "";
+  $("rule-f-lang").value        = r.lang || "promql";
+  $("rule-f-severity").value    = (r.severity || "warning").toLowerCase();
+  $("rule-f-expr").value        = r.expr || "";
+  $("rule-f-cmp").value         = r.cmp || ">";
+  $("rule-f-threshold").value   = r.threshold ?? 0;
+  $("rule-f-for").value         = Math.round((r.forMs || 0) / 1000);
+  $("rule-f-labels").value      = mapToLines(r.labels);
+  $("rule-f-annotations").value = mapToLines(r.annotations);
+  $("rule-f-runbook").value     = r.runbook || "";
+  $("rule-f-err").textContent   = "";
+  $("rule-modal").classList.add("open");
+  $("rule-f-name").focus();
+}
+
+async function saveRuleFromEditor() {
+  if (!_ruleEditCtx) return;
+  const { groupId, ruleIndex } = _ruleEditCtx;
+  const g = groupById(groupId);
+  if (!g) return;
+  const name = $("rule-f-name").value.trim();
+  const expr = $("rule-f-expr").value.trim();
+  if (!name) { $("rule-f-err").textContent = "Name is required."; return; }
+  if (!expr) { $("rule-f-err").textContent = "Expression is required."; return; }
+  const runbook = $("rule-f-runbook").value;
+  const rule = {
+    id:          ruleIndex >= 0 ? (g.rules[ruleIndex].id || ("r-" + uuid())) : ("r-" + uuid()),
+    name,
+    lang:        $("rule-f-lang").value,
+    expr,
+    cmp:         $("rule-f-cmp").value,
+    threshold:   +$("rule-f-threshold").value || 0,
+    forMs:       Math.max(0, Math.round(+$("rule-f-for").value || 0)) * 1000,
+    severity:    $("rule-f-severity").value,
+    labels:      linesToMap($("rule-f-labels").value),
+    annotations: linesToMap($("rule-f-annotations").value),
+    runbook:     runbook.trim() ? runbook : null,
+  };
+  const rules = (g.rules || []).slice();
+  if (ruleIndex >= 0) rules[ruleIndex] = rule; else rules.push(rule);
+  const btn = $("rule-f-save");
+  btn.disabled = true;
+  try {
+    await api("PUT", "/api/rules/" + encodeURIComponent(groupId), { ...g, rules });
+    $("rule-modal").classList.remove("open");
+    await loadRules();
+  } catch (e) {
+    $("rule-f-err").textContent = "Save failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function newRuleGroup() {
+  const name = prompt("New group name", "alerts");
+  if (!name) return;
+  try {
+    await api("POST", "/api/rules", { name, intervalMs: 30000, rules: [] });
+    await loadRules();
+  } catch (e) {
+    alert("Could not create group: " + e.message);
+  }
+}
+
+$("rules-new-group-btn").addEventListener("click", newRuleGroup);
+$("rule-f-save").addEventListener("click", saveRuleFromEditor);
+$("rule-modal-close").addEventListener("click", () => $("rule-modal").classList.remove("open"));
+$("rule-modal").addEventListener("click", (e) => {
+  if (e.target === $("rule-modal")) $("rule-modal").classList.remove("open");
 });
 
 
