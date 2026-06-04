@@ -1443,10 +1443,12 @@ function tooltipPlugin(seriesNames, unitFmt, isTime) {
         `<span class="pt-name">${escapeHtml(seriesNames[i])}</span>` +
         `<span class="pt-val">${escapeHtml(unitFmt(v))}</span></div>`;
     }
-    // Measure tip with a temporary visible-but-transparent render
+    // Measure tip while visible-but-transparent so offsetWidth is real.
+    // Must use "block" (not "") because the CSS class has display:none —
+    // clearing the inline style would just let the class rule win again.
     tip.innerHTML = html;
     tip.style.visibility = "hidden";
-    tip.style.display = "";
+    tip.style.display = "block";
     const ow = u.over.offsetWidth;
     const oh = u.over.offsetHeight;
     const tw = tip.offsetWidth;
