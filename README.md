@@ -101,7 +101,7 @@ For operators, the practical ownership in this repo is straightforward:
 - [src/edge/](src/edge/) is the OSS/runtime product.
 - [Dockerfile](Dockerfile) packages the workspace runtime.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers self-host and workspace-image usage.
-- [docs/CONTRACT.md](docs/CONTRACT.md) documents the HTTP/image contract the hosted control plane consumes.
+- [docs/README.md](docs/README.md) indexes the feature guides and HTTP API reference.
 
 ## Contributing
 

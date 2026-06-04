@@ -1,0 +1,146 @@
+# Querying and dashboards
+
+PulseBoard exposes both a small **native** query API and **Prometheus/Loki
+compatible** query APIs, and renders results through a built-in dashboard SPA.
+All read endpoints require the **Query** scope in multi-tenant mode.
+
+Source: [Query.fs](../../src/edge/Query.fs), [QueryApi.fs](../../src/edge/QueryApi.fs),
+[Dashboards.fs](../../src/edge/Dashboards.fs), [TraceApi.fs](../../src/edge/TraceApi.fs),
+[wwwroot/index.html](../../src/edge/wwwroot/index.html).
+
+## Native query API
+
+| Method | Path | Returns |
+|--------|------|---------|
+| `GET` | `/api/metrics` | JSON array of known series names. |
+| `GET` | `/api/metrics/{name}` | `[[tsMs, value], …]` time/value pairs. |
+| `GET` | `/api/logs` | `[{ts, service, level, message}, …]`. |
+
+`GET /api/metrics/{name}` query parameters:
+
+| Param | Meaning |
+|-------|---------|
+| `sinceMs` | Lookback window in ms. |
+| `step` | `raw`, `auto`, or an explicit number of ms. |
+| `agg` | `avg`, `min`, `max`, `sum`, or `count`. |
+
+With `step=auto` the resolution is chosen from the window: `<1h` raw, `<12h` 1m
+rollup, `<7d` 5m rollup, `≥7d` 1h rollup.
+
+`GET /api/logs` accepts `tail=N` (default 200).
+
+## Prometheus-compatible API (PromQL)
+
+Mounted under `GET /api/prom/api/v1/{path}`:
+
+- `/query` — instant query
+- `/query_range` — range query
+- `/labels` — label names
+- `/label/{name}/values` — label values
+- `/series` — series matching label matchers
+
+Responses use the standard Prometheus envelope
+(`{"status":"success","data":…}`). When `--mimir-url=` is set these are proxied
+to Mimir; otherwise an embedded PromQL subset (vector selectors) answers them.
+
+## Loki-compatible API (LogQL)
+
+Mounted under `GET /api/loki/api/v1/{path}`:
+
+- `/query_range` — log queries over a time range
+- `/labels` — label names
+- `/label/{name}/values` — label values
+
+Proxied to Loki when `--loki-url=` is set; otherwise an embedded LogQL subset
+(stream selector + one line filter) answers them.
+
+## Traces and service map
+
+| Method | Path | Returns |
+|--------|------|---------|
+| `GET` | `/api/traces` | Recent trace summaries (`sinceMs`, `limit` params). |
+| `GET` | `/api/traces/{traceId}` | Full span list for a trace. |
+| `GET` | `/api/servicemap` | Service graph: call counts, error rates, p50/p95/p99 latency. |
+
+Spans are kept in an in-memory ring per tenant (no persistence unless a Tempo
+backend is configured).
+
+## Dashboards
+
+Dashboards are JSON documents stored per tenant
+(`<dataDir>/dashboards/<tenantId>/<dashId>.json` or Postgres `pb_dashboards`).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/dashboards` | List dashboard summaries. |
+| `POST` | `/api/dashboards` | Create (id auto-generated if omitted). |
+| `GET` | `/api/dashboards/{id}` | Fetch one. |
+| `PUT` | `/api/dashboards/{id}` | Update. |
+| `DELETE` | `/api/dashboards/{id}` | Delete. |
+
+Dashboard shape:
+
+```json
+{
+  "id": "dash-1",
+  "title": "Overview",
+  "timeRangeSec": 3600,
+  "refreshSec": 15,
+  "panels": [
+    {
+      "id": "p1", "title": "CPU", "type": "timeseries",
+      "queryLang": "promql", "expr": "cpu",
+      "x": 0, "y": 0, "w": 6, "h": 3,
+      "options": { "unit": "percent" }
+    }
+  ]
+}
+```
+
+A default "Overview" dashboard is seeded on first tenant access.
+
+## Panel types
+
+Panels are registered through the SPA's `PulseBoard.registerPanel()` API. Each
+declares a `type`, a `queryShape` (the data shape it needs), and a renderer.
+
+| Type | Query shape | Purpose |
+|------|-------------|---------|
+| `timeseries` | matrix | Line / area chart over time. |
+| `stat` | scalar | Single big number. |
+| `gauge` | scalar | Radial gauge. |
+| `bargauge` | vector | Horizontal bar gauges, one per series. |
+| `piechart` | vector | Pie / donut. |
+| `barchart` | vector | Bar chart. |
+| `table` | matrix | Tabular data. |
+| `logs` | logs | Log line list. |
+| `histogram` | matrix | Distribution plot. |
+| `heatmap` | matrix | Time × bucket intensity grid. |
+| `state-timeline` | matrix | State changes over time. |
+| `status-history` | matrix | Colored status timeline. |
+| `trend` | matrix | Sparkline + percent change. |
+| `xychart` | matrix | Scatter / line on 2D axes. |
+| `candlestick` | matrix | OHLC finance chart. |
+| `traces` | spans | Trace waterfall. |
+| `flamegraph` | spans | Call-stack hierarchy. |
+| `nodegraph` | nodes | Force-directed DAG (e.g. service map). |
+| `geomap` | vector | Geographic scatter (Leaflet). |
+| `alertlist` | none | Active alerts + severity + runbook buttons. |
+| `annolist` | none | Annotation / event timeline. |
+| `dashlist` | none | Linked dashboard grid. |
+| `text` | none | Static markdown / HTML. |
+| `canvas` | none | Freeform drag-and-drop elements. |
+| `news` | none | Headline feed. |
+
+**Query shapes:** `scalar` (one number), `vector` (N series with a latest
+value), `matrix` (N series × M time points), `logs`, `spans`, `nodes`, or
+`none` (static content).
+
+Panel `options` is a string map read by the renderer — e.g. `timeseries`
+supports `stacking`/`yAxisLabel`/`thresholds`, `stat` supports
+`unit`/`colorMode`, `geomap` supports `lat`/`lng`/`zoom`/`tileUrl`.
+
+## Live updates
+
+A WebSocket at `/ws` pushes alert fire/resolve events and dashboard updates to
+connected clients (broadcast in single-tenant; tenant-scoped in multi-tenant).

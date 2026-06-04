@@ -17,4 +17,4 @@
 - [ ] `make test` passes locally
 - [ ] `make format` (or `dotnet format`) shows no changes
 - [ ] No secrets or credentials added
-- [ ] Breaking API/contract changes noted in `docs/CONTRACT.md`
+- [ ] Breaking API changes noted in the relevant `docs/` guide

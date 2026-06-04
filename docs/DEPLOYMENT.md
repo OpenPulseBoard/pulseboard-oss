@@ -144,15 +144,6 @@ docker run --rm -p 8080:8080 -v pulse-data:/data \
 
 ---
 
-## 5. Contract boundary for hosted consumers
-
-The hosted control plane is no longer implemented in this repository,
-but it still consumes the workspace image and HTTP endpoints documented
-in [`CONTRACT.md`](CONTRACT.md).
-
-That contract exists so the OSS workspace repo can be public while the
-hosted control plane remains private.
-
 ### 7.4 Operations
 
 See [infra/runbooks/portal-and-billing.md](../infra/runbooks/portal-and-billing.md)
