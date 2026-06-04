@@ -53,6 +53,7 @@
     <Compile Include="Rules.fs" />
     <Compile Include="PgRulesStore.fs" />
     <Compile Include="Runbooks.fs" />
+    <Compile Include="PgRunbookStore.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="PgRoutingStore.fs" />
     <Compile Include="OnCall.fs" />

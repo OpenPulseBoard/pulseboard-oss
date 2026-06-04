@@ -734,10 +734,15 @@ let main argv =
   alertingPipeline.SetPublicUrl publicUrl
 
   // Inline runbooks (PLAN-NEXT 14.1): per-alert markdown checklists with
-  // progress tracking + a post-incident view. The file store doubles as
-  // both the single- and multi-tenant backend (journalled per tenant).
+  // progress tracking + a post-incident view. Postgres-backed when a
+  // connection is configured, else a per-tenant NDJSON journal.
   let runbookStore : PulseBoard.Runbooks.IRunbookStore =
-    PulseBoard.Runbooks.FileRunbookStore(Path.Combine(dataDir, "runbooks"))
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgRunbookStore.ensureSchema cs
+      PulseBoard.PgRunbookStore.PgRunbookStore(cs) :> _
+    | None ->
+      PulseBoard.Runbooks.FileRunbookStore(Path.Combine(dataDir, "runbooks")) :> _
   let runbookTracker = PulseBoard.Runbooks.Tracker(runbookStore)
 
   let alertSink =
