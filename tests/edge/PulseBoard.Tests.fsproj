@@ -25,6 +25,7 @@
     <Compile Include="Unit/PlansTests.fs" />
     <Compile Include="Unit/SpansTests.fs" />
     <Compile Include="Unit/TenancyTests.fs" />
+    <Compile Include="Unit/SyntheticsTests.fs" />
     <!-- Property-based tests -->
     <Compile Include="Properties/RollupsPropertyTests.fs" />
     <Compile Include="Properties/RulesPropertyTests.fs" />

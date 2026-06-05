@@ -808,6 +808,43 @@ let main argv =
     PulseBoard.Correlation.webPart multiTenant logStore spanStore correlationSnapshotter
       (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
 
+  // Synthetic & uptime checks (PLAN-NEXT 14.8): small http/tcp/dns probes run
+  // from this edge on a cadence; every result lands as metrics
+  // (`pulse_synthetic_up`, `pulse_synthetic_duration_seconds`) + a log line so
+  // it is alertable through the existing rule engine. The region label drives
+  // the portal's multi-region matrix view; SaaS runs one edge per region.
+  let syntheticRegion =
+    envOr "PULSE_REGION" (argValue "--region=") |> Option.defaultValue "edge"
+  // SSRF guard default: self-hosted single-tenant deployments may legitimately
+  // probe localhost, so allow private targets there; multi-tenant SaaS blocks
+  // them unless explicitly overridden.
+  let syntheticAllowPrivate =
+    match envOr "PULSE_SYNTHETIC_ALLOW_PRIVATE" (argValue "--synthetic-allow-private=") with
+    | Some v ->
+      let v = v.Trim().ToLowerInvariant() in v = "1" || v = "true" || v = "yes"
+    | None -> not multiTenant
+  let syntheticStore : PulseBoard.Synthetics.ISyntheticStore =
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgSyntheticStore.ensureSchema cs
+      PulseBoard.PgSyntheticStore.PgSyntheticStore(cs) :> _
+    | None ->
+      PulseBoard.Synthetics.FileSyntheticStore(Path.Combine(dataDir, "synthetics")) :> _
+  let syntheticRunner =
+    PulseBoard.Synthetics.Runner(
+      syntheticStore, metricStore, logStore, syntheticRegion, syntheticAllowPrivate)
+  syntheticRunner.SetTenantsProvider(fun () ->
+    if multiTenant then
+      tenantStore.Tenants() |> Array.map (fun t -> t.id)
+    else
+      [| PulseBoard.Tenancy.TenantId "__local__" |])
+  syntheticRunner.Start()
+  let syntheticInner =
+    PulseBoard.Synthetics.webPart multiTenant syntheticStore
+      (fun tid -> syntheticRunner.LastResults tid)
+      (fun tid c -> syntheticRunner.RunNow tid c)
+      syntheticRegion
+
   printfn "  Alerting: rule store under %s; routing under %s; queue under %s"
     (Path.Combine(dataDir, "rules"))
     (Path.Combine(dataDir, "routing"))
@@ -1235,7 +1272,7 @@ let main argv =
 
   let query : WebPart =
     let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; aiExplainInner; queryInner ]
+    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; aiExplainInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (

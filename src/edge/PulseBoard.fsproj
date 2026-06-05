@@ -55,6 +55,8 @@
     <Compile Include="Runbooks.fs" />
     <Compile Include="PgRunbookStore.fs" />
     <Compile Include="Correlation.fs" />
+    <Compile Include="Synthetics.fs" />
+    <Compile Include="PgSyntheticStore.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="PgRoutingStore.fs" />
     <Compile Include="OnCall.fs" />

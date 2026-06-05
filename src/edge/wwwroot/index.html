@@ -19,6 +19,7 @@
     <a href="#/library"    id="tab-library">Library</a>
     <a href="#/alerts"     id="tab-alerts">Alerts</a>
     <a href="#/agents"     id="tab-agents">Agents</a>
+    <a href="#/uptime"     id="tab-synthetics">Uptime</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
@@ -264,6 +265,73 @@
     </thead>
     <tbody id="agents-body"></tbody>
   </table>
+</div>
+
+<!-- Synthetic & uptime checks view (PLAN-NEXT 14.8) -->
+<div id="view-synthetics" class="hidden">
+  <div class="lib-header">
+    <h2>Synthetic &amp; Uptime Checks</h2>
+    <p>HTTP, TCP, and DNS probes run on a cadence from each edge region. Results
+       land as metrics (<code>pulse_synthetic_up</code>,
+       <code>pulse_synthetic_duration_seconds</code>) and logs, so you can alert
+       on them with the rule engine. Editing requires the Admin scope.</p>
+    <button id="syn-new-btn" class="primary" style="margin-top:8px;">+ New check</button>
+    <button id="syn-refresh-btn" style="margin-top:8px;margin-left:6px;">⟳ Refresh</button>
+  </div>
+  <div id="syn-matrix" style="padding:0 20px 24px;"></div>
+</div>
+
+<!-- Synthetic check editor modal -->
+<div class="modal-backdrop" id="syn-modal">
+  <div class="modal" style="max-width:560px;">
+    <header>
+      <h2 id="syn-modal-title">New check</h2>
+      <button id="syn-modal-close">×</button>
+    </header>
+    <div class="body">
+      <div class="rule-field">
+        <label>Name</label>
+        <input id="syn-f-name" type="text" placeholder="api-health" style="width:100%;" />
+      </div>
+      <div class="rule-field-row">
+        <div class="rule-field">
+          <label>Type</label>
+          <select id="syn-f-kind" style="width:100%;">
+            <option value="http">HTTP</option>
+            <option value="tcp">TCP</option>
+            <option value="dns">DNS</option>
+          </select>
+        </div>
+        <div class="rule-field">
+          <label>Expected status <span class="hint">— HTTP only; 0 = any 2xx/3xx</span></label>
+          <input id="syn-f-status" type="number" min="0" step="1" value="0" style="width:100%;" />
+        </div>
+      </div>
+      <div class="rule-field">
+        <label>Target <span class="hint" id="syn-f-target-hint">— absolute URL, e.g. <code>https://api.example.com/health</code></span></label>
+        <input id="syn-f-target" type="text" placeholder="https://api.example.com/health" style="width:100%;" />
+      </div>
+      <div class="rule-field-row">
+        <div class="rule-field">
+          <label>Interval <span class="hint">(seconds)</span></label>
+          <input id="syn-f-interval" type="number" min="5" step="1" value="60" style="width:100%;" />
+        </div>
+        <div class="rule-field">
+          <label>Timeout <span class="hint">(seconds)</span></label>
+          <input id="syn-f-timeout" type="number" min="1" step="1" value="5" style="width:100%;" />
+        </div>
+        <div class="rule-field" style="display:flex;align-items:flex-end;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input id="syn-f-enabled" type="checkbox" checked /> Enabled
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button id="syn-f-save" class="primary">Save check</button>
+        <span id="syn-f-err" style="color:var(--err);font-size:12px;"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Alert rules editor view -->

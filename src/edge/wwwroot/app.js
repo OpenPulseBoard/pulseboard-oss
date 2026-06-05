@@ -106,6 +106,7 @@ function showView(name) {
   $("view-library").classList.toggle("hidden",    name !== "library");
   $("view-alerts").classList.toggle("hidden",     name !== "alerts");
   $("view-agents").classList.toggle("hidden",     name !== "agents");
+  $("view-synthetics").classList.toggle("hidden", name !== "synthetics");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
   $("tab-traces").classList.toggle("active",     name === "traces");
@@ -113,11 +114,13 @@ function showView(name) {
   $("tab-library").classList.toggle("active",    name === "library");
   $("tab-alerts").classList.toggle("active",     name === "alerts");
   $("tab-agents").classList.toggle("active",     name === "agents");
+  $("tab-synthetics").classList.toggle("active", name === "synthetics");
   if (name === "traces")  loadTraces();
   if (name === "map")     loadServiceMap();
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
   if (name === "alerts")  loadRules();
   if (name === "agents")  loadAgents();
+  if (name === "synthetics") loadSynthetics();
 }
 
 function uuid() {
@@ -3939,6 +3942,7 @@ function router() {
   else if (h.startsWith("#/library")) showView("library");
   else if (h.startsWith("#/alerts"))  showView("alerts");
   else if (h.startsWith("#/agents"))  showView("agents");
+  else if (h.startsWith("#/uptime"))  showView("synthetics");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
 }
@@ -4663,6 +4667,172 @@ $("agents-token-modal").addEventListener("click", (e) => {
 });
 
 // ── End Phase 13 agents ─────────────────────────────────────────────────────
+
+// =====================================================================
+// Synthetic & uptime checks (PLAN-NEXT 14.8)
+// =====================================================================
+// CRUD over /api/synthetics plus a multi-region matrix view
+// (/api/synthetics/matrix) showing each check's up/down status per edge
+// region ("up from us-east, down from eu-west"). Probe results are also
+// emitted as metrics + logs through the normal pipeline, so they can be
+// alerted on with the rule engine.
+let _synEditId = null;             // null = creating a new check
+
+function synKindHint(kind) {
+  switch (kind) {
+    case "tcp": return '— host:port, e.g. <code>db.example.com:5432</code>';
+    case "dns": return '— hostname to resolve, e.g. <code>example.com</code>';
+    default:    return '— absolute URL, e.g. <code>https://api.example.com/health</code>';
+  }
+}
+
+function synCell(res) {
+  if (!res) return '<span class="syn-pill syn-none" title="not yet probed">—</span>';
+  const cls = res.up ? "syn-up" : "syn-down";
+  const lbl = res.up ? "up" : "down";
+  const dur = res.durationMs != null ? " · " + fmtDur(res.durationMs) : "";
+  const tip = `${(res.detail || lbl)}${dur}${res.at ? " · " + fmtAgo(res.at) : ""}`;
+  return `<span class="syn-pill ${cls}" title="${escapeHtml(tip)}">${lbl}${escapeHtml(dur)}</span>`;
+}
+
+async function loadSynthetics() {
+  const host = $("syn-matrix");
+  host.innerHTML = '<div class="rules-empty" style="padding:8px 0;">Loading…</div>';
+  try {
+    const m = await api("GET", "/api/synthetics/matrix");
+    renderSyntheticMatrix(m || { regions: [], checks: [] });
+  } catch (e) {
+    host.innerHTML = `<div class="rules-empty" style="padding:8px 0;color:var(--err);">Failed to load checks: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderSyntheticMatrix(m) {
+  const host = $("syn-matrix");
+  const regions = m.regions || [];
+  const checks  = m.checks  || [];
+  if (!checks.length) {
+    host.innerHTML = '<div class="rules-empty" style="padding:8px 0;">No checks yet. Create one to start probing your endpoints.</div>';
+    return;
+  }
+  const regionCols = regions.map(r =>
+    `<th title="region">${escapeHtml(r)}</th>`).join("");
+  const rows = checks.map(c => {
+    const regionCells = regions.map(r => `<td>${synCell((c.results || {})[r])}</td>`).join("");
+    const enabledBadge = c.enabled
+      ? ""
+      : '<span class="syn-pill syn-none" title="disabled" style="margin-left:6px;">paused</span>';
+    return `<tr>
+      <td>${escapeHtml(c.name)}${enabledBadge}</td>
+      <td><span class="syn-kind">${escapeHtml((c.kind || "").toUpperCase())}</span></td>
+      <td style="color:var(--muted);font-size:12px;font-family:ui-monospace,Menlo,monospace;">${escapeHtml(c.target || "")}</td>
+      ${regionCells}
+      <td style="white-space:nowrap;">
+        <button data-syn-act="run"  data-id="${escapeHtml(c.id)}">Run</button>
+        <button data-syn-act="edit" data-id="${escapeHtml(c.id)}">Edit</button>
+        <button class="danger" data-syn-act="del" data-id="${escapeHtml(c.id)}">Delete</button>
+      </td>
+    </tr>`;
+  }).join("");
+  host.innerHTML = `<table class="agents-table syn-table">
+    <thead><tr>
+      <th>Name</th><th>Type</th><th>Target</th>${regionCols}<th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  host.querySelectorAll("button[data-syn-act]").forEach(btn => {
+    btn.addEventListener("click", () =>
+      onSyntheticAction(btn.getAttribute("data-syn-act"), btn.getAttribute("data-id")));
+  });
+}
+
+async function onSyntheticAction(act, id) {
+  try {
+    if (act === "edit") { openSyntheticEditor(id); return; }
+    if (act === "run") {
+      const res = await api("POST", "/api/synthetics/" + encodeURIComponent(id) + "/run");
+      await loadSynthetics();
+      if (res) {
+        const ok = res.up ? "UP" : "DOWN";
+        $("syn-matrix").insertAdjacentHTML("afterbegin",
+          `<div class="rules-empty" style="padding:4px 0;color:${res.up ? "var(--ok)" : "var(--err)"};">` +
+          `Last run: ${escapeHtml(ok)} · ${fmtDur(res.durationMs || 0)} · ${escapeHtml(res.detail || "")}</div>`);
+      }
+      return;
+    }
+    if (act === "del") {
+      if (!confirm("Delete this check?")) return;
+      await api("DELETE", "/api/synthetics/" + encodeURIComponent(id));
+      await loadSynthetics();
+      return;
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function syncSynTargetHint() {
+  $("syn-f-target-hint").innerHTML = synKindHint($("syn-f-kind").value);
+  $("syn-f-status").disabled = $("syn-f-kind").value !== "http";
+}
+
+async function openSyntheticEditor(id) {
+  _synEditId = id || null;
+  $("syn-f-err").textContent = "";
+  let c = { kind: "http", intervalMs: 60000, timeoutMs: 5000, expectStatus: 0, enabled: true };
+  if (id) {
+    try { c = await api("GET", "/api/synthetics/" + encodeURIComponent(id)); }
+    catch (e) { alert("Could not load check: " + e.message); return; }
+  }
+  $("syn-modal-title").textContent = id ? "Edit check" : "New check";
+  $("syn-f-name").value     = c.name || "";
+  $("syn-f-kind").value     = c.kind || "http";
+  $("syn-f-target").value   = c.target || "";
+  $("syn-f-interval").value = Math.round((c.intervalMs || 60000) / 1000);
+  $("syn-f-timeout").value  = Math.round((c.timeoutMs || 5000) / 1000);
+  $("syn-f-status").value   = c.expectStatus || 0;
+  $("syn-f-enabled").checked = c.enabled !== false;
+  syncSynTargetHint();
+  $("syn-modal").classList.add("open");
+  $("syn-f-name").focus();
+}
+
+async function saveSyntheticFromEditor() {
+  const name   = $("syn-f-name").value.trim();
+  const target = $("syn-f-target").value.trim();
+  if (!name)   { $("syn-f-err").textContent = "Name is required."; return; }
+  if (!target) { $("syn-f-err").textContent = "Target is required."; return; }
+  const body = {
+    name,
+    kind:         $("syn-f-kind").value,
+    target,
+    intervalMs:   Math.max(5, Math.round(+$("syn-f-interval").value || 60)) * 1000,
+    timeoutMs:    Math.max(1, Math.round(+$("syn-f-timeout").value || 5)) * 1000,
+    expectStatus: Math.max(0, Math.round(+$("syn-f-status").value || 0)),
+    enabled:      $("syn-f-enabled").checked,
+  };
+  const btn = $("syn-f-save");
+  btn.disabled = true;
+  try {
+    if (_synEditId) await api("PUT", "/api/synthetics/" + encodeURIComponent(_synEditId), body);
+    else            await api("POST", "/api/synthetics", body);
+    $("syn-modal").classList.remove("open");
+    await loadSynthetics();
+  } catch (e) {
+    $("syn-f-err").textContent = "Save failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("syn-new-btn").addEventListener("click", () => openSyntheticEditor(null));
+$("syn-refresh-btn").addEventListener("click", loadSynthetics);
+$("syn-f-kind").addEventListener("change", syncSynTargetHint);
+$("syn-f-save").addEventListener("click", saveSyntheticFromEditor);
+$("syn-modal-close").addEventListener("click", () => $("syn-modal").classList.remove("open"));
+$("syn-modal").addEventListener("click", (e) => {
+  if (e.target === $("syn-modal")) $("syn-modal").classList.remove("open");
+});
+
 async function loadServiceMap() {
   const since = sinceMsFrom($("map-range").value);
   $("map-meta").textContent = "loading…";

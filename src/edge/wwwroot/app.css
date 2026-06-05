@@ -496,6 +496,16 @@
   .agent-dot.online   { background:#22c55e; }
   .agent-dot.degraded { background:#f59e0b; }
   .agent-dot.offline  { background:#6b7280; }
+  /* ── Synthetic & uptime checks (Phase 14.8) ── */
+  .syn-table th, .syn-table td { vertical-align:middle; }
+  .syn-table button { font-size:11px; padding:2px 8px; margin-left:4px; }
+  .syn-kind { font-size:10px; letter-spacing:.05em; color:var(--muted);
+    border:1px solid var(--border); border-radius:3px; padding:1px 5px; }
+  .syn-pill { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px;
+    font-weight:600; }
+  .syn-pill.syn-up   { background:#1a3d22; color:var(--ok); }
+  .syn-pill.syn-down { background:#3d1a1a; color:var(--err); }
+  .syn-pill.syn-none { background:var(--panel-2); color:var(--muted); font-weight:500; }
   .lib-header h2 { margin:0 0 4px; font-size:18px; }
   .lib-header > p { margin:0 0 10px; color:var(--muted); font-size:13px; }
   #lib-search { width:280px; background:var(--panel-2); border:1px solid var(--border);
