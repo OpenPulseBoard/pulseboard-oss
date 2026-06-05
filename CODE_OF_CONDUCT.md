@@ -52,7 +52,7 @@ public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may
-be reported to the project maintainers at `conduct@pulseboard.example`
+be reported to the project maintainers at `conduct@pulseboard.cloud`
 (replace with the real address once the org is set up). All complaints
 will be reviewed and investigated promptly and fairly.
 

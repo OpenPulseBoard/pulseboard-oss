@@ -9,7 +9,7 @@ fixes land on `main`.
 
 **Please do not file public GitHub issues for security problems.**
 
-Email `security@pulseboard.example` (replace with the real address once
+Email `security@pulseboard.cloud` (replace with the real address once
 the org is set up) with:
 
 - A clear description of the issue and its impact.
