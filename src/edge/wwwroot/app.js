@@ -107,6 +107,7 @@ function showView(name) {
   $("view-alerts").classList.toggle("hidden",     name !== "alerts");
   $("view-agents").classList.toggle("hidden",     name !== "agents");
   $("view-synthetics").classList.toggle("hidden", name !== "synthetics");
+  $("view-status").classList.toggle("hidden",     name !== "status");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
   $("tab-explore").classList.toggle("active",    name === "explore");
   $("tab-traces").classList.toggle("active",     name === "traces");
@@ -115,12 +116,14 @@ function showView(name) {
   $("tab-alerts").classList.toggle("active",     name === "alerts");
   $("tab-agents").classList.toggle("active",     name === "agents");
   $("tab-synthetics").classList.toggle("active", name === "synthetics");
+  $("tab-status").classList.toggle("active",     name === "status");
   if (name === "traces")  loadTraces();
   if (name === "map")     loadServiceMap();
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
   if (name === "alerts")  loadRules();
   if (name === "agents")  loadAgents();
   if (name === "synthetics") loadSynthetics();
+  if (name === "status")     loadStatusPages();
 }
 
 function uuid() {
@@ -2567,6 +2570,52 @@ function openShare() {
   $("share-modal").classList.remove("hidden");
 }
 
+// Export-as-code (PLAN-NEXT 14.5). Fetches the chosen resource in both
+// Terraform and YAML, caches them, and shows a copyable modal. `kind`
+// is "dashboards" | "rules" | "routing".
+const _codeExport = { kind: null, id: null, fmt: "tf", cache: {} };
+
+async function openExportCode(kind, id, label) {
+  // Map UI kind aliases to API path segments.
+  const seg = kind === "rules" ? "rules" : kind === "routing" ? "routing" : "dashboards";
+  _codeExport.kind = seg;
+  _codeExport.id = id;
+  _codeExport.fmt = "tf";
+  _codeExport.cache = {};
+  $("code-sub").textContent = label ? "— " + label : "";
+  setCodeFmt("tf");
+  $("code-modal").classList.remove("hidden");
+  await loadCodeExport();
+}
+
+function codeExportUrl(fmt) {
+  const base = _codeExport.kind === "routing"
+    ? "/api/export/routing"
+    : "/api/export/" + _codeExport.kind + "/" + encodeURIComponent(_codeExport.id);
+  return base + "?format=" + fmt;
+}
+
+async function loadCodeExport() {
+  const fmt = _codeExport.fmt;
+  const ta = $("code-ta");
+  if (_codeExport.cache[fmt] !== undefined) { ta.value = _codeExport.cache[fmt]; return; }
+  ta.value = "Loading…";
+  try {
+    const text = await api("GET", codeExportUrl(fmt));
+    const out = typeof text === "string" ? text : JSON.stringify(text, null, 2);
+    _codeExport.cache[fmt] = out;
+    ta.value = out;
+  } catch (e) {
+    ta.value = "Export failed: " + e.message;
+  }
+}
+
+function setCodeFmt(fmt) {
+  _codeExport.fmt = fmt;
+  $("code-fmt-tf").classList.toggle("primary", fmt === "tf");
+  $("code-fmt-yaml").classList.toggle("primary", fmt === "yaml");
+}
+
 // Handles #/snapshot/... in the router — renders a read-only snapshot.
 async function loadSnapshot(encoded) {
   try {
@@ -3943,6 +3992,7 @@ function router() {
   else if (h.startsWith("#/alerts"))  showView("alerts");
   else if (h.startsWith("#/agents"))  showView("agents");
   else if (h.startsWith("#/uptime"))  showView("synthetics");
+  else if (h.startsWith("#/status"))  showView("status");
   else if (h.startsWith("#/map"))     showView("map");
   else                                showView("dashboards");
 }
@@ -3986,6 +4036,10 @@ $("refresh-now").addEventListener("click", refreshAll);
 $("compare-toggle").addEventListener("click", toggleCompare);
 $("live-toggle").addEventListener("click", toggleLive);
 $("share-btn").addEventListener("click", openShare);
+$("code-btn").addEventListener("click", () => {
+  if (!state.current) { alert("Open or create a dashboard first."); return; }
+  openExportCode("dashboards", state.current.id, state.current.title || state.current.id);
+});
 $("history-btn").addEventListener("click", openHistory);
 $("save-view-btn").addEventListener("click", saveCurrentView);
 $("saved-views").addEventListener("change", (e) => { if (e.target.value) applyView(e.target.value); });
@@ -4035,6 +4089,21 @@ $("share-close").addEventListener("click", () => $("share-modal").classList.add(
 $("share-modal").addEventListener("click", (e) => {
   if (e.target === $("share-modal")) $("share-modal").classList.add("hidden");
 });
+
+// Export-as-code modal (PLAN-NEXT 14.5)
+$("code-close").addEventListener("click", () => $("code-modal").classList.add("hidden"));
+$("code-modal").addEventListener("click", (e) => {
+  if (e.target === $("code-modal")) $("code-modal").classList.add("hidden");
+});
+$("code-fmt-tf").addEventListener("click", () => { setCodeFmt("tf"); loadCodeExport(); });
+$("code-fmt-yaml").addEventListener("click", () => { setCodeFmt("yaml"); loadCodeExport(); });
+$("code-copy-btn").addEventListener("click", () => {
+  const v = $("code-ta").value;
+  if (v) navigator.clipboard.writeText(v).catch(() => {});
+  const btn = $("code-copy-btn"); const o = btn.textContent;
+  btn.textContent = "Copied \u2713"; setTimeout(() => { btn.textContent = o; }, 1400);
+});
+
 $("share-gen-btn").addEventListener("click", async () => {
   if (!state.current) return;
   const enc = await compressToBase64url(JSON.stringify(state.current));
@@ -4454,6 +4523,7 @@ function renderRules() {
         <button data-act="add-rule" data-g="${escapeHtml(g.id)}">+ Add rule</button>
         <button data-act="interval" data-g="${escapeHtml(g.id)}">Interval</button>
         <button data-act="rename" data-g="${escapeHtml(g.id)}">Rename</button>
+        <button data-act="export" data-g="${escapeHtml(g.id)}" title="Copy as Terraform or YAML">&lt;/&gt; Code</button>
         <button class="danger" data-act="del-group" data-g="${escapeHtml(g.id)}">Delete group</button>
       </div>
       ${rows}
@@ -4475,6 +4545,10 @@ async function onRulesAction(act, groupId, ruleIndex) {
   try {
     if (act === "add-rule")  { openRuleEditor(groupId, -1); return; }
     if (act === "edit-rule") { openRuleEditor(groupId, ruleIndex); return; }
+    if (act === "export") {
+      openExportCode("rules", groupId, (g && g.name) || groupId);
+      return;
+    }
     if (act === "del-rule") {
       if (!g) return;
       const r = g.rules[ruleIndex];
@@ -4831,6 +4905,254 @@ $("syn-f-save").addEventListener("click", saveSyntheticFromEditor);
 $("syn-modal-close").addEventListener("click", () => $("syn-modal").classList.remove("open"));
 $("syn-modal").addEventListener("click", (e) => {
   if (e.target === $("syn-modal")) $("syn-modal").classList.remove("open");
+});
+
+// ── Public status pages (PLAN-NEXT 14.6) ──────────────────────────────
+let _stEditId = null;
+let _stChecks = [];   // [{id, name}] synthetic checks for the source dropdown
+
+const ST_STATUS_LABEL = {
+  operational: "Operational", degraded: "Degraded",
+  major_outage: "Major outage", unknown: "Unknown",
+};
+
+async function loadStatusPages() {
+  const host = $("st-list");
+  host.innerHTML = '<div class="rules-empty" style="padding:8px 0;">Loading…</div>';
+  try {
+    const pages = await api("GET", "/api/status/pages");
+    renderStatusList(pages || []);
+  } catch (e) {
+    host.innerHTML = `<div class="rules-empty" style="padding:8px 0;color:var(--err);">Failed to load pages: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderStatusList(pages) {
+  const host = $("st-list");
+  if (!pages.length) {
+    host.innerHTML = '<div class="rules-empty" style="padding:8px 0;">No status pages yet. Create one to publish your uptime.</div>';
+    return;
+  }
+  const rows = pages.map(p => {
+    const comps = (p.components || []).length;
+    return `<tr>
+      <td>${escapeHtml(p.title || "")}</td>
+      <td style="font-family:ui-monospace,Menlo,monospace;font-size:12px;">/status/${escapeHtml(p.slug || "")}</td>
+      <td>${comps} component${comps === 1 ? "" : "s"}</td>
+      <td>${(p.maintenances || []).length} window${(p.maintenances || []).length === 1 ? "" : "s"}</td>
+      <td style="white-space:nowrap;">
+        <a href="/status/${encodeURIComponent(p.slug || "")}" target="_blank"><button>View</button></a>
+        <button data-st-act="edit" data-id="${escapeHtml(p.id)}">Edit</button>
+        <button class="danger" data-st-act="del" data-id="${escapeHtml(p.id)}">Delete</button>
+      </td>
+    </tr>`;
+  }).join("");
+  host.innerHTML = `<table class="agents-table syn-table">
+    <thead><tr><th>Title</th><th>Public URL</th><th>Components</th><th>Maintenance</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  host.querySelectorAll("button[data-st-act]").forEach(btn => {
+    btn.addEventListener("click", () =>
+      onStatusAction(btn.getAttribute("data-st-act"), btn.getAttribute("data-id")));
+  });
+}
+
+async function onStatusAction(act, id) {
+  try {
+    if (act === "edit") { openStatusEditor(id); return; }
+    if (act === "del") {
+      if (!confirm("Delete this status page?")) return;
+      await api("DELETE", "/api/status/pages/" + encodeURIComponent(id));
+      await loadStatusPages();
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function stCheckOptions(selectedId) {
+  const opts = _stChecks.map(c =>
+    `<option value="${escapeHtml(c.id)}"${c.id === selectedId ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("");
+  return `<option value="">— select check —</option>${opts}`;
+}
+
+function stCmpOptions(selected) {
+  return [">=", ">", "<=", "<", "==", "!="].map(c =>
+    `<option value="${c}"${c === selected ? " selected" : ""}>${c}</option>`).join("");
+}
+
+function stCompRowHtml(c) {
+  c = c || {};
+  const kind = c.sourceKind === "metric" ? "metric" : "synthetic";
+  return `<div class="st-comp-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+    <input class="st-c-name" placeholder="Component name" value="${escapeHtml(c.name || "")}" style="flex:1;min-width:140px;" />
+    <select class="st-c-kind">
+      <option value="synthetic"${kind === "synthetic" ? " selected" : ""}>Synthetic check</option>
+      <option value="metric"${kind === "metric" ? " selected" : ""}>Metric</option>
+    </select>
+    <span class="st-c-syn" style="${kind === "synthetic" ? "" : "display:none;"}">
+      <select class="st-c-checkid">${stCheckOptions(c.checkId)}</select>
+    </span>
+    <span class="st-c-met" style="${kind === "metric" ? "display:inline-flex;gap:6px;align-items:center;" : "display:none;"}">
+      <input class="st-c-selector" placeholder="metric_name or series" value="${escapeHtml(c.selector || "")}" style="width:200px;" />
+      <select class="st-c-cmp">${stCmpOptions(c.cmp || ">=")}</select>
+      <input class="st-c-threshold" type="number" step="any" value="${c.threshold != null ? c.threshold : 0.5}" style="width:70px;" />
+    </span>
+    <button class="st-c-del danger" title="remove">×</button>
+  </div>`;
+}
+
+function stMaintRowHtml(m) {
+  m = m || {};
+  const toLocal = (ms) => {
+    if (!ms) return "";
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  return `<div class="st-maint-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+    <input class="st-m-title" placeholder="Title" value="${escapeHtml(m.title || "")}" style="flex:1;min-width:120px;" />
+    <input class="st-m-body" placeholder="Details" value="${escapeHtml(m.body || "")}" style="flex:1;min-width:120px;" />
+    <label style="font-size:11px;color:var(--muted);">from <input class="st-m-start" type="datetime-local" value="${toLocal(m.startsAt)}" /></label>
+    <label style="font-size:11px;color:var(--muted);">to <input class="st-m-end" type="datetime-local" value="${toLocal(m.endsAt)}" /></label>
+    <button class="st-m-del danger" title="remove">×</button>
+  </div>`;
+}
+
+// Read current DOM rows back into plain objects (preserves edits across re-renders).
+function readStComps() {
+  return Array.from($("st-components").querySelectorAll(".st-comp-row")).map(row => {
+    const kind = row.querySelector(".st-c-kind").value;
+    const base = { name: row.querySelector(".st-c-name").value.trim(), sourceKind: kind };
+    if (kind === "synthetic") {
+      base.checkId = row.querySelector(".st-c-checkid").value;
+    } else {
+      base.selector = row.querySelector(".st-c-selector").value.trim();
+      base.cmp = row.querySelector(".st-c-cmp").value;
+      base.threshold = +row.querySelector(".st-c-threshold").value || 0;
+    }
+    return base;
+  });
+}
+
+function readStMaints() {
+  const ms = (v) => v ? new Date(v).getTime() : 0;
+  return Array.from($("st-maints").querySelectorAll(".st-maint-row")).map(row => ({
+    title: row.querySelector(".st-m-title").value.trim(),
+    body: row.querySelector(".st-m-body").value.trim(),
+    startsAt: ms(row.querySelector(".st-m-start").value),
+    endsAt: ms(row.querySelector(".st-m-end").value),
+  }));
+}
+
+function renderStComps(comps) {
+  $("st-components").innerHTML =
+    (comps && comps.length) ? comps.map(stCompRowHtml).join("")
+                            : '<div style="color:var(--muted);font-size:12px;">No components yet.</div>';
+  bindStCompRows();
+}
+
+function renderStMaints(maints) {
+  $("st-maints").innerHTML =
+    (maints && maints.length) ? maints.map(stMaintRowHtml).join("") : "";
+  bindStMaintRows();
+}
+
+function bindStCompRows() {
+  $("st-components").querySelectorAll(".st-comp-row").forEach(row => {
+    row.querySelector(".st-c-kind").addEventListener("change", (e) => {
+      const metric = e.target.value === "metric";
+      row.querySelector(".st-c-syn").style.display = metric ? "none" : "";
+      row.querySelector(".st-c-met").style.display = metric ? "inline-flex" : "none";
+    });
+    row.querySelector(".st-c-del").addEventListener("click", () => {
+      const comps = readStComps();
+      const idx = Array.from($("st-components").children).indexOf(row);
+      comps.splice(idx, 1);
+      renderStComps(comps);
+    });
+  });
+}
+
+function bindStMaintRows() {
+  $("st-maints").querySelectorAll(".st-maint-row").forEach(row => {
+    row.querySelector(".st-m-del").addEventListener("click", () => {
+      const maints = readStMaints();
+      const idx = Array.from($("st-maints").children).indexOf(row);
+      maints.splice(idx, 1);
+      renderStMaints(maints);
+    });
+  });
+}
+
+async function openStatusEditor(id) {
+  _stEditId = id || null;
+  $("st-f-err").textContent = "";
+  // Refresh the synthetic check list for the source dropdown.
+  try {
+    const checks = await api("GET", "/api/synthetics");
+    _stChecks = (checks || []).map(c => ({ id: c.id, name: c.name }));
+  } catch { _stChecks = []; }
+
+  let p = { title: "", slug: "", description: "", components: [], maintenances: [] };
+  if (id) {
+    try { p = await api("GET", "/api/status/pages/" + encodeURIComponent(id)); }
+    catch (e) { alert("Could not load page: " + e.message); return; }
+  }
+  $("st-modal-title").textContent = id ? "Edit status page" : "New status page";
+  $("st-f-title").value = p.title || "";
+  $("st-f-slug").value = p.slug || "";
+  $("st-f-desc").value = p.description || "";
+  renderStComps(p.components || []);
+  renderStMaints(p.maintenances || []);
+  const view = $("st-f-view");
+  if (p.slug) { view.href = "/status/" + encodeURIComponent(p.slug); view.style.display = ""; }
+  else { view.style.display = "none"; }
+  $("st-modal").classList.add("open");
+  $("st-f-title").focus();
+}
+
+async function saveStatusFromEditor() {
+  const title = $("st-f-title").value.trim();
+  const slug = $("st-f-slug").value.trim();
+  if (!title) { $("st-f-err").textContent = "Title is required."; return; }
+  if (!slug)  { $("st-f-err").textContent = "Slug is required."; return; }
+  const body = {
+    title, slug,
+    description: $("st-f-desc").value.trim(),
+    components: readStComps(),
+    maintenances: readStMaints(),
+  };
+  const btn = $("st-f-save");
+  btn.disabled = true;
+  try {
+    if (_stEditId) await api("PUT", "/api/status/pages/" + encodeURIComponent(_stEditId), body);
+    else           await api("POST", "/api/status/pages", body);
+    $("st-modal").classList.remove("open");
+    await loadStatusPages();
+  } catch (e) {
+    $("st-f-err").textContent = "Save failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("st-new-btn").addEventListener("click", () => openStatusEditor(null));
+$("st-refresh-btn").addEventListener("click", loadStatusPages);
+$("st-add-comp").addEventListener("click", () => {
+  const comps = readStComps();
+  comps.push({ name: "", sourceKind: "synthetic" });
+  renderStComps(comps);
+});
+$("st-add-maint").addEventListener("click", () => {
+  const maints = readStMaints();
+  maints.push({ title: "", body: "", startsAt: 0, endsAt: 0 });
+  renderStMaints(maints);
+});
+$("st-f-save").addEventListener("click", saveStatusFromEditor);
+$("st-modal-close").addEventListener("click", () => $("st-modal").classList.remove("open"));
+$("st-modal").addEventListener("click", (e) => {
+  if (e.target === $("st-modal")) $("st-modal").classList.remove("open");
 });
 
 async function loadServiceMap() {

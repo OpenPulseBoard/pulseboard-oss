@@ -20,6 +20,7 @@
     <a href="#/alerts"     id="tab-alerts">Alerts</a>
     <a href="#/agents"     id="tab-agents">Agents</a>
     <a href="#/uptime"     id="tab-synthetics">Uptime</a>
+    <a href="#/status"     id="tab-status">Status</a>
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
@@ -65,6 +66,7 @@
       <button id="compare-toggle" title="Overlay the same query shifted 7 days into the past">⚭ Compare</button>
       <button id="live-toggle" title="WS-driven live streaming (sub-second refresh)">⦿ Live</button>
       <button id="share-btn" title="Export, snapshot URL, or import dashboard">Share</button>
+      <button id="code-btn" title="Copy this dashboard as Terraform or YAML">&lt;/&gt; Code</button>
       <button id="history-btn" title="Browse and restore past revisions">History</button>
       <button id="edit-toggle">✎ Edit</button>
       <button id="vars-edit-btn" class="hidden" title="Edit template variables">Variables</button>
@@ -119,6 +121,23 @@
       </div>
     </div>
     <div class="ergn-modal-foot"><button id="share-close">Close</button></div>
+  </div>
+</div>
+
+<!-- Export-as-code modal (PLAN-NEXT 14.5) -->
+<div class="ergn-back hidden" id="code-modal">
+  <div class="ergn-modal">
+    <h3>Export as code <span id="code-sub" style="color:var(--muted);font-size:11px;"></span></h3>
+    <div class="ergn-modal-body">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+        <button id="code-fmt-tf" class="primary">Terraform</button>
+        <button id="code-fmt-yaml">YAML</button>
+        <span class="grow" style="flex:1;"></span>
+        <button id="code-copy-btn">Copy</button>
+      </div>
+      <textarea class="share-ta" id="code-ta" readonly style="min-height:300px;font-family:monospace;font-size:11px;white-space:pre;overflow:auto;"></textarea>
+    </div>
+    <div class="ergn-modal-foot"><button id="code-close">Close</button></div>
   </div>
 </div>
 
@@ -329,6 +348,65 @@
       <div style="display:flex;align-items:center;gap:12px;">
         <button id="syn-f-save" class="primary">Save check</button>
         <span id="syn-f-err" style="color:var(--err);font-size:12px;"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Public status pages view (PLAN-NEXT 14.6) -->
+<div id="view-status" class="hidden">
+  <div class="lib-header">
+    <h2>Status Pages</h2>
+    <p>Publish a customer-facing status page backed by your existing telemetry.
+       Components reuse synthetic checks (<code>pulse_synthetic_up</code>) or any
+       metric series; incidents are auto-derived from firing alerts. The public
+       page is served unauthenticated at <code>/status</code> (or
+       <code>/status/&lt;slug&gt;</code>). Editing requires the Admin scope.</p>
+    <button id="st-new-btn" class="primary" style="margin-top:8px;">+ New page</button>
+    <button id="st-refresh-btn" style="margin-top:8px;margin-left:6px;">⟳ Refresh</button>
+  </div>
+  <div id="st-list" style="padding:0 20px 24px;"></div>
+</div>
+
+<!-- Status page editor modal -->
+<div class="modal-backdrop" id="st-modal">
+  <div class="modal" style="max-width:680px;">
+    <header>
+      <h2 id="st-modal-title">New status page</h2>
+      <button id="st-modal-close">×</button>
+    </header>
+    <div class="body">
+      <div class="rule-field-row">
+        <div class="rule-field" style="flex:2;">
+          <label>Title</label>
+          <input id="st-f-title" type="text" placeholder="Acme Status" style="width:100%;" />
+        </div>
+        <div class="rule-field" style="flex:1;">
+          <label>Slug <span class="hint">— URL path</span></label>
+          <input id="st-f-slug" type="text" placeholder="main" style="width:100%;" />
+        </div>
+      </div>
+      <div class="rule-field">
+        <label>Description <span class="hint">— optional subtitle</span></label>
+        <input id="st-f-desc" type="text" placeholder="Live service health" style="width:100%;" />
+      </div>
+
+      <div class="rule-field">
+        <label>Components</label>
+        <div id="st-components"></div>
+        <button id="st-add-comp" style="margin-top:6px;">+ Add component</button>
+      </div>
+
+      <div class="rule-field">
+        <label>Scheduled maintenance</label>
+        <div id="st-maints"></div>
+        <button id="st-add-maint" style="margin-top:6px;">+ Add maintenance window</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+        <button id="st-f-save" class="primary">Save page</button>
+        <a id="st-f-view" href="#" target="_blank" style="font-size:12px;">View public page →</a>
+        <span id="st-f-err" style="color:var(--err);font-size:12px;"></span>
       </div>
     </div>
   </div>

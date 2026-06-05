@@ -57,12 +57,16 @@
     <Compile Include="Correlation.fs" />
     <Compile Include="Synthetics.fs" />
     <Compile Include="PgSyntheticStore.fs" />
+    <Compile Include="StatusPages.fs" />
+    <Compile Include="PgStatusStore.fs" />
     <Compile Include="Routing.fs" />
     <Compile Include="PgRoutingStore.fs" />
     <Compile Include="OnCall.fs" />
     <Compile Include="PgOnCallStore.fs" />
     <Compile Include="Dashboards.fs" />
     <Compile Include="PgDashboardRepo.fs" />
+    <Compile Include="GitSync.fs" />
+    <Compile Include="ExportCode.fs" />
     <Compile Include="Self.fs" />
     <Compile Include="TraceApi.fs" />
     <Compile Include="Rum.fs" />
@@ -99,6 +103,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/operator-signin.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="wwwroot/status.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="wwwroot/uPlot.iife.min.js">

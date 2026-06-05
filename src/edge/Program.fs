@@ -281,6 +281,47 @@ let main argv =
     eprintfn "  [ERROR] OIDC requires --multi-tenant"
     exit 2
 
+  // -- GitOps git-sync (PLAN-NEXT.md 14.5) ---------------------------------
+  // When a Git URL is configured the workspace pulls dashboards & rules
+  // from the repo on a fixed cadence and treats Git as the source of
+  // truth (CRUD APIs return 405). Auth: HTTPS token (the *name* of the
+  // env var holding the token is given via --gitops-token-env=) or an
+  // SSH private key.
+  let gitOpsConfig : PulseBoard.GitSync.Config option =
+    match envOr "PULSE_GITOPS_URL" (argValue "--gitops-url=") with
+    | None -> None
+    | Some url ->
+      let branch =
+        envOr "PULSE_GITOPS_BRANCH" (argValue "--gitops-branch=")
+        |> Option.defaultValue "main"
+      let subPath =
+        envOr "PULSE_GITOPS_PATH" (argValue "--gitops-path=")
+        |> Option.defaultValue ""
+      let intervalMs =
+        envOr "PULSE_GITOPS_INTERVAL" (argValue "--gitops-interval=")
+        |> Option.bind (fun s -> match Int32.TryParse s with | true, n -> Some n | _ -> None)
+        |> Option.map (fun secs -> max 5 secs * 1000)
+        |> Option.defaultValue 30_000
+      let sshKeyPath = envOr "PULSE_GITOPS_SSH_KEY" (argValue "--gitops-ssh-key=")
+      let token =
+        envOr "PULSE_GITOPS_TOKEN_ENV" (argValue "--gitops-token-env=")
+        |> Option.bind (fun name ->
+             let v = Environment.GetEnvironmentVariable name
+             if String.IsNullOrWhiteSpace v then None else Some v)
+      let prune =
+        match envOr "PULSE_GITOPS_PRUNE" (argValue "--gitops-prune=") with
+        | Some s -> not (s.Trim().ToLowerInvariant() = "false" || s = "0")
+        | None -> true
+      Some
+        { url        = url
+          branch     = branch
+          subPath    = subPath
+          intervalMs = intervalMs
+          sshKeyPath = sshKeyPath
+          token      = token
+          workDir    = Path.Combine(dataDir, "gitops", "checkout")
+          prune      = prune }
+
   // Outbound alert delivery. `--webhook=` / `--slack=` may be repeated on
   // the command line; `PULSE_WEBHOOKS` / `PULSE_SLACK` env vars accept a
   // comma/newline-separated list. Each endpoint becomes its own sink so a
@@ -896,6 +937,52 @@ let main argv =
   let wwwroot = resolveWwwRoot ()
   printfn "PulseBoard serving static files from %s" wwwroot
 
+  // Public status pages (PLAN-NEXT 14.6): per-workspace status pages whose
+  // components reuse the synthetic (`pulse_synthetic_up`) and SLO/metric
+  // series already in the MetricStore. Incidents are auto-derived from the
+  // live firing alerts; maintenance windows are operator-authored. The
+  // authenticated CRUD surface mounts under the query scope; the public
+  // JSON + viewer are unauthenticated and registered before `query`.
+  let statusStore : PulseBoard.StatusPages.IStatusStore =
+    match pgConn with
+    | Some cs ->
+      PulseBoard.PgStatusStore.ensureSchema cs
+      PulseBoard.PgStatusStore.PgStatusStore(cs) :> _
+    | None ->
+      PulseBoard.StatusPages.FileStatusStore(Path.Combine(dataDir, "status")) :> _
+  let statusTenants () =
+    if multiTenant then tenantStore.Tenants() |> Array.map (fun t -> t.id)
+    else [| PulseBoard.Tenancy.TenantId "__local__" |]
+  let statusWindowMs = 24L * 60L * 60L * 1000L
+  let statusCheckName (tid : PulseBoard.Tenancy.TenantId) (checkId : string) =
+    syntheticStore.TryGet(tid, checkId) |> Option.map (fun c -> c.name)
+  let statusIncidents (tid : PulseBoard.Tenancy.TenantId) : PulseBoard.StatusPages.Incident[] =
+    ruleEvaluator.Active tid
+    |> Array.filter (fun a -> a.state = PulseBoard.Rules.AlertState.Firing)
+    |> Array.map (fun a ->
+      ( { title    = a.ruleName
+          severity = PulseBoard.Rules.severityToStr a.severity
+          summary  = (a.annotations |> Map.tryFind "summary" |> Option.defaultValue "")
+          since    = (a.firedAt |> Option.defaultValue a.activeAt)
+          labels   = a.labels } : PulseBoard.StatusPages.Incident ))
+  let statusLiveOf (tid : PulseBoard.Tenancy.TenantId) (p : PulseBoard.StatusPages.StatusPage) =
+    PulseBoard.StatusPages.renderLive metricStore (statusCheckName tid)
+      (statusIncidents tid) statusWindowMs p
+  let statusInner =
+    PulseBoard.StatusPages.webPart multiTenant statusStore statusLiveOf
+  let statusResolveBySlug (slug : string) =
+    statusTenants ()
+    |> Array.tryPick (fun tid ->
+      statusStore.List tid
+      |> Array.tryFind (fun p -> p.slug = slug)
+      |> Option.map (fun p -> tid, p))
+  let statusDefaultPage () =
+    statusTenants ()
+    |> Array.tryPick (fun tid ->
+      statusStore.List tid |> Array.tryHead |> Option.map (fun p -> tid, p))
+  let statusPublicInner =
+    PulseBoard.StatusPages.publicWebPart wwwroot statusResolveBySlug statusDefaultPage statusLiveOf
+
   // Seed a tenant + admin API key when running in multi-tenant mode. Without
   // a seed the in-memory store is empty and every authenticated route 403s,
   // which is correct but unhelpful; print a clear warning instead.
@@ -1047,6 +1134,42 @@ let main argv =
     PulseBoard.Dashboards.seedIfEmpty dashboardRepo PulseBoard.Dashboards.singleTenantId
   let dashboardsInner =
     PulseBoard.Dashboards.webPart multiTenant dashboardRepo
+
+  // -- GitOps git-sync + export-as-code (PLAN-NEXT.md 14.5) ----------------
+  // When git-sync is configured, start the background syncer (after an
+  // immediate boot-time pull) and expose a read-only guard so the CRUD
+  // APIs return 405. Export-as-code endpoints are always available.
+  let gitSyncer =
+    match gitOpsConfig with
+    | Some cfg ->
+      let targetTenant () =
+        match envOr "PULSE_GITOPS_TENANT" (argValue "--gitops-tenant=") with
+        | Some slug -> PulseBoard.Tenancy.TenantId (slug.Trim())
+        | None -> PulseBoard.Dashboards.singleTenantId
+      let s = PulseBoard.GitSync.Syncer(cfg, dashboardRepo, ruleStore, targetTenant)
+      (try s.SyncOnce(force = true) |> ignore
+       with ex -> eprintfn "  [WARN] initial git-sync failed: %s" ex.Message)
+      s.Start()
+      printfn "  GitOps: git-sync ACTIVE (url=%s branch=%s interval=%dms) — dashboards/rules read-only via API"
+        cfg.url cfg.branch cfg.intervalMs
+      Some s
+    | None -> None
+  let gitOpsGuardInner : WebPart =
+    match gitSyncer with
+    | Some _ -> PulseBoard.GitSync.readOnlyGuard
+    | None -> fun _ -> async { return None }
+  let gitOpsStatusInner : WebPart =
+    match gitSyncer with
+    | Some s -> PulseBoard.GitSync.statusWebPart s
+    | None -> fun _ -> async { return None }
+  let exportInner : WebPart =
+    let resolveExportTenant (ctx : HttpContext) =
+      if multiTenant then
+        match PulseBoard.Rbac.tryGetTenant ctx with
+        | Some t -> t.tenant.id
+        | None   -> PulseBoard.Dashboards.singleTenantId
+      else PulseBoard.Dashboards.singleTenantId
+    PulseBoard.ExportCode.webPart resolveExportTenant dashboardRepo ruleStore routingStore
 
   // -- Self-observability (PLAN.md Phase 6 #6) -----------------------------
   // Reserve the `__meta__` tenant, seed its dashboard, and start an SLO
@@ -1272,7 +1395,7 @@ let main argv =
 
   let query : WebPart =
     let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
-    let combinedInner = choose [ queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; aiExplainInner; queryInner ]
+    let combinedInner = choose [ gitOpsGuardInner; gitOpsStatusInner; exportInner; queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; statusInner; aiExplainInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
@@ -1381,6 +1504,7 @@ let main argv =
       secretsAdmin   // /api/secrets/* — also Admin-scoped, sibling of admin
       PulseBoard.Admin.pricingWebPart ()   // Phase 8 #5 — public rate card + calculator
       agentApiInner // Phase 13 — agent enroll/checkin + portal fleet endpoints
+      statusPublicInner // PLAN-NEXT 14.6 — public status pages (/api/public/status*, /status*)
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       whoamiRoute

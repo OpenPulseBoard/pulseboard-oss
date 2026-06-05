@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Status</title>
+  <style>
+    :root {
+      --bg: #0f1115; --card: #171a21; --line: #262b36; --fg: #e6e9ef;
+      --muted: #9aa3b2; --ok: #2ecc71; --down: #e74c3c; --warn: #f1c40f;
+      --unknown: #6b7280;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 80px; }
+    header { margin-bottom: 28px; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    .desc { color: var(--muted); margin: 0; }
+    .banner {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px 18px; border-radius: 10px; margin: 22px 0;
+      border: 1px solid var(--line); background: var(--card); font-weight: 600;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; }
+    .s-operational .dot, .dot.operational { background: var(--ok); }
+    .s-degraded .dot, .dot.down { background: var(--down); }
+    .s-major_outage .dot { background: var(--down); }
+    .s-unknown .dot, .dot.unknown { background: var(--unknown); }
+    .banner.s-operational { border-color: rgba(46,204,113,.4); }
+    .banner.s-degraded, .banner.s-major_outage { border-color: rgba(231,76,60,.4); }
+    section { margin-top: 30px; }
+    section h2 {
+      font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--muted); margin: 0 0 12px;
+    }
+    .comp, .item {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 14px 16px; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--card); margin-bottom: 10px;
+    }
+    .comp .meta { min-width: 0; }
+    .comp .name { font-weight: 600; }
+    .comp .sub { color: var(--muted); font-size: 13px; }
+    .comp .right { text-align: right; white-space: nowrap; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 13px; font-weight: 600;
+    }
+    .uptime { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .item .when { color: var(--muted); font-size: 13px; }
+    .item .tag {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+      padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+      color: var(--warn);
+    }
+    .item.incident .tag { color: var(--down); border-color: rgba(231,76,60,.4); }
+    .empty { color: var(--muted); font-size: 14px; }
+    footer { margin-top: 50px; color: var(--muted); font-size: 12px; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 id="title">Status</h1>
+      <p class="desc" id="desc"></p>
+    </header>
+    <div class="banner s-unknown" id="banner">
+      <span class="dot"></span>
+      <span id="banner-text">Loading…</span>
+    </div>
+
+    <section id="incidents-section" style="display:none">
+      <h2>Active incidents</h2>
+      <div id="incidents"></div>
+    </section>
+
+    <section id="maint-section" style="display:none">
+      <h2>Maintenance</h2>
+      <div id="maintenances"></div>
+    </section>
+
+    <section>
+      <h2>Components</h2>
+      <div id="components"><p class="empty">Loading…</p></div>
+    </section>
+
+    <footer>
+      <span id="updated"></span> · Auto-refreshes every 30s ·
+      <a href="/">PulseBoard</a>
+    </footer>
+  </div>
+
+  <script>
+    "use strict";
+
+    // Derive the API endpoint from the path: /status/<slug> -> by slug,
+    // bare /status -> the default page.
+    function endpoint() {
+      var m = window.location.pathname.match(/^\/status\/([^\/]+)\/?$/);
+      return m ? "/api/public/status/" + encodeURIComponent(m[1])
+               : "/api/public/status";
+    }
+
+    var STATUS_LABEL = {
+      operational: "All systems operational",
+      degraded: "Some systems degraded",
+      major_outage: "Major outage",
+      unknown: "Status unknown"
+    };
+    var COMP_LABEL = {
+      operational: "Operational",
+      down: "Down",
+      unknown: "No data"
+    };
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return "";
+      try { return new Date(ms).toLocaleString(); } catch (e) { return ""; }
+    }
+
+    function render(d) {
+      document.title = (d.title || "Status");
+      document.getElementById("title").textContent = d.title || "Status";
+      document.getElementById("desc").textContent = d.description || "";
+
+      var banner = document.getElementById("banner");
+      banner.className = "banner s-" + (d.status || "unknown");
+      document.getElementById("banner-text").textContent =
+        STATUS_LABEL[d.status] || STATUS_LABEL.unknown;
+
+      // Components
+      var comps = d.components || [];
+      var ch = document.getElementById("components");
+      if (!comps.length) {
+        ch.innerHTML = '<p class="empty">No components configured.</p>';
+      } else {
+        ch.innerHTML = comps.map(function (c) {
+          var st = c.status || "unknown";
+          var up = (c.uptime == null) ? ""
+            : '<div class="uptime">' + (c.uptime * 100).toFixed(2) +
+              '% uptime (24h)</div>';
+          return '<div class="comp">' +
+            '<div class="meta">' +
+              '<div class="name">' + esc(c.name) + '</div>' +
+              (c.description ? '<div class="sub">' + esc(c.description) + '</div>' : '') +
+            '</div>' +
+            '<div class="right">' +
+              '<span class="pill"><span class="dot ' + esc(st) + '"></span>' +
+                (COMP_LABEL[st] || st) + '</span>' + up +
+            '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      // Incidents
+      var inc = d.incidents || [];
+      var isec = document.getElementById("incidents-section");
+      var ih = document.getElementById("incidents");
+      if (inc.length) {
+        isec.style.display = "";
+        ih.innerHTML = inc.map(function (i) {
+          return '<div class="item incident">' +
+            '<div class="meta">' +
+              '<div class="name">' + esc(i.title) + '</div>' +
+              (i.summary ? '<div class="when">' + esc(i.summary) + '</div>' : '') +
+              '<div class="when">Since ' + esc(fmtTime(i.since)) + '</div>' +
+            '</div>' +
+            '<span class="tag">' + esc(i.severity || "incident") + '</span>' +
+          '</div>';
+        }).join("");
+      } else {
+        isec.style.display = "none";
+      }
+
+      // Maintenance
+      var mnt = d.maintenances || [];
+      var msec = document.getElementById("maint-section");
+      var mh = document.getElementById("maintenances");
+      if (mnt.length) {
+        msec.style.display = "";
+        mh.innerHTML = mnt.map(function (m) {
+          var when = "Scheduled " + esc(fmtTime(m.startsAt)) +
+            (m.endsAt ? " → " + esc(fmtTime(m.endsAt)) : "");
+          return '<div class="item">' +
+            '<div class="meta">' +
+              '<div class="name">' + esc(m.title) + '</div>' +
+              (m.body ? '<div class="when">' + esc(m.body) + '</div>' : '') +
+              '<div class="when">' + when + '</div>' +
+            '</div>' +
+            '<span class="tag">' + (m.active ? "In progress" : "Scheduled") + '</span>' +
+          '</div>';
+        }).join("");
+      } else {
+        msec.style.display = "none";
+      }
+
+      document.getElementById("updated").textContent =
+        "Updated " + fmtTime(d.generatedAt || Date.now());
+    }
+
+    function load() {
+      fetch(endpoint(), { headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(render)
+        .catch(function () {
+          document.getElementById("banner").className = "banner s-unknown";
+          document.getElementById("banner-text").textContent =
+            "Status page unavailable";
+          document.getElementById("components").innerHTML =
+            '<p class="empty">No status page is configured.</p>';
+        });
+    }
+
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>

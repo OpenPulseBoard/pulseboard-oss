@@ -286,17 +286,19 @@ We already have metrics + logs + traces + RUM in one process. Wire the UI so:
 
 ### 14.5 GitOps for everything
 
-- **Terraform provider** (`pulseboard/pulseboard`) covering tenants, API keys, dashboards, rule groups, routing, on-call schedules, integrations.
-- **Git-sync mode** on each workspace: configure a Git URL + path; the workspace pulls dashboards/rules from `dashboards/` and `rules/` directories on a 30s cadence; CRUD APIs return 405 in this mode.
-- **Export-as-code** on every UI surface: every dashboard / rule / route has "copy as Terraform / copy as YAML" buttons.
+- **Terraform provider** (`pulseboard/pulseboard`) covering tenants, API keys, dashboards, rule groups, routing, on-call schedules, integrations. _(deferred — lives in a separate Go repo)_
+- **Git-sync mode** on each workspace ✅: configure a Git URL + path; the workspace pulls dashboards/rules from `dashboards/` and `rules/` directories on a 30s cadence; CRUD APIs return 405 in this mode. _(`GitSync.fs`; `--gitops-url=`/`PULSE_GITOPS_URL` + branch/path/interval/ssh-key/token-env/prune flags; HTTPS-token & SSH auth; filename = stable resource id; prune-on-reconcile; `GET /api/gitops/status`.)_
+- **Export-as-code** on every UI surface ✅: every dashboard / rule / route has "copy as Terraform / copy as YAML" buttons. _(`ExportCode.fs`; `GET /api/export/{dashboards/<id>,rules/<id>,routing}?format=tf|yaml`; SPA `</> Code` modal on the dashboard toolbar and per rule group.)_
 
-### 14.6 Built-in public status pages
+### 14.6 Built-in public status pages ✅
 
 Reuse existing SLO computation in `Self.fs`. Per workspace:
 
 - Define one or more "status components" backed by a query / SLO.
 - Auto-publish `status.<workspace>.pulseboard.cloud` (or BYO domain) with uptime history, current incidents auto-derived from active alert groups, scheduled maintenance windows.
 - Customers cancel their statuspage.io contract; we add a $29/mo line item.
+
+**Shipped:** `StatusPages.fs` (model + validate + JSON codecs + `IStatusStore`/`FileStatusStore` + live-status renderer reusing the MetricStore series, synthetic checks, and firing alerts) and `PgStatusStore.fs` (Postgres backend). Components are backed by either a 14.8 synthetic check (`pulse_synthetic_up`) or any metric series + comparison; uptime is averaged over a 24h window; incidents auto-derive from `ruleEvaluator.Active` firing alerts; operator-authored maintenance windows. Admin CRUD under `/api/status/pages` (Query scope) with a `/preview` endpoint; unauthenticated public surface `GET /api/public/status[/<slug>]` + a self-contained `status.html` viewer at `/status[/<slug>]` (auto-refresh 30s). SPA "Status" tab for page/component/maintenance CRUD. 16 unit tests in `StatusPagesTests.fs`.
 
 ### 14.7 Continuous profiling (defer evaluation until Phase 12 ships flame graph)
 
