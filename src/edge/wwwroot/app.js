@@ -120,7 +120,7 @@ function showView(name) {
   if (name === "traces")  loadTraces();
   if (name === "map")     loadServiceMap();
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
-  if (name === "alerts")  loadRules();
+  if (name === "alerts")  showAlertsSub(_alertsSub || "firing");
   if (name === "agents")  loadAgents();
   if (name === "synthetics") loadSynthetics();
   if (name === "status")     loadStatusPages();
@@ -3989,7 +3989,11 @@ function router() {
   else if (h.startsWith("#/explore")) showView("explore");
   else if (h.startsWith("#/traces"))  showView("traces");
   else if (h.startsWith("#/library")) showView("library");
-  else if (h.startsWith("#/alerts"))  showView("alerts");
+  else if (h.startsWith("#/alerts"))  {
+    const sub = h.slice("#/alerts".length).replace(/^\//, "");
+    _alertsSub = (sub === "rules" || sub === "routing" || sub === "silences" || sub === "oncall" || sub === "notify") ? sub : "firing";
+    showView("alerts");
+  }
   else if (h.startsWith("#/agents"))  showView("agents");
   else if (h.startsWith("#/uptime"))  showView("synthetics");
   else if (h.startsWith("#/status"))  showView("status");
@@ -4453,6 +4457,1552 @@ function currentUser() {
 $("runbook-modal-close").addEventListener("click", () => $("runbook-modal").classList.remove("open"));
 $("runbook-modal").addEventListener("click", (e) => {
   if (e.target === $("runbook-modal")) $("runbook-modal").classList.remove("open");
+});
+
+// ── Firing alerts view (Stage 1) ─────────────────────────────────────
+// Surfaces live alert instances from GET /api/alerts (pending + firing).
+// The "Alerts" tab is split into two sub-views: Firing and Rules.
+let _alertsSub      = "firing";     // "firing" | "rules"
+let _firingAlerts   = [];           // cached AlertInstance[]
+let _firingPollTimer = null;        // refresh while the Firing sub-view is open
+let _badgePollTimer  = null;        // background nav-badge poll (any view)
+
+function showAlertsSub(name) {
+  _alertsSub = (name === "rules" || name === "routing" || name === "silences" || name === "oncall" || name === "notify") ? name : "firing";
+  $("alerts-sub-firing").classList.toggle("hidden",   _alertsSub !== "firing");
+  $("alerts-sub-rules").classList.toggle("hidden",    _alertsSub !== "rules");
+  $("alerts-sub-silences").classList.toggle("hidden", _alertsSub !== "silences");
+  $("alerts-sub-routing").classList.toggle("hidden",  _alertsSub !== "routing");
+  $("alerts-sub-oncall").classList.toggle("hidden",   _alertsSub !== "oncall");
+  $("alerts-sub-notify").classList.toggle("hidden",   _alertsSub !== "notify");
+  $("asub-firing").classList.toggle("active",   _alertsSub === "firing");
+  $("asub-rules").classList.toggle("active",    _alertsSub === "rules");
+  $("asub-silences").classList.toggle("active", _alertsSub === "silences");
+  $("asub-routing").classList.toggle("active",  _alertsSub === "routing");
+  $("asub-oncall").classList.toggle("active",   _alertsSub === "oncall");
+  $("asub-notify").classList.toggle("active",   _alertsSub === "notify");
+  stopFiringPoll();
+  stopNotifyPoll();
+  if (_alertsSub === "firing") { loadFiringAlerts(); startFiringPoll(); }
+  else if (_alertsSub === "routing") loadRouting();
+  else if (_alertsSub === "silences") loadSilences();
+  else if (_alertsSub === "oncall") loadOncall();
+  else if (_alertsSub === "notify") { loadNotify(); startNotifyPoll(); }
+  else loadRules();
+}
+
+function startFiringPoll() {
+  stopFiringPoll();
+  _firingPollTimer = setInterval(() => {
+    if (_alertsSub === "firing" && !document.hidden) loadFiringAlerts(true);
+  }, 10000);
+}
+function stopFiringPoll() {
+  if (_firingPollTimer) { clearInterval(_firingPollTimer); _firingPollTimer = null; }
+}
+
+function updateFiringBadge(alerts) {
+  const b = $("alerts-nav-badge");
+  if (!b) return;
+  const n = (alerts || []).filter(a => (a.state || "").toLowerCase() === "firing").length;
+  if (n > 0) { b.textContent = String(n); b.classList.remove("hidden"); b.title = n + " firing alert(s)"; }
+  else b.classList.add("hidden");
+}
+
+// Background poll so the nav badge reflects firing alerts from any view.
+async function pollFiringBadge() {
+  try {
+    const r = await authFetch("/api/alerts");
+    if (!r.ok) return;
+    updateFiringBadge(await r.json());
+  } catch { /* best-effort */ }
+}
+function startBadgePoll() {
+  if (_badgePollTimer) return;
+  pollFiringBadge();
+  _badgePollTimer = setInterval(() => { if (!document.hidden) pollFiringBadge(); }, 20000);
+}
+
+async function loadFiringAlerts(quiet) {
+  const host = $("firing-list");
+  if (!quiet) host.innerHTML = '<div class="rules-empty" style="padding:0 20px;">Loading…</div>';
+  try {
+    const alerts = await api("GET", "/api/alerts");
+    _firingAlerts = Array.isArray(alerts) ? alerts : [];
+    updateFiringBadge(_firingAlerts);
+    // Best-effort ack enrichment (active alert count is small).
+    await Promise.all(_firingAlerts.map(async a => {
+      try {
+        const acks = await api("GET", "/api/alerts/" + encodeURIComponent(a.fingerprint) + "/acks");
+        a._acks = Array.isArray(acks) ? acks : [];
+      } catch { a._acks = []; }
+    }));
+    renderFiringAlerts();
+  } catch (e) {
+    host.innerHTML = `<div class="rules-empty" style="padding:0 20px;color:var(--err);">Failed to load alerts: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderFiringAlerts() {
+  const host = $("firing-list");
+  const alerts = _firingAlerts;
+  const firing  = alerts.filter(a => (a.state || "").toLowerCase() === "firing").length;
+  const pending = alerts.filter(a => (a.state || "").toLowerCase() === "pending").length;
+  $("alerts-firing-summary").textContent =
+    alerts.length ? `${firing} firing · ${pending} pending` : "";
+  if (!alerts.length) {
+    host.innerHTML = '<div class="rules-empty" style="padding:0 20px;">No firing or pending alerts.</div>';
+    return;
+  }
+  const ord = { firing: 0, pending: 1 };
+  const sorted = alerts.slice().sort((a, b) => {
+    const sa = ord[(a.state || "").toLowerCase()] ?? 2;
+    const sb = ord[(b.state || "").toLowerCase()] ?? 2;
+    if (sa !== sb) return sa - sb;
+    return (b.firedAt || b.activeAt || 0) - (a.firedAt || a.activeAt || 0);
+  });
+  host.innerHTML = sorted.map(firingRowHtml).join("");
+  host.querySelectorAll("button[data-fact]").forEach(btn => {
+    btn.addEventListener("click", () => onFiringAction(
+      btn.getAttribute("data-fact"), btn.getAttribute("data-fp")));
+  });
+}
+
+function firingRowHtml(a) {
+  const st  = (a.state || "ok").toLowerCase();
+  const sev = (a.severity || (a.labels && a.labels.severity) || "warning").toLowerCase();
+  const name = a.ruleName || a.ruleId || "(unnamed)";
+  const since = a.firedAt || a.activeAt;
+  const labels = a.labels || {};
+  const labelChips = Object.entries(labels)
+    .filter(([k]) => k !== "severity" && k !== "alertname")
+    .map(([k, v]) => `<span class="lbl-chip">${escapeHtml(k)}=${escapeHtml(v)}</span>`).join("");
+  const summary = (a.annotations && (a.annotations.summary || a.annotations.description)) || "";
+  const acked = a._acks && a._acks.length;
+  const ackChip = acked
+    ? `<span class="ack-chip">✓ ack ${escapeHtml(a._acks[a._acks.length - 1].user || "")}</span>`
+    : "";
+  const fp = a.fingerprint;
+  const active = (st === "firing" || st === "pending");
+  const valStr = (typeof a.value === "number") ? `value ${(+a.value).toPrecision(4)}` : "";
+  return `<div class="firing-row ${st}">
+    <span class="al-state ${st}">${escapeHtml(st)}</span>
+    <div class="fr-main">
+      <div class="fr-title">${escapeHtml(name)}
+        <span class="sev ${sev}">${escapeHtml(sev)}</span>
+        ${ackChip}
+      </div>
+      ${summary ? `<div class="fr-summary">${escapeHtml(summary)}</div>` : ""}
+      <div class="fr-labels">${labelChips}</div>
+    </div>
+    <div class="fr-meta">
+      <div class="fr-val">${valStr}</div>
+      <div class="fr-age">${since ? escapeHtml(fmtAge(since)) : ""}</div>
+    </div>
+    <div class="fr-actions">
+      ${active ? `<button data-fact="ack" data-fp="${escapeHtml(fp)}">${acked ? "Re-ack" : "Ack"}</button>` : ""}
+      <button data-fact="silence" data-fp="${escapeHtml(fp)}">Silence</button>
+      ${active ? `<button data-fact="correlate" data-fp="${escapeHtml(fp)}">Correlate</button>` : ""}
+      ${a.runbook ? `<button data-fact="runbook" data-fp="${escapeHtml(fp)}">Runbook</button>` : ""}
+    </div>
+  </div>`;
+}
+
+async function onFiringAction(act, fp) {
+  const a = _firingAlerts.find(x => x.fingerprint === fp);
+  const name = a ? (a.ruleName || a.ruleId || fp) : fp;
+  try {
+    if (act === "correlate") { openCorrelation(fp, name); return; }
+    if (act === "runbook")   { openRunbook(fp, name); return; }
+    if (act === "ack") {
+      await api("POST", "/api/alerts/" + encodeURIComponent(fp) + "/ack", { user: currentUser() });
+      await loadFiringAlerts();
+      return;
+    }
+    if (act === "silence")   { await quickSilence(a); return; }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+// Quick silence from a firing alert. The full silence manager arrives in a
+// later stage; this builds a tight matcher set from the alert's own labels.
+async function quickSilence(a) {
+  if (!a) return;
+  const name = a.ruleName || a.ruleId || "alert";
+  const hrsStr = prompt(`Silence "${name}" for how many hours?`, "1");
+  if (hrsStr === null) return;
+  const hrs = parseFloat(hrsStr);
+  if (!(hrs > 0)) { alert("Enter a positive number of hours."); return; }
+  const comment = prompt("Comment (optional)", "silenced from Alerts view") || "";
+  const labels = a.labels || {};
+  const matchers = [{
+    name: "alertname", op: "=",
+    value: labels.alertname || a.ruleName || a.ruleId || "",
+  }];
+  for (const k of ["instance", "host", "service", "pod", "node"]) {
+    if (labels[k]) matchers.push({ name: k, op: "=", value: labels[k] });
+  }
+  const now = Date.now();
+  await api("POST", "/api/silences", {
+    matchers,
+    startsAt: now,
+    endsAt: now + Math.round(hrs * 3600000),
+    createdBy: currentUser(),
+    comment,
+  });
+  alert("Silence created. It takes effect on the next evaluation.");
+  await loadFiringAlerts();
+}
+
+// ── Silences manager (Stage 3) ───────────────────────────────────────
+// Full CRUD over /api/silences. A silence = { id, matchers[], startsAt,
+// endsAt, createdBy, comment, createdAt }. POST upserts by id; DELETE by id.
+let _silences = [];
+
+async function loadSilences() {
+  const host = $("silences-body");
+  host.innerHTML = '<div class="sil-empty">Loading…</div>';
+  try {
+    const list = await api("GET", "/api/silences");
+    _silences = Array.isArray(list) ? list : [];
+    renderSilences();
+  } catch (e) {
+    host.innerHTML = `<div class="sil-empty" style="color:var(--err);">Failed to load silences: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function silenceState(s, now) {
+  if (now >= s.endsAt) return "expired";
+  if (now < s.startsAt) return "pending";
+  return "active";
+}
+
+function renderSilences() {
+  const now = Date.now();
+  // Active first, then pending, then expired; within a bucket soonest-ending first.
+  const order = { active: 0, pending: 1, expired: 2 };
+  const rows = _silences.slice().sort((a, b) => {
+    const d = order[silenceState(a, now)] - order[silenceState(b, now)];
+    return d !== 0 ? d : a.endsAt - b.endsAt;
+  });
+  const active = rows.filter(s => silenceState(s, now) === "active").length;
+  $("silences-summary").textContent =
+    `${rows.length} silence(s) · ${active} active`;
+
+  $("silences-body").innerHTML = rows.length ? rows.map(s => silenceRowHtml(s, now)).join("")
+    : '<div class="sil-empty">No silences. Create one to suppress known noise during maintenance.</div>';
+
+  $("silences-body").querySelectorAll("button[data-sil]").forEach(btn => {
+    btn.addEventListener("click", () => onSilenceAction(
+      btn.getAttribute("data-sil"), btn.getAttribute("data-id")));
+  });
+}
+
+function silenceRowHtml(s, now) {
+  const st = silenceState(s, now);
+  const matchers = (s.matchers || []).map(matcherText).map(escapeHtml).join(", ") || "—";
+  let when;
+  if (st === "pending")      when = `starts in ${fmtDuration(s.startsAt - now)} · ends ${fmtClock(s.endsAt)}`;
+  else if (st === "active")  when = `ends in ${fmtDuration(s.endsAt - now)} · ${fmtClock(s.startsAt)} → ${fmtClock(s.endsAt)}`;
+  else                       when = `expired ${fmtAge(now - s.endsAt)} · ${fmtClock(s.startsAt)} → ${fmtClock(s.endsAt)}`;
+  const by = s.createdBy ? ` · by ${escapeHtml(s.createdBy)}` : "";
+  return `<div class="sil-row">
+    <div class="grow">
+      <div class="sil-main">
+        <span class="sil-state ${st}">${st}</span>
+        <span class="sil-matchers">${matchers}</span>
+      </div>
+      <div class="sil-sub">${escapeHtml(when)}${by}</div>
+      ${s.comment ? `<div class="sil-comment">${escapeHtml(s.comment)}</div>` : ""}
+    </div>
+    <div class="sil-actions">
+      ${st === "expired" ? "" : `<button data-sil="edit" data-id="${escapeHtml(s.id)}">Edit</button>`}
+      <button class="danger" data-sil="del" data-id="${escapeHtml(s.id)}">${st === "active" ? "Expire" : "Delete"}</button>
+    </div>
+  </div>`;
+}
+
+async function onSilenceAction(act, id) {
+  try {
+    if (act === "edit") { openSilenceModal(id); return; }
+    if (act === "del") {
+      const s = _silences.find(x => x.id === id);
+      const st = s ? silenceState(s, Date.now()) : "expired";
+      const verb = st === "active" ? "Expire this active silence now?" : "Delete this silence?";
+      if (!confirm(verb)) return;
+      await api("DELETE", "/api/silences/" + encodeURIComponent(id));
+      await loadSilences();
+      pollFiringBadge();
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+// Format a forward duration (ms) like "2h 5m", "45m", "30s".
+function fmtDuration(ms) {
+  ms = Math.max(0, ms);
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.round(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60), rem = m % 60;
+  if (h < 24) return rem ? `${h}h ${rem}m` : `${h}h`;
+  const d = Math.floor(h / 24), hr = h % 24;
+  return hr ? `${d}d ${hr}h` : `${d}d`;
+}
+// Local wall-clock for an epoch-ms instant.
+function fmtClock(ms) {
+  try {
+    return new Date(ms).toLocaleString([], {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  } catch { return new Date(ms).toISOString(); }
+}
+// epoch-ms → value for <input type="datetime-local"> (local time, no seconds).
+function toLocalInput(ms) {
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+function fromLocalInput(v) {
+  const t = Date.parse(v);
+  return isNaN(t) ? null : t;
+}
+
+let _silenceEditId = null;
+function openSilenceModal(id) {
+  _silenceEditId = id;
+  const s = id ? _silences.find(x => x.id === id) : null;
+  const now = Date.now();
+  const cur = s || {
+    matchers: [{ name: "alertname", op: "=", value: "" }],
+    startsAt: now, endsAt: now + 3600000, comment: "",
+  };
+  $("silence-modal-title").textContent = id ? "Edit silence" : "New silence";
+  $("silence-modal-body").innerHTML = `
+    <div class="rule-field"><label>Matchers <span class="hint">— all must match the alert's labels</span></label>
+      ${matcherListEditor("silence-matchers", cur.matchers)}</div>
+    <div class="rule-field-row">
+      <div class="rule-field"><label>Starts</label>
+        <input id="silence-f-start" type="datetime-local" style="width:100%;" value="${toLocalInput(cur.startsAt)}" /></div>
+      <div class="rule-field"><label>Ends</label>
+        <input id="silence-f-end" type="datetime-local" style="width:100%;" value="${toLocalInput(cur.endsAt)}" /></div>
+    </div>
+    <div class="rule-field">
+      <label>Quick duration from now</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${[["1h",1],["4h",4],["12h",12],["1d",24],["1w",168]].map(([lbl,h]) =>
+          `<button type="button" class="sil-quick" data-h="${h}" style="font-size:11px;padding:3px 9px;">${lbl}</button>`).join("")}
+      </div>
+    </div>
+    <div class="rule-field"><label>Comment</label>
+      <input id="silence-f-comment" style="width:100%;" value="${escapeHtml(cur.comment || "")}" placeholder="maintenance window" /></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="silence-f-save" class="primary">Save silence</button>
+      <span id="silence-f-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  $("silence-modal-body").querySelectorAll(".sil-quick").forEach(b => {
+    b.addEventListener("click", () => {
+      const start = Date.now();
+      $("silence-f-start").value = toLocalInput(start);
+      $("silence-f-end").value = toLocalInput(start + (+b.getAttribute("data-h")) * 3600000);
+    });
+  });
+  $("silence-f-save").addEventListener("click", saveSilenceFromModal);
+  $("silence-modal").classList.add("open");
+}
+
+async function saveSilenceFromModal() {
+  const matchers = readMatcherList("silence-matchers");
+  if (!matchers.length) { $("silence-f-err").textContent = "At least one matcher is required."; return; }
+  const startsAt = fromLocalInput($("silence-f-start").value);
+  const endsAt = fromLocalInput($("silence-f-end").value);
+  if (startsAt == null || endsAt == null) { $("silence-f-err").textContent = "Valid start and end times are required."; return; }
+  if (endsAt <= startsAt) { $("silence-f-err").textContent = "End must be after start."; return; }
+  const body = {
+    matchers, startsAt, endsAt,
+    createdBy: currentUser(),
+    comment: $("silence-f-comment").value.trim(),
+  };
+  if (_silenceEditId) body.id = _silenceEditId;
+  try {
+    await api("POST", "/api/silences", body);
+    $("silence-modal").classList.remove("open");
+    await loadSilences();
+    pollFiringBadge();
+  } catch (e) { $("silence-f-err").textContent = e.message; }
+}
+
+// ── On-call & escalation (Stage 4) ───────────────────────────────────
+// The on-call catalog { users, schedules, policies } is read/replaced as
+// one document via GET/PUT /api/oncall/catalog. Escalation-step targets
+// use `kind` ∈ receiver|schedule|user (NOT `type`). "On call now" per
+// schedule is read from GET /api/oncall/whoison/{scheduleId}.
+let _catalog = null;
+let _catalogRecv = [];   // receivers [{id,name,type}] from routing config (for target/user pickers)
+
+const TARGET_KINDS = ["schedule", "user", "receiver"];
+
+async function loadOncall() {
+  const host = $("oncall-body");
+  host.innerHTML = '<div class="rt-empty">Loading…</div>';
+  try {
+    _catalog = await api("GET", "/api/oncall/catalog");
+    _catalog.users = _catalog.users || [];
+    _catalog.schedules = _catalog.schedules || [];
+    _catalog.policies = _catalog.policies || [];
+    // Best-effort: receivers so users/targets can be picked by name.
+    try {
+      const cfg = await api("GET", "/api/alertmanager/config");
+      _catalogRecv = (cfg && cfg.receivers) || [];
+    } catch { _catalogRecv = []; }
+    renderOncall();
+    refreshWhoIsOn();
+  } catch (e) {
+    host.innerHTML = `<div class="rt-empty" style="color:var(--err);">Failed to load on-call catalog: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function saveCatalog() {
+  if (!_catalog) return;
+  await api("PUT", "/api/oncall/catalog", _catalog);
+  await loadOncall();
+}
+
+function ocUserName(id) {
+  const u = (_catalog.users || []).find(x => x.id === id);
+  return u ? u.name || u.id : id;
+}
+function ocSchedName(id) {
+  const s = (_catalog.schedules || []).find(x => x.id === id);
+  return s ? s.name || s.id : id;
+}
+function ocRecvName(id) {
+  const r = _catalogRecv.find(x => x.id === id);
+  return r ? r.name : id;
+}
+function fmtPeriod(ms) {
+  const h = Math.round((ms || 0) / 3600000);
+  if (h % 168 === 0 && h >= 168) return (h / 168) + "w";
+  if (h % 24 === 0 && h >= 24) return (h / 24) + "d";
+  return h + "h";
+}
+
+function renderOncall() {
+  const c = _catalog;
+  $("oncall-summary").textContent =
+    `${c.users.length} user(s) · ${c.schedules.length} schedule(s) · ${c.policies.length} policy(ies)`;
+
+  const userRows = c.users.length ? c.users.map(u => `
+    <div class="rt-item">
+      <div class="grow">
+        <div class="ri-name">${escapeHtml(u.name || u.id)}</div>
+        <div class="ri-sub">${escapeHtml(u.email || "(no email)")}${(u.receiverIds && u.receiverIds.length) ? " · " + u.receiverIds.map(ocRecvName).map(escapeHtml).join(", ") : ""}</div>
+      </div>
+      <button data-ocact="edit-user" data-id="${escapeHtml(u.id)}">Edit</button>
+      <button class="danger" data-ocact="del-user" data-id="${escapeHtml(u.id)}">Delete</button>
+    </div>`).join("") : '<div class="rt-empty">No users.</div>';
+
+  const schedRows = c.schedules.length ? c.schedules.map(s => {
+    const rot = (s.rotations || []).map(r =>
+      `${(r.members || []).map(ocUserName).map(escapeHtml).join(" → ") || "(empty)"} every ${fmtPeriod(r.periodMs)}`).join("; ");
+    return `<div class="rt-item">
+      <div class="grow">
+        <div class="ri-name">${escapeHtml(s.name || s.id)}
+          <span class="oc-onnow none" id="onnow-${escapeHtml(s.id)}">—</span></div>
+        <div class="oc-sched-rot">${escapeHtml(rot || "no rotations")}${(s.overrides && s.overrides.length) ? " · " + s.overrides.length + " override(s)" : ""}</div>
+      </div>
+      <button data-ocact="edit-sched" data-id="${escapeHtml(s.id)}">Edit</button>
+      <button class="danger" data-ocact="del-sched" data-id="${escapeHtml(s.id)}">Delete</button>
+    </div>`;
+  }).join("") : '<div class="rt-empty">No schedules.</div>';
+
+  const polRows = c.policies.length ? c.policies.map(p => {
+    const steps = (p.steps || []).map((st, i) => {
+      const tgts = (st.targets || []).map(t => {
+        const label = t.kind === "user" ? ocUserName(t.id)
+          : t.kind === "schedule" ? ocSchedName(t.id)
+          : ocRecvName(t.id);
+        return `<span class="oc-tgt-chip">${escapeHtml(t.kind)}: ${escapeHtml(label)}</span>`;
+      }).join("") || '<span class="hint">no targets</span>';
+      const delay = i === 0 ? "immediately" : "after " + fmtDuration(st.delayMs);
+      return `<div class="oc-step"><span class="oc-step-n">step ${i + 1}</span>
+        <div class="oc-step-tgts">${tgts}<div class="hint">${escapeHtml(delay)}</div></div></div>`;
+    }).join("");
+    return `<div class="rt-item">
+      <div class="grow">
+        <div class="ri-name">${escapeHtml(p.name || p.id)} <span class="hint">(${escapeHtml(p.id)})</span></div>
+        ${steps || '<div class="hint">no steps</div>'}
+      </div>
+      <button data-ocact="edit-policy" data-id="${escapeHtml(p.id)}">Edit</button>
+      <button class="danger" data-ocact="del-policy" data-id="${escapeHtml(p.id)}">Delete</button>
+    </div>`;
+  }).join("") : '<div class="rt-empty">No escalation policies.</div>';
+
+  $("oncall-body").innerHTML = `
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Users</h3><span class="meta">people who can be paged</span>
+        <span class="grow"></span>
+        <button data-ocact="add-user">+ Add user</button>
+      </div>
+      <div class="rt-section-body">${userRows}</div>
+    </div>
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Schedules</h3><span class="meta">rotations &amp; overrides</span>
+        <span class="grow"></span>
+        <button data-ocact="add-sched">+ Add schedule</button>
+      </div>
+      <div class="rt-section-body">${schedRows}</div>
+    </div>
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Escalation policies</h3><span class="meta">stepped paging until acked</span>
+        <span class="grow"></span>
+        <button data-ocact="add-policy">+ Add policy</button>
+      </div>
+      <div class="rt-section-body">${polRows}</div>
+    </div>`;
+
+  $("oncall-body").querySelectorAll("button[data-ocact]").forEach(btn => {
+    btn.addEventListener("click", () => onOncallAction(
+      btn.getAttribute("data-ocact"), btn.getAttribute("data-id")));
+  });
+}
+
+// Fill the "on call now" badge per schedule from the server.
+async function refreshWhoIsOn() {
+  for (const s of (_catalog.schedules || [])) {
+    const badge = $("onnow-" + s.id);
+    if (!badge) continue;
+    try {
+      const r = await api("GET", "/api/oncall/whoison/" + encodeURIComponent(s.id));
+      if (r && r.userId) {
+        badge.textContent = "on call: " + ocUserName(r.userId);
+        badge.classList.remove("none");
+      } else {
+        badge.textContent = "nobody on call";
+        badge.classList.add("none");
+      }
+    } catch {
+      badge.textContent = "—"; badge.classList.add("none");
+    }
+  }
+}
+
+async function onOncallAction(act, id) {
+  try {
+    switch (act) {
+      case "add-user":   openOcUserModal(null); break;
+      case "edit-user":  openOcUserModal(id); break;
+      case "del-user":
+        if (!confirm(`Delete user "${ocUserName(id)}"?`)) return;
+        _catalog.users = _catalog.users.filter(x => x.id !== id);
+        await saveCatalog();
+        break;
+      case "add-sched":  openOcSchedModal(null); break;
+      case "edit-sched": openOcSchedModal(id); break;
+      case "del-sched":
+        if (!confirm(`Delete schedule "${ocSchedName(id)}"?`)) return;
+        _catalog.schedules = _catalog.schedules.filter(x => x.id !== id);
+        await saveCatalog();
+        break;
+      case "add-policy":  openOcPolicyModal(null); break;
+      case "edit-policy": openOcPolicyModal(id); break;
+      case "del-policy":
+        if (!confirm("Delete this escalation policy? Routes referencing it will fall back to none.")) return;
+        _catalog.policies = _catalog.policies.filter(x => x.id !== id);
+        await saveCatalog();
+        break;
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+// ----- User modal -----
+let _ocUserEditId = null;
+function openOcUserModal(id) {
+  _ocUserEditId = id;
+  const u = id ? _catalog.users.find(x => x.id === id) : null;
+  const cur = u || { name: "", email: "", receiverIds: [] };
+  $("ocuser-modal-title").textContent = id ? "Edit user" : "New user";
+  const recvChecks = _catalogRecv.length ? _catalogRecv.map(r =>
+    `<label><input type="checkbox" class="ocu-recv" value="${escapeHtml(r.id)}" ${(cur.receiverIds || []).includes(r.id) ? "checked" : ""}/>${escapeHtml(r.name)} <span class="hint">(${escapeHtml(r.type)})</span></label>`).join("")
+    : '<span class="hint">No receivers defined yet — add them under Routing &amp; Receivers.</span>';
+  $("ocuser-modal-body").innerHTML = `
+    <div class="rule-field"><label>Name</label>
+      <input id="ocu-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="Alice" /></div>
+    <div class="rule-field"><label>Email</label>
+      <input id="ocu-email" style="width:100%;" value="${escapeHtml(cur.email || "")}" placeholder="alice@example.com" /></div>
+    <div class="rule-field"><label>Receivers <span class="hint">— where this user gets paged</span></label>
+      <div class="oc-checks">${recvChecks}</div></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="ocu-save" class="primary">Save user</button>
+      <span id="ocu-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  $("ocu-save").addEventListener("click", saveOcUser);
+  $("ocuser-modal").classList.add("open");
+  $("ocu-name").focus();
+}
+async function saveOcUser() {
+  const name = $("ocu-name").value.trim();
+  if (!name) { $("ocu-err").textContent = "Name is required."; return; }
+  const receiverIds = Array.from(document.querySelectorAll(".ocu-recv:checked")).map(c => c.value);
+  const rec = {
+    id: _ocUserEditId || ("u-" + uuid()),
+    name, email: $("ocu-email").value.trim(), receiverIds,
+  };
+  if (_ocUserEditId) {
+    const i = _catalog.users.findIndex(x => x.id === _ocUserEditId);
+    if (i >= 0) _catalog.users[i] = rec; else _catalog.users.push(rec);
+  } else _catalog.users.push(rec);
+  try { await saveCatalog(); $("ocuser-modal").classList.remove("open"); }
+  catch (e) { $("ocu-err").textContent = e.message; }
+}
+
+// ----- Schedule modal -----
+let _ocSchedEditId = null;
+function openOcSchedModal(id) {
+  _ocSchedEditId = id;
+  const s = id ? _catalog.schedules.find(x => x.id === id) : null;
+  const cur = s || { name: "", rotations: [], overrides: [] };
+  $("ocsched-modal-title").textContent = id ? "Edit schedule" : "New schedule";
+  $("ocsched-modal-body").innerHTML = `
+    <div class="rule-field"><label>Name</label>
+      <input id="ocs-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="Primary" /></div>
+    <div class="rule-field"><label>Rotations <span class="hint">— members rotate every shift</span></label>
+      <div id="ocs-rotations"></div>
+      <button type="button" id="ocs-add-rot" style="font-size:11px;padding:3px 8px;">+ Add rotation</button></div>
+    <div class="rule-field"><label>Overrides <span class="hint">— force a user on call for a window</span></label>
+      <div id="ocs-overrides"></div>
+      <button type="button" id="ocs-add-ovr" style="font-size:11px;padding:3px 8px;">+ Add override</button></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="ocs-save" class="primary">Save schedule</button>
+      <span id="ocs-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  const rotBox = $("ocs-rotations");
+  const ovrBox = $("ocs-overrides");
+  const addRot = (r) => rotBox.insertAdjacentHTML("beforeend", ocRotationHtml(r || { members: [], periodMs: 604800000, startAt: Date.now() }));
+  const addOvr = (o) => ovrBox.insertAdjacentHTML("beforeend", ocOverrideHtml(o || { userId: (_catalog.users[0] && _catalog.users[0].id) || "", startsAt: Date.now(), endsAt: Date.now() + 86400000 }));
+  (cur.rotations || []).forEach(addRot);
+  (cur.overrides || []).forEach(addOvr);
+  $("ocs-add-rot").addEventListener("click", () => addRot());
+  $("ocs-add-ovr").addEventListener("click", () => addOvr());
+  rotBox.addEventListener("click", (e) => { if (e.target.classList.contains("ocr-del")) e.target.closest("[data-ocr]").remove(); });
+  ovrBox.addEventListener("click", (e) => { if (e.target.classList.contains("ocv-del")) e.target.closest("[data-ocv]").remove(); });
+  $("ocs-save").addEventListener("click", saveOcSched);
+  $("ocsched-modal").classList.add("open");
+  $("ocs-name").focus();
+}
+function ocRotationHtml(r) {
+  const memberChecks = _catalog.users.length ? _catalog.users.map(u =>
+    `<label><input type="checkbox" class="ocr-member" value="${escapeHtml(u.id)}" ${(r.members || []).includes(u.id) ? "checked" : ""}/>${escapeHtml(u.name || u.id)}</label>`).join("")
+    : '<span class="hint">Add users first.</span>';
+  const hours = Math.round((r.periodMs || 604800000) / 3600000);
+  return `<div data-ocr class="oc-subform">
+    <div class="oc-checks" style="margin-bottom:6px;">${memberChecks}</div>
+    <div class="rt-form-row">
+      <span style="font-size:11px;color:var(--muted);">shift length (h)</span>
+      <input class="ocr-period" type="number" min="1" value="${hours}" style="flex:0 0 90px;" />
+      <span style="font-size:11px;color:var(--muted);">starts</span>
+      <input class="ocr-start" type="datetime-local" value="${toLocalInput(r.startAt || Date.now())}" style="flex:0 0 200px;" />
+      <span class="grow"></span>
+      <button type="button" class="ocr-del danger">×</button>
+    </div>
+  </div>`;
+}
+function ocOverrideHtml(o) {
+  const userOpts = _catalog.users.map(u =>
+    `<option value="${escapeHtml(u.id)}" ${o.userId === u.id ? "selected" : ""}>${escapeHtml(u.name || u.id)}</option>`).join("");
+  return `<div data-ocv class="oc-subform">
+    <div class="rt-form-row">
+      <select class="ocv-user" style="flex:0 0 160px;">${userOpts}</select>
+      <span style="font-size:11px;color:var(--muted);">from</span>
+      <input class="ocv-start" type="datetime-local" value="${toLocalInput(o.startsAt || Date.now())}" style="flex:1;" />
+      <span style="font-size:11px;color:var(--muted);">to</span>
+      <input class="ocv-end" type="datetime-local" value="${toLocalInput(o.endsAt || Date.now())}" style="flex:1;" />
+      <button type="button" class="ocv-del danger">×</button>
+    </div>
+  </div>`;
+}
+async function saveOcSched() {
+  const name = $("ocs-name").value.trim();
+  if (!name) { $("ocs-err").textContent = "Name is required."; return; }
+  const rotations = [];
+  document.querySelectorAll("#ocs-rotations [data-ocr]").forEach(row => {
+    const members = Array.from(row.querySelectorAll(".ocr-member:checked")).map(c => c.value);
+    const hours = Math.max(1, +row.querySelector(".ocr-period").value || 168);
+    rotations.push({
+      id: "rot-" + uuid(), members,
+      periodMs: hours * 3600000,
+      startAt: fromLocalInput(row.querySelector(".ocr-start").value) || Date.now(),
+    });
+  });
+  const overrides = [];
+  document.querySelectorAll("#ocs-overrides [data-ocv]").forEach(row => {
+    const userId = row.querySelector(".ocv-user").value;
+    if (!userId) return;
+    overrides.push({
+      userId,
+      startsAt: fromLocalInput(row.querySelector(".ocv-start").value) || 0,
+      endsAt: fromLocalInput(row.querySelector(".ocv-end").value) || 0,
+    });
+  });
+  const rec = { id: _ocSchedEditId || ("sched-" + uuid()), name, rotations, overrides };
+  if (_ocSchedEditId) {
+    const i = _catalog.schedules.findIndex(x => x.id === _ocSchedEditId);
+    if (i >= 0) _catalog.schedules[i] = rec; else _catalog.schedules.push(rec);
+  } else _catalog.schedules.push(rec);
+  try { await saveCatalog(); $("ocsched-modal").classList.remove("open"); }
+  catch (e) { $("ocs-err").textContent = e.message; }
+}
+
+// ----- Escalation policy modal -----
+let _ocPolicyEditId = null;
+function openOcPolicyModal(id) {
+  _ocPolicyEditId = id;
+  const p = id ? _catalog.policies.find(x => x.id === id) : null;
+  const cur = p || { name: "", steps: [{ delayMs: 0, targets: [] }] };
+  $("ocpolicy-modal-title").textContent = id ? "Edit policy" : "New policy";
+  $("ocpolicy-modal-body").innerHTML = `
+    <div class="rule-field"><label>Name</label>
+      <input id="ocp-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="P1" /></div>
+    <div class="rule-field"><label>Steps <span class="hint">— step 1 fires immediately; later steps wait their delay if still unacked</span></label>
+      <div id="ocp-steps"></div>
+      <button type="button" id="ocp-add-step" style="font-size:11px;padding:3px 8px;">+ Add step</button></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="ocp-save" class="primary">Save policy</button>
+      <span id="ocp-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  const box = $("ocp-steps");
+  const addStep = (st) => box.insertAdjacentHTML("beforeend", ocStepHtml(st || { delayMs: 0, targets: [] }));
+  (cur.steps && cur.steps.length ? cur.steps : [{ delayMs: 0, targets: [] }]).forEach(addStep);
+  $("ocp-add-step").addEventListener("click", () => addStep());
+  box.addEventListener("click", (e) => {
+    if (e.target.classList.contains("ocp-step-del")) e.target.closest("[data-ocp]").remove();
+    else if (e.target.classList.contains("ocp-tgt-add")) {
+      const host = e.target.closest("[data-ocp]").querySelector(".ocp-targets");
+      host.insertAdjacentHTML("beforeend", ocTargetHtml({ kind: "schedule", id: "" }));
+    } else if (e.target.classList.contains("ocp-tgt-del")) {
+      e.target.closest("[data-ocpt]").remove();
+    }
+  });
+  box.addEventListener("change", (e) => {
+    if (e.target.classList.contains("ocpt-kind")) {
+      const row = e.target.closest("[data-ocpt]");
+      const sel = row.querySelector(".ocpt-id");
+      sel.innerHTML = ocTargetIdOptions(e.target.value, "");
+    }
+  });
+  $("ocp-save").addEventListener("click", saveOcPolicy);
+  $("ocpolicy-modal").classList.add("open");
+  $("ocp-name").focus();
+}
+function ocStepHtml(st) {
+  const tgts = (st.targets || []).map(ocTargetHtml).join("");
+  const mins = Math.round((st.delayMs || 0) / 60000);
+  return `<div data-ocp class="oc-subform">
+    <div class="rt-form-row">
+      <span style="font-size:11px;color:var(--muted);">delay (min from previous)</span>
+      <input class="ocp-delay" type="number" min="0" value="${mins}" style="flex:0 0 90px;" />
+      <span class="grow"></span>
+      <button type="button" class="ocp-step-del danger">× step</button>
+    </div>
+    <div class="ocp-targets">${tgts}</div>
+    <button type="button" class="ocp-tgt-add" style="font-size:11px;padding:2px 8px;">+ Add target</button>
+  </div>`;
+}
+function ocTargetHtml(t) {
+  const kindOpts = TARGET_KINDS.map(k => `<option value="${k}" ${t.kind === k ? "selected" : ""}>${k}</option>`).join("");
+  return `<div data-ocpt class="rt-form-row">
+    <select class="ocpt-kind" style="flex:0 0 110px;">${kindOpts}</select>
+    <select class="ocpt-id" style="flex:1;">${ocTargetIdOptions(t.kind, t.id)}</select>
+    <button type="button" class="ocpt-del danger">×</button>
+  </div>`;
+}
+function ocTargetIdOptions(kind, selected) {
+  let opts;
+  if (kind === "user") opts = _catalog.users.map(u => [u.id, u.name || u.id]);
+  else if (kind === "schedule") opts = _catalog.schedules.map(s => [s.id, s.name || s.id]);
+  else opts = _catalogRecv.map(r => [r.id, r.name]);
+  if (!opts.length) return `<option value="">(none defined)</option>`;
+  return opts.map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === selected ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+}
+async function saveOcPolicy() {
+  const name = $("ocp-name").value.trim();
+  if (!name) { $("ocp-err").textContent = "Name is required."; return; }
+  const steps = [];
+  document.querySelectorAll("#ocp-steps [data-ocp]").forEach(row => {
+    const delayMs = Math.max(0, Math.round((+row.querySelector(".ocp-delay").value || 0) * 60000));
+    const targets = [];
+    row.querySelectorAll(".ocp-targets [data-ocpt]").forEach(tr => {
+      const kind = tr.querySelector(".ocpt-kind").value;
+      const id = tr.querySelector(".ocpt-id").value;
+      if (id) targets.push({ kind, id });
+    });
+    steps.push({ delayMs, targets });
+  });
+  if (!steps.length) { $("ocp-err").textContent = "At least one step is required."; return; }
+  const rec = { id: _ocPolicyEditId || ("esc-" + uuid()), name, steps };
+  if (_ocPolicyEditId) {
+    const i = _catalog.policies.findIndex(x => x.id === _ocPolicyEditId);
+    if (i >= 0) _catalog.policies[i] = rec; else _catalog.policies.push(rec);
+  } else _catalog.policies.push(rec);
+  try { await saveCatalog(); $("ocpolicy-modal").classList.remove("open"); }
+  catch (e) { $("ocp-err").textContent = e.message; }
+}
+
+// ── Notification queue & DLQ (Stage 5) ───────────────────────────────
+// Read-only views over the outbound-message queue and dead-letter queue,
+// plus replay/purge actions on dead letters.
+//   GET    /api/notify/queue          → [OutboundMessage]
+//   GET    /api/notify/dlq            → [{ deadAt, reason, msg:OutboundMessage }]
+//   POST   /api/notify/dlq/{id}/replay
+//   DELETE /api/notify/dlq/{id}
+let _notifySub = "queue";        // "queue" | "dlq"
+let _notifyQueue = [];
+let _notifyDlq = [];
+let _notifyPollTimer = null;
+
+async function loadNotify(quiet) {
+  const host = $("notify-body");
+  if (!quiet) host.innerHTML = '<div class="nm-empty">Loading…</div>';
+  try {
+    const [q, d] = await Promise.all([
+      api("GET", "/api/notify/queue"),
+      api("GET", "/api/notify/dlq"),
+    ]);
+    _notifyQueue = Array.isArray(q) ? q : [];
+    _notifyDlq = Array.isArray(d) ? d : [];
+    renderNotify();
+  } catch (e) {
+    if (!quiet) host.innerHTML = `<div class="nm-empty" style="color:var(--err);">Failed to load: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function startNotifyPoll() {
+  stopNotifyPoll();
+  _notifyPollTimer = setInterval(() => {
+    if (_alertsSub === "notify" && !document.hidden) loadNotify(true);
+  }, 8000);
+}
+function stopNotifyPoll() {
+  if (_notifyPollTimer) { clearInterval(_notifyPollTimer); _notifyPollTimer = null; }
+}
+
+function showNotifySub(name) {
+  _notifySub = name === "dlq" ? "dlq" : "queue";
+  $("nsub-queue").classList.toggle("active", _notifySub === "queue");
+  $("nsub-dlq").classList.toggle("active", _notifySub === "dlq");
+  renderNotify();
+}
+
+function renderNotify() {
+  $("notify-summary").textContent =
+    `${_notifyQueue.length} pending · ${_notifyDlq.length} dead-lettered`;
+  $("nsub-queue").textContent = `Pending queue (${_notifyQueue.length})`;
+  $("nsub-dlq").textContent = `Dead letters (${_notifyDlq.length})`;
+
+  const host = $("notify-body");
+  if (_notifySub === "queue") {
+    const rows = _notifyQueue.slice().sort((a, b) => a.nextRunAt - b.nextRunAt);
+    host.innerHTML = rows.length ? rows.map(m => notifyRowHtml(m, false)).join("")
+      : '<div class="nm-empty">Queue is empty — no outbound messages pending delivery.</div>';
+  } else {
+    const rows = _notifyDlq.slice().sort((a, b) => b.deadAt - a.deadAt);
+    host.innerHTML = rows.length ? rows.map(d => notifyRowHtml(d.msg, true, d)).join("")
+      : '<div class="nm-empty">No dead letters. Messages that exhaust their retries land here.</div>';
+  }
+  host.querySelectorAll("button[data-nact]").forEach(btn => {
+    btn.addEventListener("click", () => onNotifyAction(
+      btn.getAttribute("data-nact"), btn.getAttribute("data-id")));
+  });
+}
+
+function notifyRowHtml(m, isDead, dl) {
+  const now = Date.now();
+  let attemptCls = "ok", attemptTxt;
+  if (isDead) { attemptCls = "dead"; attemptTxt = `failed ${m.attempt}/${m.maxAttempts}`; }
+  else if (m.attempt > 0) { attemptCls = "warn"; attemptTxt = `retry ${m.attempt}/${m.maxAttempts}`; }
+  else { attemptTxt = `attempt ${m.attempt}/${m.maxAttempts}`; }
+  let timing;
+  if (isDead) timing = `dead ${fmtAge(now - dl.deadAt)}`;
+  else if (m.nextRunAt > now) timing = `next run in ${fmtDuration(m.nextRunAt - now)}`;
+  else timing = "due now";
+  const err = isDead ? dl.reason : m.lastError;
+  return `<div class="nm-row">
+    <div class="grow">
+      <div class="nm-main">
+        <span class="nm-recv">${escapeHtml(m.receiverId || "(receiver)")}</span>
+        <span class="nm-type">${escapeHtml(m.receiverType || "?")}</span>
+        <span class="nm-attempt ${attemptCls}">${escapeHtml(attemptTxt)}</span>
+        <span class="hint">${escapeHtml(timing)}</span>
+      </div>
+      <div class="nm-url">${escapeHtml(m.url || "(no url)")}</div>
+      ${err ? `<div class="nm-err">${escapeHtml(err)}</div>` : ""}
+    </div>
+    <div class="nm-actions">
+      <button data-nact="view" data-id="${escapeHtml(m.id)}">Inspect</button>
+      ${isDead ? `<button data-nact="replay" data-id="${escapeHtml(m.id)}">Replay</button>
+        <button class="danger" data-nact="purge" data-id="${escapeHtml(m.id)}">Purge</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function findNotifyMsg(id) {
+  const q = _notifyQueue.find(m => m.id === id);
+  if (q) return q;
+  const d = _notifyDlq.find(x => x.msg && x.msg.id === id);
+  return d ? d.msg : null;
+}
+
+async function onNotifyAction(act, id) {
+  try {
+    if (act === "view") { openNotifyModal(id); return; }
+    if (act === "replay") {
+      await api("POST", "/api/notify/dlq/" + encodeURIComponent(id) + "/replay");
+      await loadNotify();
+      return;
+    }
+    if (act === "purge") {
+      if (!confirm("Permanently purge this dead letter? It cannot be recovered.")) return;
+      await api("DELETE", "/api/notify/dlq/" + encodeURIComponent(id));
+      await loadNotify();
+      return;
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function openNotifyModal(id) {
+  const m = findNotifyMsg(id);
+  if (!m) return;
+  $("notify-modal-title").textContent = `${m.receiverType || "message"} → ${m.receiverId || ""}`;
+  const kv = (label, val) => val ? `<div class="nm-kv"><b>${escapeHtml(label)}:</b> ${escapeHtml(String(val))}</div>` : "";
+  const headers = Object.entries(m.headers || {});
+  const extra = Object.entries(m.extra || {});
+  let body = m.body || "";
+  try { body = JSON.stringify(JSON.parse(body), null, 2); } catch { /* leave as-is */ }
+  $("notify-modal-body").innerHTML = `
+    ${kv("Message id", m.id)}
+    ${kv("URL", m.url)}
+    ${kv("Attempt", `${m.attempt} / ${m.maxAttempts}`)}
+    ${kv("Enqueued", fmtClock(m.enqueuedAt))}
+    ${kv("Next run", m.nextRunAt ? fmtClock(m.nextRunAt) : "")}
+    ${m.lastError ? `<div class="rule-field" style="margin-top:8px;"><label>Last error</label><div class="nm-err">${escapeHtml(m.lastError)}</div></div>` : ""}
+    ${headers.length ? `<div class="rule-field" style="margin-top:8px;"><label>Headers</label>${headers.map(([k, v]) => kv(k, v)).join("")}</div>` : ""}
+    ${extra.length ? `<div class="rule-field" style="margin-top:8px;"><label>Extra</label>${extra.map(([k, v]) => kv(k, v)).join("")}</div>` : ""}
+    <div class="rule-field" style="margin-top:8px;"><label>Body</label>
+      <div class="nm-pre">${escapeHtml(body || "(empty)")}</div></div>`;
+  $("notify-modal").classList.add("open");
+}
+
+// ── Routing & receivers (Stage 2) ────────────────────────────────────
+// The whole Alertmanager-equivalent config is one document, read/replaced
+// via GET/PUT /api/alertmanager/config. We cache it, mutate sections in
+// place, then PUT the whole thing back. `silences` are also managed from
+// the Firing view, so we re-fetch them just before every save to avoid
+// clobbering a silence created elsewhere.
+let _routingCfg = null;       // full config { route, receivers, silences, inhibitions, muteTimes }
+let _oncallPolicies = [];     // [{id,name}] for the route policy picker (best-effort)
+
+const RECEIVER_TYPES = [
+  "slack", "webhook", "hmac_webhook", "pagerduty", "opsgenie",
+  "discord", "teams", "email", "sendgrid", "twilio", "jira", "ses",
+];
+// Per-type structured `extra` fields (everything else uses a free-form editor).
+const RECEIVER_EXTRA = {
+  sendgrid: ["from", "to"],
+  ses:      ["from", "to"],
+  twilio:   ["account_sid", "from", "to"],
+  jira:     ["project", "issueType", "user"],
+};
+const MATCH_OPS = ["=", "!=", "=~", "!~"];
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+async function loadRouting() {
+  const host = $("routing-body");
+  host.innerHTML = '<div class="rt-empty">Loading…</div>';
+  try {
+    _routingCfg = await api("GET", "/api/alertmanager/config");
+    // Best-effort: load escalation policies so routes can reference them by name.
+    try {
+      const cat = await api("GET", "/api/oncall/catalog");
+      _oncallPolicies = (cat && cat.policies) || [];
+    } catch { _oncallPolicies = []; }
+    renderRouting();
+  } catch (e) {
+    host.innerHTML = `<div class="rt-empty" style="color:var(--err);">Failed to load routing config: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Re-fetch current silences, then PUT the whole config back.
+async function saveRouting() {
+  if (!_routingCfg) return;
+  try {
+    const fresh = await api("GET", "/api/alertmanager/config");
+    _routingCfg.silences = (fresh && fresh.silences) || _routingCfg.silences || [];
+  } catch { /* keep cached silences */ }
+  await api("PUT", "/api/alertmanager/config", _routingCfg);
+  await loadRouting();
+}
+
+function recvName(id) {
+  if (!id) return null;
+  const r = (_routingCfg.receivers || []).find(x => x.id === id);
+  return r ? r.name : id;
+}
+function matcherText(m) {
+  return `${m.name} ${m.op} ${m.value}`;
+}
+
+function renderRouting() {
+  const c = _routingCfg;
+  const recv = c.receivers || [];
+  const inhib = c.inhibitions || [];
+  const mutes = c.muteTimes || [];
+  $("routing-summary").textContent =
+    `${recv.length} receiver(s) · ${inhib.length} inhibition(s) · ${mutes.length} mute timing(s)`;
+
+  const recvRows = recv.length ? recv.map(r => `
+    <div class="rt-item">
+      <span class="rt-type">${escapeHtml(r.type)}</span>
+      <div class="grow">
+        <div class="ri-name">${escapeHtml(r.name)}</div>
+        <div class="ri-sub">${escapeHtml(r.url || "(no url)")}</div>
+      </div>
+      <button data-ract="edit-recv" data-id="${escapeHtml(r.id)}">Edit</button>
+      <button class="danger" data-ract="del-recv" data-id="${escapeHtml(r.id)}">Delete</button>
+    </div>`).join("") : '<div class="rt-empty">No receivers. Add one to start delivering notifications.</div>';
+
+  const inhibRows = inhib.length ? inhib.map(i => `
+    <div class="rt-item">
+      <div class="grow">
+        <div class="ri-name">source ${i.source.map(matcherText).map(escapeHtml).join(", ") || "—"}</div>
+        <div class="ri-sub">suppresses target ${i.target.map(matcherText).map(escapeHtml).join(", ") || "—"}${(i.equal && i.equal.length) ? " · equal: " + escapeHtml(i.equal.join(", ")) : ""}</div>
+      </div>
+      <button data-ract="edit-inhib" data-id="${escapeHtml(i.id)}">Edit</button>
+      <button class="danger" data-ract="del-inhib" data-id="${escapeHtml(i.id)}">Delete</button>
+    </div>`).join("") : '<div class="rt-empty">No inhibition rules.</div>';
+
+  const muteRows = mutes.length ? mutes.map(m => {
+    const wins = (m.windows || []).map(w =>
+      `${minToHHMM(w.startMinute)}–${minToHHMM(w.endMinute)} ${daysText(w.daysOfWeek)}`).join("; ");
+    return `<div class="rt-item">
+      <div class="grow">
+        <div class="ri-name">${escapeHtml(m.name)}</div>
+        <div class="ri-sub">${escapeHtml(wins || "(no windows)")}</div>
+      </div>
+      <button data-ract="edit-mute" data-id="${escapeHtml(m.id)}">Edit</button>
+      <button class="danger" data-ract="del-mute" data-id="${escapeHtml(m.id)}">Delete</button>
+    </div>`;
+  }).join("") : '<div class="rt-empty">No mute timings.</div>';
+
+  $("routing-body").innerHTML = `
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Receivers</h3><span class="meta">delivery targets</span>
+        <span class="grow"></span>
+        <button data-ract="add-recv">+ Add receiver</button>
+      </div>
+      <div class="rt-section-body">${recvRows}</div>
+    </div>
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Route tree</h3><span class="meta">first matching child wins</span>
+        <span class="grow"></span>
+        <button data-ract="export-routing" title="Copy as Terraform or YAML">&lt;/&gt; Code</button>
+      </div>
+      <div class="rt-section-body">${routeNodeHtml(c.route, true)}</div>
+    </div>
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Inhibition rules</h3><span class="meta">source suppresses target</span>
+        <span class="grow"></span>
+        <button data-ract="add-inhib">+ Add inhibition</button>
+      </div>
+      <div class="rt-section-body">${inhibRows}</div>
+    </div>
+    <div class="rt-section">
+      <div class="rt-section-head">
+        <h3>Mute timings</h3><span class="meta">recurring weekly windows (UTC)</span>
+        <span class="grow"></span>
+        <button data-ract="add-mute">+ Add mute timing</button>
+      </div>
+      <div class="rt-section-body">${muteRows}</div>
+    </div>`;
+
+  $("routing-body").querySelectorAll("button[data-ract]").forEach(btn => {
+    btn.addEventListener("click", () => onRoutingAction(
+      btn.getAttribute("data-ract"), btn.getAttribute("data-id")));
+  });
+}
+
+function routeNodeHtml(r, isRoot) {
+  const matchTxt = isRoot
+    ? "default (matches everything)"
+    : (r.matchers && r.matchers.length ? r.matchers.map(matcherText).map(escapeHtml).join(", ") : "matches everything");
+  const recv = r.receiverId ? recvName(r.receiverId) : "(inherit / none)";
+  const pol  = r.policyId ? (policyName(r.policyId) + " policy") : "";
+  const grp  = (r.groupBy && r.groupBy.length) ? "by " + r.groupBy.join(",") : "";
+  const timers = `wait ${Math.round((r.groupWaitMs||0)/1000)}s · every ${Math.round((r.groupIntervalMs||0)/1000)}s · repeat ${Math.round((r.repeatIntervalMs||0)/1000)}s`;
+  const children = (r.routes || []);
+  const kids = children.map(ch => routeNodeHtml(ch, false)).join("");
+  return `<div class="route-node">
+    <div class="rn-head">
+      <div class="grow">
+        <div class="rn-title">${isRoot ? "▣ root" : "↳"} ${escapeHtml(matchTxt)}</div>
+        <div class="rn-meta">→ ${escapeHtml(recv)}${pol ? " · " + escapeHtml(pol) : ""}${grp ? " · " + escapeHtml(grp) : ""} · ${escapeHtml(timers)}${r.continue ? " · continue" : ""}${(r.muteTimeIds&&r.muteTimeIds.length)?" · muted":""}</div>
+      </div>
+      <div class="rn-actions">
+        <button data-ract="edit-route" data-id="${escapeHtml(r.id)}">Edit</button>
+        <button data-ract="add-route" data-id="${escapeHtml(r.id)}">+ Child</button>
+        ${isRoot ? "" : `<button class="danger" data-ract="del-route" data-id="${escapeHtml(r.id)}">Delete</button>`}
+      </div>
+    </div>
+    ${children.length ? `<div class="route-children">${kids}</div>` : ""}
+  </div>`;
+}
+
+function policyName(id) {
+  const p = _oncallPolicies.find(x => x.id === id);
+  return p ? p.name : id;
+}
+function minToHHMM(m) {
+  m = Math.max(0, Math.min(1440, m | 0));
+  const h = Math.floor(m / 60), mm = m % 60;
+  return String(h).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+}
+function hhmmToMin(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((s || "").trim());
+  if (!m) return null;
+  return Math.min(1440, (+m[1]) * 60 + (+m[2]));
+}
+function daysText(bitmask) {
+  if ((bitmask & 0x7F) === 0x7F) return "every day";
+  const on = [];
+  for (let i = 0; i < 7; i++) if (bitmask & (1 << i)) on.push(DAY_NAMES[i]);
+  return on.length ? on.join(",") : "no days";
+}
+
+// Route-tree mutation helpers (walk by id).
+function findRoute(node, id) {
+  if (node.id === id) return node;
+  for (const ch of (node.routes || [])) {
+    const f = findRoute(ch, id);
+    if (f) return f;
+  }
+  return null;
+}
+function removeRoute(node, id) {
+  const kids = node.routes || [];
+  const idx = kids.findIndex(c => c.id === id);
+  if (idx >= 0) { kids.splice(idx, 1); return true; }
+  return kids.some(c => removeRoute(c, id));
+}
+
+async function onRoutingAction(act, id) {
+  try {
+    switch (act) {
+      case "add-recv":    openReceiverModal(null); break;
+      case "edit-recv":   openReceiverModal(id); break;
+      case "del-recv": {
+        const r = (_routingCfg.receivers || []).find(x => x.id === id);
+        if (!confirm(`Delete receiver "${r && r.name}"? Routes referencing it will fall back to inherit/none.`)) return;
+        _routingCfg.receivers = (_routingCfg.receivers || []).filter(x => x.id !== id);
+        await saveRouting();
+        break;
+      }
+      case "edit-route":  openRouteModal(id); break;
+      case "add-route": {
+        const parent = findRoute(_routingCfg.route, id);
+        if (!parent) return;
+        const child = newRoute();
+        parent.routes = parent.routes || [];
+        parent.routes.push(child);
+        openRouteModal(child.id, true);
+        break;
+      }
+      case "del-route": {
+        if (!confirm("Delete this route and all its children?")) return;
+        removeRoute(_routingCfg.route, id);
+        await saveRouting();
+        break;
+      }
+      case "add-inhib":   openInhibModal(null); break;
+      case "edit-inhib":  openInhibModal(id); break;
+      case "del-inhib": {
+        if (!confirm("Delete this inhibition rule?")) return;
+        _routingCfg.inhibitions = (_routingCfg.inhibitions || []).filter(x => x.id !== id);
+        await saveRouting();
+        break;
+      }
+      case "add-mute":    openMuteModal(null); break;
+      case "edit-mute":   openMuteModal(id); break;
+      case "del-mute": {
+        const m = (_routingCfg.muteTimes || []).find(x => x.id === id);
+        if (!confirm(`Delete mute timing "${m && m.name}"?`)) return;
+        _routingCfg.muteTimes = (_routingCfg.muteTimes || []).filter(x => x.id !== id);
+        await saveRouting();
+        break;
+      }
+      case "export-routing": openExportCode("routing", "", "Routing config"); break;
+    }
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function newRoute() {
+  return {
+    id: "r-" + uuid(), matchers: [], receiverId: null, policyId: null,
+    groupBy: ["alertname"], groupWaitMs: 30000, groupIntervalMs: 300000,
+    repeatIntervalMs: 3600000, continue: false, muteTimeIds: [], routes: [],
+  };
+}
+
+// ----- Matcher list editor (shared by route / inhibition modals) -----
+function matcherListEditor(containerId, matchers) {
+  const rows = (matchers || []).map((m, i) => matcherRowHtml(m, i)).join("");
+  return `<div id="${containerId}">${rows}</div>
+    <button type="button" class="ml-add" data-ml="${containerId}" style="font-size:11px;padding:3px 8px;">+ Add matcher</button>`;
+}
+function matcherRowHtml(m, i) {
+  const opts = MATCH_OPS.map(o => `<option ${m.op === o ? "selected" : ""}>${o}</option>`).join("");
+  return `<div class="rt-form-row" data-mrow="${i}">
+    <input class="ml-name"  placeholder="label" value="${escapeHtml(m.name || "")}" />
+    <select class="ml-op" style="flex:0 0 64px;">${opts}</select>
+    <input class="ml-value" placeholder="value" value="${escapeHtml(m.value || "")}" />
+    <button type="button" class="ml-del danger">×</button>
+  </div>`;
+}
+function readMatcherList(containerId) {
+  const out = [];
+  document.querySelectorAll(`#${containerId} [data-mrow]`).forEach(row => {
+    const name = row.querySelector(".ml-name").value.trim();
+    const op   = row.querySelector(".ml-op").value;
+    const value = row.querySelector(".ml-value").value.trim();
+    if (name) out.push({ name, op, value });
+  });
+  return out;
+}
+// Delegated handlers for add/remove matcher rows (any open modal).
+document.addEventListener("click", (e) => {
+  if (e.target.classList && e.target.classList.contains("ml-add")) {
+    const cid = e.target.getAttribute("data-ml");
+    const box = $(cid);
+    const i = box.querySelectorAll("[data-mrow]").length;
+    box.insertAdjacentHTML("beforeend", matcherRowHtml({ op: "=" }, i));
+  } else if (e.target.classList && e.target.classList.contains("ml-del")) {
+    const row = e.target.closest("[data-mrow]");
+    if (row) row.remove();
+  }
+});
+
+// ----- Receiver modal -----
+let _recvEditId = null;
+function openReceiverModal(id) {
+  _recvEditId = id;
+  const r = id ? (_routingCfg.receivers || []).find(x => x.id === id) : null;
+  const cur = r || { name: "", type: "slack", url: "", secret: "", extra: {} };
+  $("recv-modal-title").textContent = id ? "Edit receiver" : "New receiver";
+  const typeOpts = RECEIVER_TYPES.map(t => `<option ${cur.type === t ? "selected" : ""}>${t}</option>`).join("");
+  $("recv-modal-body").innerHTML = `
+    <div class="rule-field"><label>Name</label>
+      <input id="recv-f-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="prod-slack" /></div>
+    <div class="rule-field"><label>Type</label>
+      <select id="recv-f-type" style="width:100%;">${typeOpts}</select></div>
+    <div class="rule-field"><label>URL <span class="hint">— webhook / API endpoint (optional for sendgrid/twilio)</span></label>
+      <input id="recv-f-url" style="width:100%;" value="${escapeHtml(cur.url || "")}" placeholder="https://hooks.slack.com/…" /></div>
+    <div class="rule-field"><label>Secret <span class="hint">— token / API key / signing secret</span></label>
+      <input id="recv-f-secret" type="password" style="width:100%;" value="${escapeHtml(cur.secret || "")}" /></div>
+    <div id="recv-extra-host"></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="recv-f-save" class="primary">Save receiver</button>
+      <span id="recv-f-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  const renderExtra = (type) => {
+    const host = $("recv-extra-host");
+    const fields = RECEIVER_EXTRA[type];
+    if (fields) {
+      host.innerHTML = `<div class="rule-field"><label>${escapeHtml(type)} settings</label></div>` +
+        fields.map(f => `<div class="rule-field" style="margin-bottom:6px;">
+          <label style="font-size:10px;">${escapeHtml(f)}</label>
+          <input class="recv-extra" data-k="${escapeHtml(f)}" style="width:100%;" value="${escapeHtml((cur.extra && cur.extra[f]) || "")}" /></div>`).join("");
+    } else {
+      host.innerHTML = `<div class="rule-field"><label>Extra <span class="hint">— one <code>key=value</code> per line</span></label>
+        <textarea id="recv-extra-raw" style="width:100%;min-height:54px;">${escapeHtml(mapToLines(cur.extra))}</textarea></div>`;
+    }
+  };
+  renderExtra(cur.type);
+  $("recv-f-type").addEventListener("change", (e) => renderExtra(e.target.value));
+  $("recv-f-save").addEventListener("click", saveReceiverFromModal);
+  $("recv-modal").classList.add("open");
+  $("recv-f-name").focus();
+}
+async function saveReceiverFromModal() {
+  const name = $("recv-f-name").value.trim();
+  const type = $("recv-f-type").value;
+  if (!name) { $("recv-f-err").textContent = "Name is required."; return; }
+  let extra = {};
+  const structured = $("recv-extra-host").querySelectorAll(".recv-extra");
+  if (structured.length) {
+    structured.forEach(inp => {
+      const v = inp.value.trim();
+      if (v) extra[inp.getAttribute("data-k")] = v;
+    });
+  } else if ($("recv-extra-raw")) {
+    extra = linesToMap($("recv-extra-raw").value);
+  }
+  const url = $("recv-f-url").value.trim();
+  const secret = $("recv-f-secret").value;
+  const rec = {
+    id: _recvEditId || ("recv-" + uuid()),
+    name, type,
+    url: url || null,
+    secret: secret || null,
+    extra,
+  };
+  _routingCfg.receivers = _routingCfg.receivers || [];
+  if (_recvEditId) {
+    const i = _routingCfg.receivers.findIndex(x => x.id === _recvEditId);
+    if (i >= 0) _routingCfg.receivers[i] = rec; else _routingCfg.receivers.push(rec);
+  } else {
+    _routingCfg.receivers.push(rec);
+  }
+  try {
+    await saveRouting();
+    $("recv-modal").classList.remove("open");
+  } catch (e) { $("recv-f-err").textContent = e.message; }
+}
+
+// ----- Route modal -----
+let _routeEditId = null;
+let _routeIsNew = false;
+function openRouteModal(id, isNew) {
+  _routeEditId = id;
+  _routeIsNew = !!isNew;
+  const r = findRoute(_routingCfg.route, id);
+  if (!r) return;
+  const isRoot = (r.id === _routingCfg.route.id);
+  $("route-modal-title").textContent = isRoot ? "Edit root route" : (isNew ? "New child route" : "Edit route");
+  const recvOpts = `<option value="">(inherit / none)</option>` +
+    (_routingCfg.receivers || []).map(rc =>
+      `<option value="${escapeHtml(rc.id)}" ${r.receiverId === rc.id ? "selected" : ""}>${escapeHtml(rc.name)} (${escapeHtml(rc.type)})</option>`).join("");
+  const polOpts = `<option value="">(no escalation policy)</option>` +
+    _oncallPolicies.map(p =>
+      `<option value="${escapeHtml(p.id)}" ${r.policyId === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
+  const muteChecks = (_routingCfg.muteTimes || []).map(m =>
+    `<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;margin-right:10px;">
+       <input type="checkbox" class="route-mute" value="${escapeHtml(m.id)}" ${(r.muteTimeIds||[]).includes(m.id) ? "checked" : ""}/>${escapeHtml(m.name)}</label>`).join("")
+    || '<span class="hint">No mute timings defined.</span>';
+  $("route-modal-body").innerHTML = `
+    ${isRoot ? '<p class="hint" style="margin-bottom:8px;">The root route is the fallback. Matchers here are ignored — it always matches.</p>' : `
+    <div class="rule-field"><label>Matchers <span class="hint">— all must match the alert's labels</span></label>
+      ${matcherListEditor("route-matchers", r.matchers)}</div>`}
+    <div class="rule-field-row">
+      <div class="rule-field"><label>Receiver</label>
+        <select id="route-f-recv" style="width:100%;">${recvOpts}</select></div>
+      <div class="rule-field"><label>Escalation policy <span class="hint">(on-call)</span></label>
+        <select id="route-f-policy" style="width:100%;">${polOpts}</select></div>
+    </div>
+    <div class="rule-field"><label>Group by <span class="hint">— space/comma-separated label names</span></label>
+      <input id="route-f-groupby" style="width:100%;" value="${escapeHtml((r.groupBy||[]).join(", "))}" placeholder="alertname, service" /></div>
+    <div class="rule-field-row">
+      <div class="rule-field"><label>Group wait (s)</label>
+        <input id="route-f-wait" type="number" min="0" style="width:100%;" value="${Math.round((r.groupWaitMs||0)/1000)}" /></div>
+      <div class="rule-field"><label>Group interval (s)</label>
+        <input id="route-f-interval" type="number" min="0" style="width:100%;" value="${Math.round((r.groupIntervalMs||0)/1000)}" /></div>
+      <div class="rule-field"><label>Repeat interval (s)</label>
+        <input id="route-f-repeat" type="number" min="0" style="width:100%;" value="${Math.round((r.repeatIntervalMs||0)/1000)}" /></div>
+    </div>
+    <div class="rule-field"><label>Mute timings</label><div>${muteChecks}</div></div>
+    ${isRoot ? "" : `<div class="rule-field">
+      <label style="display:inline-flex;align-items:center;gap:6px;">
+        <input id="route-f-continue" type="checkbox" ${r.continue ? "checked" : ""}/> Continue to sibling routes after a match</label></div>`}
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="route-f-save" class="primary">Save route</button>
+      <button id="route-f-cancel">Cancel</button>
+      <span id="route-f-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  $("route-f-save").addEventListener("click", () => saveRouteFromModal(isRoot));
+  $("route-f-cancel").addEventListener("click", cancelRouteModal);
+  $("route-modal").classList.add("open");
+}
+async function saveRouteFromModal(isRoot) {
+  const r = findRoute(_routingCfg.route, _routeEditId);
+  if (!r) return;
+  if (!isRoot) r.matchers = readMatcherList("route-matchers");
+  r.receiverId = $("route-f-recv").value || null;
+  r.policyId = $("route-f-policy").value || null;
+  r.groupBy = $("route-f-groupby").value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  r.groupWaitMs = Math.max(0, Math.round((+$("route-f-wait").value || 0) * 1000));
+  r.groupIntervalMs = Math.max(0, Math.round((+$("route-f-interval").value || 0) * 1000));
+  r.repeatIntervalMs = Math.max(0, Math.round((+$("route-f-repeat").value || 0) * 1000));
+  r.muteTimeIds = Array.from(document.querySelectorAll(".route-mute:checked")).map(c => c.value);
+  if (!isRoot) r.continue = $("route-f-continue").checked;
+  try {
+    _routeIsNew = false;
+    await saveRouting();
+    $("route-modal").classList.remove("open");
+  } catch (e) { $("route-f-err").textContent = e.message; }
+}
+function cancelRouteModal() {
+  // A freshly-added child that was never saved should be discarded.
+  if (_routeIsNew) { removeRoute(_routingCfg.route, _routeEditId); renderRouting(); }
+  _routeIsNew = false;
+  $("route-modal").classList.remove("open");
+}
+
+// ----- Inhibition modal -----
+let _inhibEditId = null;
+function openInhibModal(id) {
+  _inhibEditId = id;
+  const i = id ? (_routingCfg.inhibitions || []).find(x => x.id === id) : null;
+  const cur = i || { source: [], target: [], equal: [] };
+  $("inhib-modal-title").textContent = id ? "Edit inhibition" : "New inhibition";
+  $("inhib-modal-body").innerHTML = `
+    <p class="hint" style="margin-bottom:8px;">When a firing alert matches the <b>source</b> and another matches the
+       <b>target</b> and they share equal values for the listed labels, the target is suppressed.</p>
+    <div class="rule-field"><label>Source matchers</label>${matcherListEditor("inhib-source", cur.source)}</div>
+    <div class="rule-field"><label>Target matchers</label>${matcherListEditor("inhib-target", cur.target)}</div>
+    <div class="rule-field"><label>Equal labels <span class="hint">— space/comma-separated</span></label>
+      <input id="inhib-f-equal" style="width:100%;" value="${escapeHtml((cur.equal||[]).join(", "))}" placeholder="service, instance" /></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="inhib-f-save" class="primary">Save inhibition</button>
+      <span id="inhib-f-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  $("inhib-f-save").addEventListener("click", saveInhibFromModal);
+  $("inhib-modal").classList.add("open");
+}
+async function saveInhibFromModal() {
+  const source = readMatcherList("inhib-source");
+  const target = readMatcherList("inhib-target");
+  if (!source.length || !target.length) { $("inhib-f-err").textContent = "Source and target matchers are required."; return; }
+  const equal = $("inhib-f-equal").value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const rec = { id: _inhibEditId || ("inh-" + uuid()), source, target, equal };
+  _routingCfg.inhibitions = _routingCfg.inhibitions || [];
+  if (_inhibEditId) {
+    const idx = _routingCfg.inhibitions.findIndex(x => x.id === _inhibEditId);
+    if (idx >= 0) _routingCfg.inhibitions[idx] = rec; else _routingCfg.inhibitions.push(rec);
+  } else {
+    _routingCfg.inhibitions.push(rec);
+  }
+  try {
+    await saveRouting();
+    $("inhib-modal").classList.remove("open");
+  } catch (e) { $("inhib-f-err").textContent = e.message; }
+}
+
+// ----- Mute timing modal -----
+let _muteEditId = null;
+function openMuteModal(id) {
+  _muteEditId = id;
+  const m = id ? (_routingCfg.muteTimes || []).find(x => x.id === id) : null;
+  const cur = m || { name: "", windows: [] };
+  $("mute-modal-title").textContent = id ? "Edit mute timing" : "New mute timing";
+  $("mute-modal-body").innerHTML = `
+    <div class="rule-field"><label>Name</label>
+      <input id="mute-f-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="off-hours" /></div>
+    <div class="rule-field"><label>Windows <span class="hint">— times are UTC</span></label>
+      <div id="mute-windows"></div>
+      <button type="button" id="mute-add-window" style="font-size:11px;padding:3px 8px;">+ Add window</button></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button id="mute-f-save" class="primary">Save mute timing</button>
+      <span id="mute-f-err" style="color:var(--err);font-size:12px;"></span>
+    </div>`;
+  const box = $("mute-windows");
+  const addWindow = (w) => box.insertAdjacentHTML("beforeend", muteWindowHtml(w || { startMinute: 0, endMinute: 480, daysOfWeek: 0x7F }));
+  (cur.windows && cur.windows.length ? cur.windows : [{ startMinute: 0, endMinute: 480, daysOfWeek: 0x7F }]).forEach(addWindow);
+  $("mute-add-window").addEventListener("click", () => addWindow());
+  box.addEventListener("click", (e) => {
+    if (e.target.classList.contains("mw-del")) e.target.closest("[data-mw]").remove();
+  });
+  $("mute-f-save").addEventListener("click", saveMuteFromModal);
+  $("mute-modal").classList.add("open");
+  $("mute-f-name").focus();
+}
+function muteWindowHtml(w) {
+  const days = DAY_NAMES.map((d, i) =>
+    `<label style="display:inline-flex;align-items:center;gap:2px;font-size:11px;margin-right:6px;">
+       <input type="checkbox" class="mw-day" data-bit="${i}" ${(w.daysOfWeek & (1 << i)) ? "checked" : ""}/>${d}</label>`).join("");
+  return `<div data-mw style="border:1px solid var(--border);border-radius:5px;padding:8px;margin-bottom:6px;">
+    <div class="rt-form-row">
+      <span style="font-size:11px;color:var(--muted);">from</span>
+      <input class="mw-start" type="time" value="${minToHHMM(w.startMinute)}" style="flex:0 0 110px;" />
+      <span style="font-size:11px;color:var(--muted);">to</span>
+      <input class="mw-end" type="time" value="${minToHHMM(w.endMinute)}" style="flex:0 0 110px;" />
+      <span class="grow"></span>
+      <button type="button" class="mw-del danger">×</button>
+    </div>
+    <div>${days}</div>
+  </div>`;
+}
+async function saveMuteFromModal() {
+  const name = $("mute-f-name").value.trim();
+  if (!name) { $("mute-f-err").textContent = "Name is required."; return; }
+  const windows = [];
+  document.querySelectorAll("#mute-windows [data-mw]").forEach(row => {
+    const start = hhmmToMin(row.querySelector(".mw-start").value);
+    const end   = hhmmToMin(row.querySelector(".mw-end").value);
+    let bits = 0;
+    row.querySelectorAll(".mw-day:checked").forEach(c => { bits |= (1 << (+c.getAttribute("data-bit"))); });
+    windows.push({
+      startMinute: start == null ? 0 : start,
+      endMinute:   end == null ? 1440 : end,
+      daysOfWeek:  bits || 0x7F,
+    });
+  });
+  const rec = { id: _muteEditId || ("mute-" + uuid()), name, windows };
+  _routingCfg.muteTimes = _routingCfg.muteTimes || [];
+  if (_muteEditId) {
+    const idx = _routingCfg.muteTimes.findIndex(x => x.id === _muteEditId);
+    if (idx >= 0) _routingCfg.muteTimes[idx] = rec; else _routingCfg.muteTimes.push(rec);
+  } else {
+    _routingCfg.muteTimes.push(rec);
+  }
+  try {
+    await saveRouting();
+    $("mute-modal").classList.remove("open");
+  } catch (e) { $("mute-f-err").textContent = e.message; }
+}
+
+// Close buttons + backdrop clicks for the routing modals.
+["recv", "route", "inhib", "mute"].forEach(k => {
+  const m = $(k + "-modal");
+  $(k + "-modal-close").addEventListener("click", () => {
+    if (k === "route") cancelRouteModal(); else m.classList.remove("open");
+  });
+  m.addEventListener("click", (e) => {
+    if (e.target === m) { if (k === "route") cancelRouteModal(); else m.classList.remove("open"); }
+  });
+});
+
+// Silence modal + "New silence" button (Stage 3).
+$("silence-new-btn").addEventListener("click", () => openSilenceModal(null));
+$("silence-modal-close").addEventListener("click", () => $("silence-modal").classList.remove("open"));
+$("silence-modal").addEventListener("click", (e) => {
+  if (e.target === $("silence-modal")) $("silence-modal").classList.remove("open");
+});
+
+// On-call modals close buttons + backdrop clicks (Stage 4).
+["ocuser", "ocsched", "ocpolicy"].forEach(k => {
+  const m = $(k + "-modal");
+  $(k + "-modal-close").addEventListener("click", () => m.classList.remove("open"));
+  m.addEventListener("click", (e) => { if (e.target === m) m.classList.remove("open"); });
+});
+
+// Notifications view: inner queue/DLQ toggle, refresh, detail modal (Stage 5).
+$("nsub-queue").addEventListener("click", () => showNotifySub("queue"));
+$("nsub-dlq").addEventListener("click", () => showNotifySub("dlq"));
+$("notify-refresh-btn").addEventListener("click", () => loadNotify());
+$("notify-modal-close").addEventListener("click", () => $("notify-modal").classList.remove("open"));
+$("notify-modal").addEventListener("click", (e) => {
+  if (e.target === $("notify-modal")) $("notify-modal").classList.remove("open");
 });
 
 // ── Alert rule + runbook editor ──────────────────────────────────────
@@ -5259,8 +6809,17 @@ function showMapTip(ev, text) {
 $("map-refresh").addEventListener("click", loadServiceMap);
 $("map-range").addEventListener("change", loadServiceMap);
 
+// Alerts sub-tabs (Firing / Rules / Silences / Routing) — drive via the hash so they're bookmarkable.
+$("asub-firing").addEventListener("click", () => { location.hash = "#/alerts/firing"; });
+$("asub-rules").addEventListener("click",  () => { location.hash = "#/alerts/rules"; });
+$("asub-silences").addEventListener("click", () => { location.hash = "#/alerts/silences"; });
+$("asub-routing").addEventListener("click", () => { location.hash = "#/alerts/routing"; });
+$("asub-oncall").addEventListener("click", () => { location.hash = "#/alerts/oncall"; });
+$("asub-notify").addEventListener("click", () => { location.hash = "#/alerts/notify"; });
+
 window.addEventListener("hashchange", router);
 router();
+startBadgePoll();
 
 // Populate panel-type <select> from the registry so new panel plugins
 // appear automatically without touching HTML.
