@@ -517,6 +517,32 @@ let private shapeRequest (m : OutboundMessage) : HttpRequestMessage =
     | Some k ->
       req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + k) |> ignore
     | None -> ()
+  | "mailgun" ->
+    // Mailgun Messages API: POST https://api.mailgun.net/v3/<domain>/messages
+    // (EU region: api.eu.mailgun.net). Body is x-www-form-urlencoded; auth is
+    // HTTP Basic with username "api" and the API key as the password.
+    let subject, plain = renderSummary m.body
+    let domain   = m.extra |> Map.tryFind "domain" |> Option.defaultValue ""
+    let fromAddr =
+      m.extra |> Map.tryFind "from"
+      |> Option.defaultValue (if domain <> "" then "alerts@" + domain else "alerts@pulseboard.local")
+    let toAddr   = m.extra |> Map.tryFind "to" |> Option.defaultValue ""
+    let enc s = Uri.EscapeDataString (s : string)
+    let body =
+      sprintf "from=%s&to=%s&subject=%s&text=%s"
+        (enc fromAddr) (enc toAddr) (enc subject) (enc plain)
+    let url =
+      if String.IsNullOrEmpty m.url
+      then sprintf "https://api.mailgun.net/v3/%s/messages" domain
+      else m.url
+    setUrl url
+    req.Content <- new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded")
+    match m.secret with
+    | Some key ->
+      let cred = "api:" + key
+      let b64  = Convert.ToBase64String(Encoding.UTF8.GetBytes cred)
+      req.Headers.TryAddWithoutValidation("Authorization", "Basic " + b64) |> ignore
+    | None -> ()
   | "twilio" ->
     // POST https://api.twilio.com/2010-04-01/Accounts/<sid>/Messages.json
     let _, plain = renderSummary m.body
@@ -614,7 +640,7 @@ let private shapeRequest (m : OutboundMessage) : HttpRequestMessage =
 let dispatch (m : OutboundMessage) : Task<Result<unit, string>> =
   task {
     try
-      if m.url = "" && m.receiverType <> "sendgrid" && m.receiverType <> "twilio" then
+      if m.url = "" && m.receiverType <> "sendgrid" && m.receiverType <> "twilio" && m.receiverType <> "mailgun" then
         return Result.Error "no url"
       else
         use req = shapeRequest m

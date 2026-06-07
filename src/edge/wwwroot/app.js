@@ -5412,7 +5412,7 @@ let _oncallPolicies = [];     // [{id,name}] for the route policy picker (best-e
 
 const RECEIVER_TYPES = [
   "slack", "webhook", "hmac_webhook", "pagerduty", "opsgenie",
-  "discord", "teams", "sendgrid", "ses", "twilio", "jira",
+  "discord", "teams", "sendgrid", "mailgun", "ses", "twilio", "jira",
 ];
 // Per-type field spec — mirrors NotifyQueue.fs `shapeRequest`. Each entry may
 // declare a `url` and/or `secret` field (with label / required / placeholder)
@@ -5451,6 +5451,15 @@ const RECEIVER_SPEC = {
     extra: [
       { k: "from", label: "From address", required: true, placeholder: "alerts@yourco.com" },
       { k: "to",   label: "To address",   required: true, placeholder: "oncall@yourco.com" },
+    ],
+  },
+  mailgun: {
+    url: { label: "API URL", required: false, hint: "— built from domain if blank (EU: api.eu.mailgun.net)", placeholder: "https://api.mailgun.net/v3/<domain>/messages" },
+    secret: { label: "API key", required: true, hint: "— sent as HTTP Basic password (user \"api\")" },
+    extra: [
+      { k: "domain", label: "Sending domain", required: true,  placeholder: "mg.yourco.com" },
+      { k: "from",   label: "From address",   required: false, placeholder: "alerts@mg.yourco.com" },
+      { k: "to",     label: "To address",     required: true,  placeholder: "oncall@yourco.com" },
     ],
   },
   ses: {
