@@ -5412,14 +5412,79 @@ let _oncallPolicies = [];     // [{id,name}] for the route policy picker (best-e
 
 const RECEIVER_TYPES = [
   "slack", "webhook", "hmac_webhook", "pagerduty", "opsgenie",
-  "discord", "teams", "email", "sendgrid", "twilio", "jira", "ses",
+  "discord", "teams", "sendgrid", "ses", "twilio", "jira",
 ];
-// Per-type structured `extra` fields (everything else uses a free-form editor).
-const RECEIVER_EXTRA = {
-  sendgrid: ["from", "to"],
-  ses:      ["from", "to"],
-  twilio:   ["account_sid", "from", "to"],
-  jira:     ["project", "issueType", "user"],
+// Per-type field spec — mirrors NotifyQueue.fs `shapeRequest`. Each entry may
+// declare a `url` and/or `secret` field (with label / required / placeholder)
+// and a list of structured `extra` inputs. Types not listed here (incl. any
+// legacy receivers) fall back to `_default`, a generic JSON-envelope webhook.
+// Note: plain SMTP "email" is not implemented in the edge notifier — email is
+// delivered via `sendgrid` or `ses`, and SMS via `twilio`.
+const RECEIVER_SPEC = {
+  slack: {
+    url: { label: "Webhook URL", required: true, placeholder: "https://hooks.slack.com/services/…" },
+  },
+  webhook: {
+    url: { label: "Webhook URL", required: true, placeholder: "https://example.com/alert-hook" },
+  },
+  hmac_webhook: {
+    url: { label: "Webhook URL", required: true, placeholder: "https://example.com/alert-hook" },
+    secret: { label: "Signing secret", required: true, hint: "— computes the X-PulseBoard-Signature HMAC" },
+  },
+  pagerduty: {
+    url: { label: "Events API URL", required: true, placeholder: "https://events.pagerduty.com/v2/enqueue" },
+    secret: { label: "Integration / routing key", required: true },
+  },
+  opsgenie: {
+    url: { label: "Alerts API URL", required: true, placeholder: "https://api.opsgenie.com/v2/alerts" },
+    secret: { label: "API key (GenieKey)", required: true },
+  },
+  discord: {
+    url: { label: "Webhook URL", required: true, placeholder: "https://discord.com/api/webhooks/…" },
+  },
+  teams: {
+    url: { label: "Webhook URL", required: true, placeholder: "https://outlook.office.com/webhook/…" },
+  },
+  sendgrid: {
+    url: { label: "API URL", required: false, placeholder: "https://api.sendgrid.com/v3/mail/send" },
+    secret: { label: "API key (Bearer token)", required: true },
+    extra: [
+      { k: "from", label: "From address", required: true, placeholder: "alerts@yourco.com" },
+      { k: "to",   label: "To address",   required: true, placeholder: "oncall@yourco.com" },
+    ],
+  },
+  ses: {
+    url: { label: "SES endpoint / proxy URL", required: true, placeholder: "https://email.us-east-1.amazonaws.com/" },
+    secret: { label: "Proxy auth token", required: false },
+    extra: [
+      { k: "from", label: "From address", required: true, placeholder: "alerts@yourco.com" },
+      { k: "to",   label: "To address",   required: true, placeholder: "oncall@yourco.com" },
+    ],
+  },
+  twilio: {
+    url: { label: "Messages API URL", required: false, placeholder: "https://api.twilio.com/2010-04-01/Accounts/<sid>/Messages.json" },
+    secret: { label: "Auth token", required: true },
+    extra: [
+      { k: "account_sid", label: "Account SID", required: true, placeholder: "ACxxxxxxxx…" },
+      { k: "from",        label: "From number", required: true, placeholder: "+15550001111" },
+      { k: "to",          label: "To number",   required: true, placeholder: "+15552223333" },
+    ],
+  },
+  jira: {
+    url: { label: "Create-issue API URL", required: true, placeholder: "https://yourco.atlassian.net/rest/api/3/issue" },
+    secret: { label: "API token", required: true },
+    extra: [
+      { k: "user",      label: "User email (basic auth)", required: true,  placeholder: "bot@yourco.com" },
+      { k: "project",   label: "Project key",             required: true,  placeholder: "OPS" },
+      { k: "issueType", label: "Issue type",              required: false, placeholder: "Task" },
+    ],
+  },
+  _default: {
+    url: { label: "URL", required: true, placeholder: "https://example.com/hook" },
+    secret: { label: "Secret / token", required: false },
+    freeExtra: true,
+    note: "Unrecognised type — the alert JSON envelope is POSTed to this URL as-is.",
+  },
 };
 const MATCH_OPS = ["=", "!=", "=~", "!~"];
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -5709,37 +5774,60 @@ function openReceiverModal(id) {
   _recvEditId = id;
   const r = id ? (_routingCfg.receivers || []).find(x => x.id === id) : null;
   const cur = r || { name: "", type: "slack", url: "", secret: "", extra: {} };
+  cur.extra = cur.extra || {};
   $("recv-modal-title").textContent = id ? "Edit receiver" : "New receiver";
-  const typeOpts = RECEIVER_TYPES.map(t => `<option ${cur.type === t ? "selected" : ""}>${t}</option>`).join("");
+  // Preserve unknown / legacy types so editing never silently rewrites a type
+  // we no longer offer (e.g. a previously-saved "email" receiver).
+  const knownTypes = RECEIVER_TYPES.slice();
+  if (cur.type && !knownTypes.includes(cur.type)) knownTypes.unshift(cur.type);
+  const typeOpts = knownTypes.map(t => `<option ${cur.type === t ? "selected" : ""}>${escapeHtml(t)}</option>`).join("");
   $("recv-modal-body").innerHTML = `
     <div class="rule-field"><label>Name</label>
       <input id="recv-f-name" style="width:100%;" value="${escapeHtml(cur.name)}" placeholder="prod-slack" /></div>
     <div class="rule-field"><label>Type</label>
       <select id="recv-f-type" style="width:100%;">${typeOpts}</select></div>
-    <div class="rule-field"><label>URL <span class="hint">— webhook / API endpoint (optional for sendgrid/twilio)</span></label>
-      <input id="recv-f-url" style="width:100%;" value="${escapeHtml(cur.url || "")}" placeholder="https://hooks.slack.com/…" /></div>
-    <div class="rule-field"><label>Secret <span class="hint">— token / API key / signing secret</span></label>
-      <input id="recv-f-secret" type="password" style="width:100%;" value="${escapeHtml(cur.secret || "")}" /></div>
-    <div id="recv-extra-host"></div>
+    <div id="recv-dyn-host"></div>
     <div style="display:flex;align-items:center;gap:12px;">
       <button id="recv-f-save" class="primary">Save receiver</button>
       <span id="recv-f-err" style="color:var(--err);font-size:12px;"></span>
     </div>`;
-  const renderExtra = (type) => {
-    const host = $("recv-extra-host");
-    const fields = RECEIVER_EXTRA[type];
-    if (fields) {
-      host.innerHTML = `<div class="rule-field"><label>${escapeHtml(type)} settings</label></div>` +
-        fields.map(f => `<div class="rule-field" style="margin-bottom:6px;">
-          <label style="font-size:10px;">${escapeHtml(f)}</label>
-          <input class="recv-extra" data-k="${escapeHtml(f)}" style="width:100%;" value="${escapeHtml((cur.extra && cur.extra[f]) || "")}" /></div>`).join("");
-    } else {
-      host.innerHTML = `<div class="rule-field"><label>Extra <span class="hint">— one <code>key=value</code> per line</span></label>
+  const hint = (txt) => txt ? ` <span class="hint">${escapeHtml(txt)}</span>` : "";
+  const optional = (req) => req ? "" : hint("— optional");
+  const renderDyn = (type) => {
+    const spec = RECEIVER_SPEC[type] || RECEIVER_SPEC._default;
+    let html = "";
+    if (spec.url) {
+      const u = spec.url;
+      html += `<div class="rule-field"><label>${escapeHtml(u.label)}${optional(u.required)}${hint(u.hint)}</label>
+        <input id="recv-f-url" style="width:100%;" value="${escapeHtml(cur.url || "")}" placeholder="${escapeHtml(u.placeholder || "")}" /></div>`;
+    }
+    if (spec.secret) {
+      const s = spec.secret;
+      html += `<div class="rule-field"><label>${escapeHtml(s.label)}${optional(s.required)}${hint(s.hint)}</label>
+        <input id="recv-f-secret" type="password" style="width:100%;" value="${escapeHtml(cur.secret || "")}" /></div>`;
+    }
+    (spec.extra || []).forEach(f => {
+      html += `<div class="rule-field"><label>${escapeHtml(f.label)}${optional(f.required)}</label>
+        <input class="recv-extra" data-k="${escapeHtml(f.k)}" style="width:100%;" value="${escapeHtml((cur.extra && cur.extra[f.k]) || "")}" placeholder="${escapeHtml(f.placeholder || "")}" /></div>`;
+    });
+    if (spec.freeExtra) {
+      html += `<div class="rule-field"><label>Extra <span class="hint">— one <code>key=value</code> per line</span></label>
         <textarea id="recv-extra-raw" style="width:100%;min-height:54px;">${escapeHtml(mapToLines(cur.extra))}</textarea></div>`;
     }
+    if (spec.note) html += `<p class="hint" style="margin-top:-2px;">${escapeHtml(spec.note)}</p>`;
+    $("recv-dyn-host").innerHTML = html;
   };
-  renderExtra(cur.type);
-  $("recv-f-type").addEventListener("change", (e) => renderExtra(e.target.value));
+  // Capture in-progress edits into `cur` so switching type doesn't lose them.
+  const captureDyn = () => {
+    const urlEl = $("recv-f-url"); if (urlEl) cur.url = urlEl.value;
+    const secEl = $("recv-f-secret"); if (secEl) cur.secret = secEl.value;
+    $("recv-dyn-host").querySelectorAll(".recv-extra").forEach(inp => {
+      cur.extra[inp.getAttribute("data-k")] = inp.value;
+    });
+    const raw = $("recv-extra-raw"); if (raw) cur.extra = linesToMap(raw.value);
+  };
+  renderDyn(cur.type);
+  $("recv-f-type").addEventListener("change", (e) => { captureDyn(); renderDyn(e.target.value); });
   $("recv-f-save").addEventListener("click", saveReceiverFromModal);
   $("recv-modal").classList.add("open");
   $("recv-f-name").focus();
@@ -5747,19 +5835,25 @@ function openReceiverModal(id) {
 async function saveReceiverFromModal() {
   const name = $("recv-f-name").value.trim();
   const type = $("recv-f-type").value;
-  if (!name) { $("recv-f-err").textContent = "Name is required."; return; }
+  const errEl = $("recv-f-err");
+  errEl.textContent = "";
+  if (!name) { errEl.textContent = "Name is required."; return; }
+  const spec = RECEIVER_SPEC[type] || RECEIVER_SPEC._default;
   let extra = {};
-  const structured = $("recv-extra-host").querySelectorAll(".recv-extra");
-  if (structured.length) {
-    structured.forEach(inp => {
-      const v = inp.value.trim();
-      if (v) extra[inp.getAttribute("data-k")] = v;
-    });
-  } else if ($("recv-extra-raw")) {
-    extra = linesToMap($("recv-extra-raw").value);
+  $("recv-dyn-host").querySelectorAll(".recv-extra").forEach(inp => {
+    const v = inp.value.trim();
+    if (v) extra[inp.getAttribute("data-k")] = v;
+  });
+  if ($("recv-extra-raw")) extra = { ...extra, ...linesToMap($("recv-extra-raw").value) };
+  const urlEl = $("recv-f-url");
+  const secEl = $("recv-f-secret");
+  const url = urlEl ? urlEl.value.trim() : "";
+  const secret = secEl ? secEl.value : "";
+  if (spec.url && spec.url.required && !url) { errEl.textContent = spec.url.label + " is required."; return; }
+  if (spec.secret && spec.secret.required && !secret) { errEl.textContent = spec.secret.label + " is required."; return; }
+  for (const f of (spec.extra || [])) {
+    if (f.required && !extra[f.k]) { errEl.textContent = f.label + " is required."; return; }
   }
-  const url = $("recv-f-url").value.trim();
-  const secret = $("recv-f-secret").value;
   const rec = {
     id: _recvEditId || ("recv-" + uuid()),
     name, type,
@@ -5777,7 +5871,7 @@ async function saveReceiverFromModal() {
   try {
     await saveRouting();
     $("recv-modal").classList.remove("open");
-  } catch (e) { $("recv-f-err").textContent = e.message; }
+  } catch (e) { errEl.textContent = e.message; }
 }
 
 // ----- Route modal -----
