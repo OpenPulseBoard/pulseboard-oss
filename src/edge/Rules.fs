@@ -399,9 +399,11 @@ type Evaluator(metricStore : MetricStore,
   // Mimir and the in-process MetricStore is empty), PromQL rules are
   // evaluated by delegating the full expression to the backend's
   // instant-query endpoint instead of the embedded engine, so alerts
-  // see the same data as the dashboards.
+  // see the same data as the dashboards. The tenant id is passed through
+  // so the upstream read is scoped to the same tenant the data was
+  // written under (matching the dashboard query proxy).
   let mutable remoteQuery
-    : (string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
+    : (TenantId -> string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
 
   let workerCount = max 2 (Environment.ProcessorCount / 2)
 
@@ -410,7 +412,7 @@ type Evaluator(metricStore : MetricStore,
     let h = (hash groupId &&& 0x7fffffff) % workerCount
     h
 
-  let evalPromRule (rule : Rule) (now : int64) : (Map<string,string> * float)[] =
+  let evalPromRule (tid : TenantId) (rule : Rule) (now : int64) : (Map<string,string> * float)[] =
     // Evaluate the embedded PromQL subset (vector selectors, range
     // functions, aggregations with by/without grouping, scalar/vector
     // arithmetic). Each resulting series whose value breaches the
@@ -419,7 +421,7 @@ type Evaluator(metricStore : MetricStore,
     | Some q ->
       // Delegate the full expression to the remote backend (e.g. Mimir),
       // then apply the threshold to each returned series.
-      match q rule.expr now with
+      match q tid rule.expr now with
       | Result.Ok series ->
         series |> Array.filter (fun (_, v) -> evalCmp rule.cmp v rule.threshold)
       | Result.Error _ -> [||]
@@ -462,7 +464,7 @@ type Evaluator(metricStore : MetricStore,
     let hits =
       try
         match rule.lang with
-        | PromQL -> evalPromRule rule now
+        | PromQL -> evalPromRule tid rule now
         | LogQL  -> evalLogRule  rule now group.intervalMs
       with _ -> [||]
     swStart.Stop()
@@ -561,10 +563,10 @@ type Evaluator(metricStore : MetricStore,
   member _.SetTenantsProvider(f : unit -> TenantId[]) = tenantsProvider <- f
 
   /// Delegate PromQL rule evaluation to a remote backend (e.g. Mimir's
-  /// instant-query endpoint). When set, `f expr nowMs` must return one
-  /// `(labels, value)` pair per result series. Used when ingest fans out
-  /// to an upstream store and the in-process MetricStore is empty.
-  member _.SetPromQuery(f : string -> int64 -> Result<(Map<string,string> * float)[], string>) =
+  /// instant-query endpoint). When set, `f tenant expr nowMs` must return
+  /// one `(labels, value)` pair per result series. Used when ingest fans
+  /// out to an upstream store and the in-process MetricStore is empty.
+  member _.SetPromQuery(f : TenantId -> string -> int64 -> Result<(Map<string,string> * float)[], string>) =
     remoteQuery <- Some f
 
   member _.Start() =

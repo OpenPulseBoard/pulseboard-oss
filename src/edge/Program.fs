@@ -433,7 +433,7 @@ let main argv =
   // Set when an upstream backend (Mimir) is configured, so the rule
   // evaluator can delegate full PromQL to its instant-query endpoint.
   let mutable promRuleQuery
-    : (string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
+    : (PulseBoard.Tenancy.TenantId -> string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
   let metricBackend : PulseBoard.Storage.IMetricBackend =
     match mimirUrl with
     | Some url ->
@@ -449,10 +449,17 @@ let main argv =
       // Rules must evaluate against the same data the dashboards see, so
       // when writes fan out to Mimir we delegate PromQL rule evaluation
       // to Mimir's instant-query endpoint (the in-process MetricStore is
-      // empty in this mode).
+      // empty in this mode). The read is scoped to the same tenant the
+      // data was written under: the single-tenant sentinel `__local__`
+      // maps to the empty/anonymous tenant (matching ingest + the query
+      // proxy, which send no org header), while real tenants pass their
+      // id through. An explicit `--mimir-read-tenant=` overrides the
+      // single-tenant case for Mimir setups that require a named tenant.
       promRuleQuery <-
-        Some (fun (expr : string) (now : int64) ->
-          mimir.InstantQuery(mimirReadTenant, expr, now))
+        Some (fun (PulseBoard.Tenancy.TenantId t) (expr : string) (now : int64) ->
+          let readTenant =
+            if t = "__local__" then mimirReadTenant else t
+          mimir.InstantQuery(readTenant, expr, now))
       mimir :> _
     | None ->
       PulseBoard.Storage.EmbeddedMetricBackend(
