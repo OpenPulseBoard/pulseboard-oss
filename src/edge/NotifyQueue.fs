@@ -678,41 +678,61 @@ let runWorker (queue : INotifyQueue)
   task {
     let rnd = Random()
     while not ct.IsCancellationRequested do
-      let now = nowMs ()
-      let batch = queue.Lease(16, now)
-      if batch.Length = 0 then
-        do! Task.Delay(500, ct)
-      else
-        nqlog (sprintf "worker leased %d message(s) for dispatch" batch.Length)
-        for m in batch do
-          let (TenantId tidText) = m.tenantId
-          nqlog (sprintf "dispatch msgId=%s tenant=%s receiver=%s type=%s url=%s attempt=%d/%d"
-                   m.id tidText m.receiverId m.receiverType
-                   (if m.url = "" then "(none)" else m.url) (m.attempt + 1) m.maxAttempts)
-          let! result = dispatch m
-          match metricStore with
-          | Some ms ->
-            ms.Record("pulse_notify_attempts_total", { ts = now; value = 1.0 })
-          | None -> ()
-          match result with
-          | Result.Ok () ->
-            nqlog (sprintf "  -> OK msgId=%s delivered (acked)" m.id)
-            queue.Ack m.id
-          | Result.Error err ->
-            match metricStore with
-            | Some ms ->
-              ms.Record("pulse_notify_failures_total", { ts = now; value = 1.0 })
-            | None -> ()
-            if m.attempt + 1 >= m.maxAttempts then
-              nqlog (sprintf "  -> DEAD msgId=%s after %d attempts: %s" m.id m.maxAttempts err)
-              queue.Dead(m.id, err)
-            else
-              let exp = baseBackoffMs * (1L <<< (min 10 (m.attempt + 1)))
-              let cap = min exp maxBackoffMs
-              let jitter = int64 (rnd.Next(int (cap / 4L + 1L)))
-              nqlog (sprintf "  -> FAIL msgId=%s: %s (retry in ~%dms, attempt %d/%d)"
-                       m.id err (cap + jitter) (m.attempt + 1) m.maxAttempts)
-              queue.Fail(m.id, err, now + cap + jitter)
+      try
+        let now = nowMs ()
+        let batch = queue.Lease(16, now)
+        if batch.Length = 0 then
+          do! Task.Delay(500, ct)
+        else
+          nqlog (sprintf "worker leased %d message(s) for dispatch" batch.Length)
+          for m in batch do
+            // Per-message guard: a throw from dispatch/Ack/Fail/Dead must
+            // not abort the rest of the batch. The leased message simply
+            // stays leased and becomes re-eligible when its lease expires.
+            try
+              let (TenantId tidText) = m.tenantId
+              nqlog (sprintf "dispatch msgId=%s tenant=%s receiver=%s type=%s url=%s attempt=%d/%d"
+                       m.id tidText m.receiverId m.receiverType
+                       (if m.url = "" then "(none)" else m.url) (m.attempt + 1) m.maxAttempts)
+              let! result = dispatch m
+              match metricStore with
+              | Some ms ->
+                ms.Record("pulse_notify_attempts_total", { ts = now; value = 1.0 })
+              | None -> ()
+              match result with
+              | Result.Ok () ->
+                nqlog (sprintf "  -> OK msgId=%s delivered (acked)" m.id)
+                queue.Ack m.id
+              | Result.Error err ->
+                match metricStore with
+                | Some ms ->
+                  ms.Record("pulse_notify_failures_total", { ts = now; value = 1.0 })
+                | None -> ()
+                if m.attempt + 1 >= m.maxAttempts then
+                  nqlog (sprintf "  -> DEAD msgId=%s after %d attempts: %s" m.id m.maxAttempts err)
+                  queue.Dead(m.id, err)
+                else
+                  let exp = baseBackoffMs * (1L <<< (min 10 (m.attempt + 1)))
+                  let cap = min exp maxBackoffMs
+                  let jitter = int64 (rnd.Next(int (cap / 4L + 1L)))
+                  nqlog (sprintf "  -> FAIL msgId=%s: %s (retry in ~%dms, attempt %d/%d)"
+                           m.id err (cap + jitter) (m.attempt + 1) m.maxAttempts)
+                  queue.Fail(m.id, err, now + cap + jitter)
+            with ex ->
+              nqlog (sprintf "  -> WORKER ERROR msgId=%s: %s | %s"
+                       m.id ex.Message (ex.GetType().Name))
+      with
+      | :? OperationCanceledException -> ()
+      | ex ->
+        // Loop-level guard: without this, any throw from queue.Lease
+        // (a fresh DB connection that can transiently fail) would fault
+        // the worker Task permanently. Since these tasks are never
+        // awaited, that fault is swallowed silently and the worker stops
+        // forever — the whole queue then stalls with messages stuck in
+        // Pending. Log and keep looping instead.
+        nqlog (sprintf "worker loop error (recovering): %s | %s"
+                 ex.Message (ex.GetType().Name))
+        try do! Task.Delay(1_000, ct) with _ -> ()
   } :> Task
 
 // -- REST surface (DLQ inspection / replay) ---------------------------------
