@@ -622,6 +622,7 @@ type IEscalator =
 type private GroupState =
   { mutable firstSeenAt    : int64
     mutable lastSentAt     : int64
+    mutable lastFlushAt    : int64  // last due-flush attempt (sent OR deduped)
     mutable fingerprints   : Set<string>
     mutable lastSentSet    : Set<string>
     mutable policyId       : string option
@@ -876,18 +877,23 @@ type Pipeline(configStore : IConfigStore,
               let waitOk =
                 now - state.firstSeenAt >= route.groupWaitMs
                 && state.lastSentAt = 0L
+              // Followup cadence is anchored on the last flush ATTEMPT
+              // (sent or deduped), not the last actual send — otherwise a
+              // deduped group re-evaluates on every 1s tick because
+              // lastSentAt never advances.
               let followOk =
                 state.lastSentAt > 0L
-                && now - state.lastSentAt >= route.groupIntervalMs
+                && now - state.lastFlushAt >= route.groupIntervalMs
               if waitOk || followOk then
+                state.lastFlushAt <- now
                 let fps = state.fingerprints
                 let identical = fps = state.lastSentSet
                 let withinRepeat =
                   state.lastSentAt > 0L
                   && now - state.lastSentAt < route.repeatIntervalMs
                 if identical && withinRepeat then
-                  nlog (sprintf "flushDue tenant=%s group=%s -> deduped (identical fingerprint set within repeatIntervalMs=%d)"
-                          kvT.Key gkey route.repeatIntervalMs)
+                  nlog (sprintf "flushDue tenant=%s group=%s -> deduped (identical fingerprint set within repeatIntervalMs=%d); next check in ~%dms"
+                          kvT.Key gkey route.repeatIntervalMs route.groupIntervalMs)
                 else
                   enqueueFor recv state groupId alerts)
 
@@ -973,7 +979,7 @@ type Pipeline(configStore : IConfigStore,
           let tg = tenantBucket tid
           let st =
             tg.groups.GetOrAdd(gkey, fun _ ->
-              { firstSeenAt = now; lastSentAt = 0L
+              { firstSeenAt = now; lastSentAt = 0L; lastFlushAt = 0L
                 fingerprints = Set.empty; lastSentSet = Set.empty
                 policyId = policyId; escalationStep = -1; stepStartedAt = 0L })
           if st.fingerprints.Count = 0 then
