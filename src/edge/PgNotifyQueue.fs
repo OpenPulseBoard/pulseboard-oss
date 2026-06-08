@@ -55,6 +55,15 @@ let private nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
 
 let private tid (TenantId t) = t
 
+/// Bind a nullable TEXT parameter. A bare CLR `null` makes Npgsql throw
+/// ("must have either its NpgsqlDbType or its DataTypeName or its Value
+/// set") because it cannot infer the column type from null, so map None
+/// to DBNull.Value instead.
+let private dbStr (s : string option) : obj =
+  match s with
+  | Some v -> box v
+  | None   -> box DBNull.Value
+
 let private serialiseMap (m : Map<string,string>) : string =
   use ms = new MemoryStream()
   use w = new Utf8JsonWriter(ms)
@@ -133,7 +142,7 @@ type PgNotifyQueue(connectionString : string) =
       cmd.Parameters.AddWithValue("rid",  m.receiverId)                       |> ignore
       cmd.Parameters.AddWithValue("rt",   m.receiverType)                     |> ignore
       cmd.Parameters.AddWithValue("url",  m.url)                              |> ignore
-      cmd.Parameters.AddWithValue("sec",  m.secret |> Option.defaultValue null) |> ignore
+      cmd.Parameters.AddWithValue("sec",  dbStr m.secret)                     |> ignore
       cmd.Parameters.AddWithValue("body", m.body)                             |> ignore
       cmd.Parameters.AddWithValue("hdr",  serialiseMap m.headers)             |> ignore
       cmd.Parameters.AddWithValue("ext",  serialiseMap m.extra)               |> ignore
@@ -141,7 +150,7 @@ type PgNotifyQueue(connectionString : string) =
       cmd.Parameters.AddWithValue("max",  m.maxAttempts)                      |> ignore
       cmd.Parameters.AddWithValue("enq",  m.enqueuedAt)                       |> ignore
       cmd.Parameters.AddWithValue("nxt",  m.nextRunAt)                        |> ignore
-      cmd.Parameters.AddWithValue("err",  m.lastError |> Option.defaultValue null) |> ignore
+      cmd.Parameters.AddWithValue("err",  dbStr m.lastError)                  |> ignore
       cmd.ExecuteNonQuery() |> ignore
 
     member _.Lease (batchSize : int, nowMs : int64) =
