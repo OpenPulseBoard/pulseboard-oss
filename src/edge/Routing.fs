@@ -772,31 +772,42 @@ type Pipeline(configStore : IConfigStore,
         let bucket = firingBucket tid
         let enqueueFor (recv : Receiver) (state : GroupState) (groupId : string)
                        (alerts : AlertInstance[]) =
-          let body = envelope publicUrl correlationProvider recv groupId alerts
-          let msg : OutboundMessage =
-            { id = Guid.NewGuid().ToString("N")
-              tenantId = tid
-              receiverId = recv.id
-              receiverType = recv.type_
-              url = recv.url |> Option.defaultValue ""
-              secret = recv.secret
-              body = body
-              headers = Map.empty
-              extra = recv.extra
-              attempt = 0
-              maxAttempts = 5
-              enqueuedAt = now
-              nextRunAt = now
-              lastError = None }
-          queue.Enqueue msg
-          state.lastSentAt <- now
-          state.lastSentSet <- state.fingerprints
-          nlog (sprintf "ENQUEUE tenant=%s receiver=%s type=%s url=%s group=%s alerts=%d msgId=%s"
-                  kvT.Key recv.id recv.type_
-                  (recv.url |> Option.defaultValue "(none)") groupId alerts.Length msg.id)
-          selfMetrics.Record(
-            "pulse_notify_enqueued_total",
-            { ts = now; value = 1.0 })
+          try
+            let body = envelope publicUrl correlationProvider recv groupId alerts
+            let msg : OutboundMessage =
+              { id = Guid.NewGuid().ToString("N")
+                tenantId = tid
+                receiverId = recv.id
+                receiverType = recv.type_
+                url = recv.url |> Option.defaultValue ""
+                secret = recv.secret
+                body = body
+                headers = Map.empty
+                extra = recv.extra
+                attempt = 0
+                maxAttempts = 5
+                enqueuedAt = now
+                nextRunAt = now
+                lastError = None }
+            queue.Enqueue msg
+            state.lastSentAt <- now
+            state.lastSentSet <- state.fingerprints
+            nlog (sprintf "ENQUEUE tenant=%s receiver=%s type=%s url=%s group=%s alerts=%d msgId=%s"
+                    kvT.Key recv.id recv.type_
+                    (recv.url |> Option.defaultValue "(none)") groupId alerts.Length msg.id)
+            selfMetrics.Record(
+              "pulse_notify_enqueued_total",
+              { ts = now; value = 1.0 })
+          with ex ->
+            // Surface the failure instead of letting the flush timer's
+            // blanket catch swallow it (the classic ROUTED-but-no-ENQUEUE
+            // symptom). lastSentAt is left untouched so the next tick
+            // retries — and keeps logging — until the cause is fixed.
+            nlog (sprintf "ENQUEUE FAILED tenant=%s receiver=%s type=%s url=%s group=%s alerts=%d: %s | %s"
+                    kvT.Key recv.id recv.type_
+                    (recv.url |> Option.defaultValue "(none)") groupId alerts.Length
+                    ex.Message (ex.GetType().Name))
+            nlog (sprintf "ENQUEUE FAILED stack: %s" ex.StackTrace)
         for kvG in kvT.Value.groups do
           let gkey  = kvG.Key
           let state = kvG.Value
@@ -881,7 +892,14 @@ type Pipeline(configStore : IConfigStore,
                   enqueueFor recv state groupId alerts)
 
   let flushTimer =
-    new Timer((fun _ -> try flushDue (nowMs ()) with _ -> ()),
+    new Timer((fun _ ->
+                try flushDue (nowMs ())
+                with ex ->
+                  // Last line of defense: anything thrown outside the
+                  // per-group enqueueFor guard (e.g. config load, bucket
+                  // resolution) is logged rather than silently dropped.
+                  nlog (sprintf "flushDue FAILED: %s | %s" ex.Message (ex.GetType().Name))
+                  nlog (sprintf "flushDue FAILED stack: %s" ex.StackTrace)),
               null, TimeSpan.FromSeconds 1., TimeSpan.FromSeconds 1.)
 
   interface IAlertSink with
