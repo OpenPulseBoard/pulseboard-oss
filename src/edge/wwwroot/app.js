@@ -4530,13 +4530,20 @@ async function loadFiringAlerts(quiet) {
     const alerts = await api("GET", "/api/alerts");
     _firingAlerts = Array.isArray(alerts) ? alerts : [];
     updateFiringBadge(_firingAlerts);
-    // Best-effort ack enrichment (active alert count is small).
-    await Promise.all(_firingAlerts.map(async a => {
-      try {
-        const acks = await api("GET", "/api/alerts/" + encodeURIComponent(a.fingerprint) + "/acks");
-        a._acks = Array.isArray(acks) ? acks : [];
-      } catch { a._acks = []; }
-    }));
+    // Ack enrichment in a single batch request, then index by
+    // fingerprint locally (avoids one GET per alert — the N+1 antipattern).
+    try {
+      const allAcks = await api("GET", "/api/alerts/acks");
+      const byFp = new Map();
+      (Array.isArray(allAcks) ? allAcks : []).forEach(ack => {
+        const list = byFp.get(ack.fingerprint) || [];
+        list.push(ack);
+        byFp.set(ack.fingerprint, list);
+      });
+      _firingAlerts.forEach(a => { a._acks = byFp.get(a.fingerprint) || []; });
+    } catch {
+      _firingAlerts.forEach(a => { a._acks = []; });
+    }
     renderFiringAlerts();
   } catch (e) {
     host.innerHTML = `<div class="rules-empty" style="padding:0 20px;color:var(--err);">Failed to load alerts: ${escapeHtml(e.message)}</div>`;

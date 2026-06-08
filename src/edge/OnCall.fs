@@ -346,6 +346,10 @@ type IAckStore =
   abstract Ack    : tenantId:TenantId * ack:Acknowledgement -> unit
   abstract IsAcked: tenantId:TenantId * fingerprint:string -> bool
   abstract List   : tenantId:TenantId * fingerprint:string -> Acknowledgement[]
+  /// All known acknowledgements for the tenant (latest per fingerprint).
+  /// Lets callers fetch the whole ack set in one request instead of one
+  /// lookup per alert (avoids an N+1 round-trip from the UI).
+  abstract All    : tenantId:TenantId -> Acknowledgement[]
 
 type FileAckStore(root : string) =
   do Directory.CreateDirectory root |> ignore
@@ -403,6 +407,9 @@ type FileAckStore(root : string) =
       match b.TryGetValue fp with
       | true, a -> [| a |]
       | _ -> [||]
+    member _.All tid =
+      let b = bucket tid
+      b.Values |> Seq.toArray
 
 // -- on-call resolution -----------------------------------------------------
 
@@ -563,6 +570,11 @@ let webPart (multiTenant : bool)
             ackStore.Ack(tid, a)
             return! jsonResp 201 (serialiseAcks [| a |]) ctx
         }))
+    // Batch ack lookup — one request for the whole tenant instead of
+    // one GET per alert fingerprint (avoids the UI's N+1 fan-out).
+    GET >=> path "/api/alerts/acks" >=>
+      withTenant (fun tid ->
+        jsonResp 200 (serialiseAcks (ackStore.All tid)))
     GET >=> pathScan "/api/alerts/%s/acks" (fun fp ->
       withTenant (fun tid ->
         jsonResp 200 (serialiseAcks (ackStore.List(tid, fp)))))

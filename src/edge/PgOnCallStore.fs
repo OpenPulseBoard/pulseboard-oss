@@ -120,3 +120,20 @@ type PgAckStore(connectionString : string) =
           user        = reader.GetString 1
           ackedAt     = reader.GetInt64  2 }
       results.ToArray()
+
+    member _.All (tenantId : TenantId) =
+      use conn = openConn ()
+      use cmd =
+        new NpgsqlCommand(
+          "SELECT fingerprint, username, acked_at_ms \
+           FROM pb_oncall_acks WHERE tenant_id = @tid",
+          conn)
+      cmd.Parameters.AddWithValue("tid", tid tenantId) |> ignore
+      use reader = cmd.ExecuteReader()
+      let results = System.Collections.Generic.List<Acknowledgement>()
+      while reader.Read() do
+        results.Add {
+          fingerprint = reader.GetString 0
+          user        = reader.GetString 1
+          ackedAt     = reader.GetInt64  2 }
+      results.ToArray()
