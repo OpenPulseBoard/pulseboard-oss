@@ -395,6 +395,14 @@ type Evaluator(metricStore : MetricStore,
   // group's interval elapses.
   let lastEval = ConcurrentDictionary<string * string, int64>()  // (tid, groupId) -> ms
 
+  // Optional remote PromQL evaluator. When set (e.g. ingest fans out to
+  // Mimir and the in-process MetricStore is empty), PromQL rules are
+  // evaluated by delegating the full expression to the backend's
+  // instant-query endpoint instead of the embedded engine, so alerts
+  // see the same data as the dashboards.
+  let mutable remoteQuery
+    : (string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
+
   let workerCount = max 2 (Environment.ProcessorCount / 2)
 
   /// Shard a group across workers by stable hash of groupId.
@@ -407,22 +415,31 @@ type Evaluator(metricStore : MetricStore,
     // functions, aggregations with by/without grouping, scalar/vector
     // arithmetic). Each resulting series whose value breaches the
     // threshold becomes one alert, keyed by its retained labels.
-    match parsePromExpr rule.expr with
-    | Result.Error _ -> [||]
-    | Result.Ok expr ->
-      match evalAt metricStore now expr with
-      | VScalar v ->
-        if evalCmp rule.cmp v rule.threshold then [| (Map.empty, v) |] else [||]
-      | VVector series ->
-        series
-        |> Array.choose (fun s ->
-          if evalCmp rule.cmp s.value rule.threshold then
-            let lbl =
-              s.labels
-              |> Array.filter (fun (k, _) -> k <> "__name__")
-              |> Array.fold (fun m (k, v) -> Map.add k v m) Map.empty
-            Some (lbl, s.value)
-          else None)
+    match remoteQuery with
+    | Some q ->
+      // Delegate the full expression to the remote backend (e.g. Mimir),
+      // then apply the threshold to each returned series.
+      match q rule.expr now with
+      | Result.Ok series ->
+        series |> Array.filter (fun (_, v) -> evalCmp rule.cmp v rule.threshold)
+      | Result.Error _ -> [||]
+    | None ->
+      match parsePromExpr rule.expr with
+      | Result.Error _ -> [||]
+      | Result.Ok expr ->
+        match evalAt metricStore now expr with
+        | VScalar v ->
+          if evalCmp rule.cmp v rule.threshold then [| (Map.empty, v) |] else [||]
+        | VVector series ->
+          series
+          |> Array.choose (fun s ->
+            if evalCmp rule.cmp s.value rule.threshold then
+              let lbl =
+                s.labels
+                |> Array.filter (fun (k, _) -> k <> "__name__")
+                |> Array.fold (fun m (k, v) -> Map.add k v m) Map.empty
+              Some (lbl, s.value)
+            else None)
 
   let evalLogRule (rule : Rule) (now : int64) (interval : int64) : (Map<string,string> * float)[] =
     match parseLogQl rule.expr with
@@ -542,6 +559,13 @@ type Evaluator(metricStore : MetricStore,
   let mutable tenantsProvider : (unit -> TenantId[]) = fun () -> [||]
 
   member _.SetTenantsProvider(f : unit -> TenantId[]) = tenantsProvider <- f
+
+  /// Delegate PromQL rule evaluation to a remote backend (e.g. Mimir's
+  /// instant-query endpoint). When set, `f expr nowMs` must return one
+  /// `(labels, value)` pair per result series. Used when ingest fans out
+  /// to an upstream store and the in-process MetricStore is empty.
+  member _.SetPromQuery(f : string -> int64 -> Result<(Map<string,string> * float)[], string>) =
+    remoteQuery <- Some f
 
   member _.Start() =
     for w in 0 .. workerCount - 1 do

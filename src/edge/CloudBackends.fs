@@ -371,6 +371,55 @@ type MimirMetricBackend(opts : MimirOptions, ?http : HttpClient) =
     | true, c -> Volatile.Read &c.contents
     | _ -> 0L
 
+  /// Evaluate a full PromQL expression against Mimir's instant-query
+  /// endpoint and return one `(labels, value)` pair per result series
+  /// (`__name__` stripped, mirroring the embedded engine). Used by the
+  /// rule evaluator so complex alert rules see the same data the
+  /// dashboards do when all writes fan out to Mimir.
+  member _.InstantQuery(tenant : string, expr : string, timeMs : int64)
+      : Result<(Map<string,string> * float)[], string> =
+    let timeS = sprintf "%.3f" (float timeMs / 1000.0)
+    let url =
+      sprintf "%s/prometheus/api/v1/query?query=%s&time=%s"
+        opts.BaseUrl (Uri.EscapeDataString expr) timeS
+    match readGet url tenant with
+    | None -> Result.Error "mimir instant-query request failed"
+    | Some body ->
+      try
+        use doc = JsonDocument.Parse body
+        let data = doc.RootElement.GetProperty "data"
+        let parseVal (el : JsonElement) : float option =
+          // value is [ <ts seconds>, "<stringified value>" ]
+          let arr = el.EnumerateArray() |> Seq.toArray
+          if arr.Length = 2 then
+            let mutable v = 0.0
+            if System.Double.TryParse(
+                 arr.[1].GetString(),
+                 System.Globalization.NumberStyles.Float,
+                 System.Globalization.CultureInfo.InvariantCulture,
+                 &v) then Some v
+            else None
+          else None
+        match data.GetProperty("resultType").GetString() with
+        | "vector" ->
+          let out = ResizeArray<Map<string,string> * float>()
+          for s in data.GetProperty("result").EnumerateArray() do
+            match parseVal (s.GetProperty "value") with
+            | Some v ->
+              let mutable m = Map.empty
+              for p in (s.GetProperty "metric").EnumerateObject() do
+                if p.Name <> "__name__" then
+                  m <- Map.add p.Name (p.Value.GetString()) m
+              out.Add (m, v)
+            | None -> ()
+          Result.Ok (out.ToArray())
+        | "scalar" ->
+          match parseVal (data.GetProperty "result") with
+          | Some v -> Result.Ok [| (Map.empty, v) |]
+          | None   -> Result.Ok [||]
+        | _ -> Result.Ok [||]
+      with ex -> Result.Error ex.Message
+
   // -- Read proxy ---------------------------------------------------------
   // Mimir exposes a Prometheus-compatible HTTP query API at
   // <BaseUrl>/prometheus/. We use it to serve NamesFor / GetSinceFor

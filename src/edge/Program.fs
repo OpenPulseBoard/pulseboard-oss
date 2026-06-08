@@ -430,6 +430,10 @@ let main argv =
   let metricS3Endpoint = envOr "PULSE_METRICS_S3_ENDPOINT" (argValue "--metrics-s3-endpoint=")
   let optOrg (h : string) =
     if h = "none" || String.IsNullOrWhiteSpace h then None else Some h
+  // Set when an upstream backend (Mimir) is configured, so the rule
+  // evaluator can delegate full PromQL to its instant-query endpoint.
+  let mutable promRuleQuery
+    : (string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
   let metricBackend : PulseBoard.Storage.IMetricBackend =
     match mimirUrl with
     | Some url ->
@@ -441,7 +445,15 @@ let main argv =
             Bearer      = mimirToken
             ReadTenant  = mimirReadTenant
             StepSec     = float mimirStepMs / 1000.0 }
-      new PulseBoard.CloudBackends.MimirMetricBackend(opts) :> _
+      let mimir = new PulseBoard.CloudBackends.MimirMetricBackend(opts)
+      // Rules must evaluate against the same data the dashboards see, so
+      // when writes fan out to Mimir we delegate PromQL rule evaluation
+      // to Mimir's instant-query endpoint (the in-process MetricStore is
+      // empty in this mode).
+      promRuleQuery <-
+        Some (fun (expr : string) (now : int64) ->
+          mimir.InstantQuery(mimirReadTenant, expr, now))
+      mimir :> _
     | None ->
       PulseBoard.Storage.EmbeddedMetricBackend(
         metricStore,
@@ -819,6 +831,9 @@ let main argv =
 
   let ruleEvaluator =
     PulseBoard.Rules.Evaluator(metricStore, logStore, ruleStore, alertSink, metricStore)
+  match promRuleQuery with
+  | Some q -> ruleEvaluator.SetPromQuery q
+  | None   -> ()
   ruleEvaluator.SetTenantsProvider(fun () ->
     if multiTenant then
       tenantStore.Tenants() |> Array.map (fun t -> t.id)
