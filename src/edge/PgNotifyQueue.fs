@@ -91,6 +91,15 @@ let private msgCols =
    headers_json, extra_json, attempt, max_attempts, enqueued_at_ms, \
    next_run_at_ms, last_error"
 
+// Same columns qualified with the `q` table alias. Required by the Lease
+// query's RETURNING clause: that UPDATE has both `pb_notify_queue q` and
+// the `selected` CTE in scope, so a bare `id` (etc.) is ambiguous
+// (Postgres 42702). readMsg reads positionally, so order must match msgCols.
+let private msgColsQ =
+  msgCols.Split(',')
+  |> Array.map (fun c -> "q." + c.Trim())
+  |> String.concat ", "
+
 let private readMsg (r : System.Data.Common.DbDataReader) : OutboundMessage =
   { id           = r.GetString 0
     tenantId     = TenantId (r.GetString 1)
@@ -172,7 +181,7 @@ type PgNotifyQueue(connectionString : string) =
            SET leased_until_ms = @lu \
            FROM selected \
            WHERE q.id = selected.id \
-           RETURNING " + msgCols,
+           RETURNING " + msgColsQ,
           conn, tx)
       cmd.Parameters.AddWithValue("now", nowMs)      |> ignore
       cmd.Parameters.AddWithValue("n",   batchSize)  |> ignore
