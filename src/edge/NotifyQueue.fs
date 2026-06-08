@@ -18,6 +18,18 @@ open Suave.ServerErrors
 open PulseBoard.Tenancy
 open PulseBoard.TimeSeries
 
+/// Verbose tracing for the queue -> dispatch -> HTTP path. On by default;
+/// set PULSE_NOTIFY_DEBUG=0 (or false/off/no) to silence. Mirrors the
+/// `[notify]` prefix used by the routing pipeline so both halves of the
+/// notification path share one greppable tag.
+let internal notifyDebug =
+  match Environment.GetEnvironmentVariable "PULSE_NOTIFY_DEBUG" with
+  | "0" | "false" | "off" | "no" -> false
+  | _ -> true
+
+let internal nqlog (msg : string) =
+  if notifyDebug then eprintfn "[notify] %s" msg
+
 // Persistent outbound notification queue (PLAN.md Phase 5 step 5).
 // Replaces `Notify.postJson`'s fire-and-forget posture with a durable
 // enqueue → lease → ack/fail/dead pipeline. The queue itself is
@@ -671,7 +683,12 @@ let runWorker (queue : INotifyQueue)
       if batch.Length = 0 then
         do! Task.Delay(500, ct)
       else
+        nqlog (sprintf "worker leased %d message(s) for dispatch" batch.Length)
         for m in batch do
+          let (TenantId tidText) = m.tenantId
+          nqlog (sprintf "dispatch msgId=%s tenant=%s receiver=%s type=%s url=%s attempt=%d/%d"
+                   m.id tidText m.receiverId m.receiverType
+                   (if m.url = "" then "(none)" else m.url) (m.attempt + 1) m.maxAttempts)
           let! result = dispatch m
           match metricStore with
           | Some ms ->
@@ -679,6 +696,7 @@ let runWorker (queue : INotifyQueue)
           | None -> ()
           match result with
           | Result.Ok () ->
+            nqlog (sprintf "  -> OK msgId=%s delivered (acked)" m.id)
             queue.Ack m.id
           | Result.Error err ->
             match metricStore with
@@ -686,11 +704,14 @@ let runWorker (queue : INotifyQueue)
               ms.Record("pulse_notify_failures_total", { ts = now; value = 1.0 })
             | None -> ()
             if m.attempt + 1 >= m.maxAttempts then
+              nqlog (sprintf "  -> DEAD msgId=%s after %d attempts: %s" m.id m.maxAttempts err)
               queue.Dead(m.id, err)
             else
               let exp = baseBackoffMs * (1L <<< (min 10 (m.attempt + 1)))
               let cap = min exp maxBackoffMs
               let jitter = int64 (rnd.Next(int (cap / 4L + 1L)))
+              nqlog (sprintf "  -> FAIL msgId=%s: %s (retry in ~%dms, attempt %d/%d)"
+                       m.id err (cap + jitter) (m.attempt + 1) m.maxAttempts)
               queue.Fail(m.id, err, now + cap + jitter)
   } :> Task
 

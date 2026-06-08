@@ -19,6 +19,18 @@ open PulseBoard.TimeSeries
 open PulseBoard.Rules
 open PulseBoard.NotifyQueue
 
+/// Verbose tracing for the alert -> route -> group -> enqueue path.
+/// On by default; set PULSE_NOTIFY_DEBUG=0 (or false/off/no) to silence.
+/// Lines go to stderr with a `[notify]` prefix so an operator can follow
+/// exactly why a firing alert did (or did not) turn into a delivery.
+let internal notifyDebug =
+  match Environment.GetEnvironmentVariable "PULSE_NOTIFY_DEBUG" with
+  | "0" | "false" | "off" | "no" -> false
+  | _ -> true
+
+let internal nlog (msg : string) =
+  if notifyDebug then eprintfn "[notify] %s" msg
+
 // Alertmanager-equivalent (PLAN.md Phase 5 step 2): a single per-tenant
 // config document drives routing, grouping, dedup, inhibition, silences,
 // and time-based mutes. We deliberately mirror Alertmanager's data model
@@ -779,6 +791,9 @@ type Pipeline(configStore : IConfigStore,
           queue.Enqueue msg
           state.lastSentAt <- now
           state.lastSentSet <- state.fingerprints
+          nlog (sprintf "ENQUEUE tenant=%s receiver=%s type=%s url=%s group=%s alerts=%d msgId=%s"
+                  kvT.Key recv.id recv.type_
+                  (recv.url |> Option.defaultValue "(none)") groupId alerts.Length msg.id)
           selfMetrics.Record(
             "pulse_notify_enqueued_total",
             { ts = now; value = 1.0 })
@@ -796,7 +811,10 @@ type Pipeline(configStore : IConfigStore,
           let recvId  = gkey.Substring(0, pipe)
           let groupId = gkey.Substring(pipe + 1)
           match Map.tryFind recvId recvById with
-          | None -> ()
+          | None ->
+            nlog (sprintf "flushDue tenant=%s group=%s -> receiverId=%s is NOT defined in receivers (defined: [%s]); skipping, nothing sent"
+                    kvT.Key gkey recvId
+                    (recvById |> Map.toSeq |> Seq.map fst |> String.concat ", "))
           | Some recv ->
             let alerts =
               state.fingerprints
@@ -856,7 +874,9 @@ type Pipeline(configStore : IConfigStore,
                 let withinRepeat =
                   state.lastSentAt > 0L
                   && now - state.lastSentAt < route.repeatIntervalMs
-                if identical && withinRepeat then ()
+                if identical && withinRepeat then
+                  nlog (sprintf "flushDue tenant=%s group=%s -> deduped (identical fingerprint set within repeatIntervalMs=%d)"
+                          kvT.Key gkey route.repeatIntervalMs)
                 else
                   enqueueFor recv state groupId alerts)
 
@@ -869,6 +889,7 @@ type Pipeline(configStore : IConfigStore,
 
   member _.OnAlert(a : AlertInstance) =
     let tid = a.tenantId
+    let (TenantId tidText) = tid
     let cfg = configStore.Get tid
     let now = nowMs ()
 
@@ -883,6 +904,8 @@ type Pipeline(configStore : IConfigStore,
       // Resolutions remove the alert from any active group; they don't
       // currently emit their own notification (TODO: optional
       // `send_resolved` per receiver).
+      nlog (sprintf "OnAlert tenant=%s fp=%s rule=%s state=%A -> not firing; pulling from any active group"
+              tidText a.fingerprint a.ruleName a.state)
       let tg = tenantBucket tid
       for kv in tg.groups do
         if kv.Value.fingerprints.Contains a.fingerprint then
@@ -891,23 +914,35 @@ type Pipeline(configStore : IConfigStore,
             "pulse_alerts_resolved_total",
             { ts = now; value = 1.0 })
     else
+      nlog (sprintf "OnAlert tenant=%s fp=%s rule=%s state=Firing labels=%A | cfg: receivers=%d silences=%d inhibitions=%d rootReceiver=%A"
+              tidText a.fingerprint a.ruleName a.labels
+              cfg.receivers.Length cfg.silences.Length cfg.inhibitions.Length cfg.route.receiverId)
       // Silence?
       if cfg.silences |> Array.exists (fun s -> silenceActive now s a.labels) then
+        nlog (sprintf "  -> SILENCED fp=%s (matched an active silence window)" a.fingerprint)
         selfMetrics.Record(
           "pulse_alerts_silenced_total", { ts = now; value = 1.0 })
       // Mute window on root?
       elif isMuted (DateTimeOffset.FromUnixTimeMilliseconds now) cfg.muteTimes cfg.route.muteTimeIds then
+        nlog (sprintf "  -> MUTED fp=%s (active mute-time window on root route)" a.fingerprint)
         selfMetrics.Record(
           "pulse_alerts_muted_total", { ts = now; value = 1.0 })
       // Inhibited?
       elif inhibited tid cfg a then
+        nlog (sprintf "  -> INHIBITED fp=%s (suppressed by a firing source alert)" a.fingerprint)
         selfMetrics.Record(
           "pulse_alerts_inhibited_total", { ts = now; value = 1.0 })
       else
         let path = collectMatchingRoutes cfg.route a.labels
         match resolveReceiver path with
-        | None -> ()
+        | None ->
+          nlog (sprintf "  -> DROPPED fp=%s: route tree matched %d node(s) but NONE carries a receiverId. Set a receiver on the root route (or a matching child) so the alert has somewhere to go."
+                  a.fingerprint (List.length path))
         | Some recvId ->
+          let definedIds = cfg.receivers |> Array.map (fun r -> r.id)
+          if not (Array.contains recvId definedIds) then
+            nlog (sprintf "  -> WARNING fp=%s: route resolved receiverId=%s but no receiver with that id is defined (defined ids: [%s]). The group is created, but flushDue will skip it and nothing is sent. Fix the receiverId/receivers mismatch."
+                    a.fingerprint recvId (String.concat ", " definedIds))
           let policyId = resolvePolicy path
           // Inherit groupBy from the deepest route in `path` that
           // declares one; otherwise the root.
@@ -930,6 +965,9 @@ type Pipeline(configStore : IConfigStore,
           // Allow late policy attachment if a later route revision adds one.
           if st.policyId.IsNone && policyId.IsSome then st.policyId <- policyId
           st.fingerprints <- st.fingerprints.Add a.fingerprint
+          nlog (sprintf "  -> ROUTED fp=%s receiverId=%s group=%s policy=%A groupSize=%d (first send after groupWaitMs=%d; followups every groupIntervalMs=%d)"
+                  a.fingerprint recvId gkey policyId st.fingerprints.Count
+                  cfg.route.groupWaitMs cfg.route.groupIntervalMs)
           selfMetrics.Record(
             "pulse_alerts_routed_total", { ts = now; value = 1.0 })
 

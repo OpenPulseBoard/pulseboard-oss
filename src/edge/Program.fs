@@ -855,6 +855,9 @@ let main argv =
         PulseBoard.NotifyQueue.runWorker
           notifyQueue (Some metricStore)
           1_000L 60_000L notifyCts.Token ]
+  printfn "  Notify:   %d dispatch worker(s) running; verbose tracing %s (toggle with PULSE_NOTIFY_DEBUG=0|1)"
+    notifyWorkers.Length
+    (if PulseBoard.NotifyQueue.notifyDebug then "ON" else "off")
 
   let rulesInner       = PulseBoard.Rules.webPart       multiTenant ruleStore ruleEvaluator
   let routingInner     = PulseBoard.Routing.webPart     multiTenant routingStore
