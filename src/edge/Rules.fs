@@ -375,6 +375,38 @@ let fingerprint (ruleId : string) (labels : Map<string,string>) : string =
   for b in bytes do sb.AppendFormat("{0:x2}", int b) |> ignore
   sb.ToString().Substring(0, 16)
 
+/// Interpolate Prometheus-style annotation templates against an
+/// alert's resolved labels and value. Supports `{{ $labels.<name> }}`
+/// (replaced with the label value, or empty when absent) and
+/// `{{ $value }}` (the breaching sample value). Whitespace inside the
+/// braces is optional. Unknown directives are left untouched so the
+/// raw text is still visible rather than silently dropped.
+let private labelTemplateRe =
+  System.Text.RegularExpressions.Regex(
+    @"\{\{\s*\$labels\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}",
+    System.Text.RegularExpressions.RegexOptions.Compiled)
+let private valueTemplateRe =
+  System.Text.RegularExpressions.Regex(
+    @"\{\{\s*\$value\s*\}\}",
+    System.Text.RegularExpressions.RegexOptions.Compiled)
+
+let templateText (labels : Map<string,string>) (value : float) (text : string) : string =
+  if String.IsNullOrEmpty text || not (text.Contains "{{") then text
+  else
+    let withLabels =
+      labelTemplateRe.Replace(text, fun m ->
+        match Map.tryFind m.Groups.[1].Value labels with
+        | Some v -> v
+        | None   -> "")
+    valueTemplateRe.Replace(
+      withLabels,
+      value.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture))
+
+let templateAnnotations (annotations : Map<string,string>)
+                        (labels : Map<string,string>)
+                        (value : float) : Map<string,string> =
+  annotations |> Map.map (fun _ v -> templateText labels value v)
+
 /// Tenants are resolved by the caller; the evaluator only sees a
 /// tenant id and a `(MetricStore, LogStore)` pair. In single-tenant
 /// mode the same stores feed every tenant (only `__local__` is ever
@@ -509,7 +541,7 @@ type Evaluator(metricStore : MetricStore,
             groupId     = group.id
             severity    = rule.severity
             labels      = mergedLabels
-            annotations = rule.annotations
+            annotations = templateAnnotations rule.annotations mergedLabels value
             runbook     = rule.runbook
             value       = value
             state       =
