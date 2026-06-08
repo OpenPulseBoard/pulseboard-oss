@@ -26,11 +26,12 @@ open PulseBoard.QueryApi
 // to whatever shape comes back, and emits an `AlertInstance` per
 // breaching label-set.
 //
-//   PromQL rules — embedded surface only supports vector selectors;
-//     each matching series's most-recent sample is compared against
-//     the threshold; one alert per breaching series. Upstream Mimir
-//     can host complex rules natively today; bringing them in-tree
-//     requires a real PromQL evaluator that is out of scope here.
+//   PromQL rules — evaluated by the embedded engine in `QueryApi`
+//     (`parsePromExpr` + `evalAt`): vector selectors, range functions
+//     (rate/irate/increase), aggregations with `by`/`without` grouping,
+//     and scalar/vector arithmetic. Each resulting series is compared
+//     against the threshold; one alert per breaching label-set. Queries
+//     outside this subset still need an upstream Mimir ruler.
 //
 //   LogQL rules — `parseLogQl` plus the embedded `logMatches` count
 //     matching entries within the rule's evaluation window; the
@@ -402,20 +403,26 @@ type Evaluator(metricStore : MetricStore,
     h
 
   let evalPromRule (rule : Rule) (now : int64) : (Map<string,string> * float)[] =
-    match parseVectorSelector rule.expr with
+    // Evaluate the embedded PromQL subset (vector selectors, range
+    // functions, aggregations with by/without grouping, scalar/vector
+    // arithmetic). Each resulting series whose value breaches the
+    // threshold becomes one alert, keyed by its retained labels.
+    match parsePromExpr rule.expr with
     | Result.Error _ -> [||]
-    | Result.Ok sel ->
-      metricStore.Names()
-      |> Array.choose (fun n ->
-        let labels = parseSeriesName n
-        if not (matchesSelector sel labels) then None else
-        let pts = metricStore.Get n
-        if pts.Length = 0 then None else
-        let last = pts.[pts.Length - 1]
-        if evalCmp rule.cmp last.value rule.threshold then
-          let lbl = labels |> Array.fold (fun m (k, v) -> Map.add k v m) Map.empty
-          Some (lbl, last.value)
-        else None)
+    | Result.Ok expr ->
+      match evalAt metricStore now expr with
+      | VScalar v ->
+        if evalCmp rule.cmp v rule.threshold then [| (Map.empty, v) |] else [||]
+      | VVector series ->
+        series
+        |> Array.choose (fun s ->
+          if evalCmp rule.cmp s.value rule.threshold then
+            let lbl =
+              s.labels
+              |> Array.filter (fun (k, _) -> k <> "__name__")
+              |> Array.fold (fun m (k, v) -> Map.add k v m) Map.empty
+            Some (lbl, s.value)
+          else None)
 
   let evalLogRule (rule : Rule) (now : int64) (interval : int64) : (Map<string,string> * float)[] =
     match parseLogQl rule.expr with

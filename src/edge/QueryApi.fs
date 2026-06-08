@@ -351,19 +351,26 @@ let matchesSelector (sel : VectorSelector)
 //   * range selectors:         foo[5m]    (only as a range-fn arg)
 //   * range functions:         rate, irate, increase
 //   * aggregations:            sum, avg, min, max, count
-//     (no `by` / `without` grouping — the result has no labels)
+//     with optional grouping:  sum by (a, b) (expr) · avg without (c) (expr)
+//     (grouping retains the named labels — or all but them for
+//      `without`; an un-grouped aggregation collapses to a single
+//      label-less sample, as before)
 //
 // Anything outside this subset still short-circuits with the same
 // "use --mimir-url= for full PromQL" hint.
 
 type PromOp = PoAdd | PoSub | PoMul | PoDiv | PoMod
 
+/// Aggregation grouping modifier: `by (a, b)` or `without (a, b)`.
+type AggMod = { without : bool; labels : string[] }
+
 type PromExpr =
   | PeNum   of float
   | PeNeg   of PromExpr
   | PeSel   of VectorSelector
   | PeRange of VectorSelector * int64       // window in ms
-  | PeCall  of string * PromExpr             // function name (lower-case), arg
+  | PeCall  of string * PromExpr             // range function (lower-case), arg
+  | PeAggr  of string * AggMod option * PromExpr  // aggregation + optional grouping
   | PeBin   of PromOp * PromExpr * PromExpr
 
 let private parsePromDurationMs (raw : string) : int64 option =
@@ -463,6 +470,37 @@ let parsePromExpr (input : string) : Result<PromExpr, string> =
   let aggFns   = Set.ofList [ "sum"; "avg"; "min"; "max"; "count" ]
   let rangeFns = Set.ofList [ "rate"; "irate"; "increase" ]
 
+  // Optional `by (a, b)` / `without (a, b)` clause. Returns Ok None when
+  // the next token isn't a grouping keyword (position restored).
+  let parseGroupingOpt () : Result<AggMod option, string> =
+    skipWs ()
+    let save = i
+    match readIdent () with
+    | Some kw when (let k = kw.ToLowerInvariant() in k = "by" || k = "without") ->
+      let without = kw.ToLowerInvariant() = "without"
+      skipWs ()
+      if not (eatChar '(') then Result.Error "expected '(' after by/without"
+      else
+        let labels = ResizeArray<string>()
+        let mutable err  = None
+        let mutable go   = true
+        while go do
+          skipWs ()
+          if i < s.Length && s.[i] = ')' then go <- false
+          else
+            match readIdent () with
+            | Some ln ->
+              labels.Add ln
+              skipWs ()
+              if i < s.Length && s.[i] = ',' then i <- i + 1 else go <- false
+            | None -> err <- Some "expected label name in grouping"; go <- false
+        match err with
+        | Some e -> Result.Error e
+        | None ->
+          if eatChar ')' then Result.Ok (Some { without = without; labels = labels.ToArray() })
+          else Result.Error "expected ')' to close grouping"
+    | _ -> i <- save; Result.Ok None
+
   let rec parseExpr () = parseAddSub ()
   and parseAddSub () =
     let mutable left = parseMulDiv ()
@@ -530,8 +568,28 @@ let parsePromExpr (input : string) : Result<PromExpr, string> =
       | Some name ->
         skipWs ()
         let lower = name.ToLowerInvariant()
-        if i < s.Length && s.[i] = '(' then
-          if not (aggFns.Contains lower || rangeFns.Contains lower) then
+        if aggFns.Contains lower then
+          // aggregation: optional `by/without` may appear before or after
+          // the parenthesised argument (both are valid PromQL).
+          match parseGroupingOpt () with
+          | Result.Error e -> Result.Error e
+          | Result.Ok leadGrp ->
+            skipWs ()
+            if not (eatChar '(') then
+              Result.Error (sprintf "%s() requires a parenthesised argument" lower)
+            else
+              match parseExpr () with
+              | Result.Error e -> Result.Error e
+              | Result.Ok arg ->
+                if not (eatChar ')') then Result.Error "expected ')'"
+                else
+                  match parseGroupingOpt () with
+                  | Result.Error e -> Result.Error e
+                  | Result.Ok trailGrp ->
+                    let grp = match leadGrp with Some _ -> leadGrp | None -> trailGrp
+                    Result.Ok (PeAggr (lower, grp, arg))
+        elif i < s.Length && s.[i] = '(' then
+          if not (rangeFns.Contains lower) then
             Result.Error (sprintf "embedded PromQL does not support function '%s'; use --mimir-url= for full PromQL" name)
           else
             i <- i + 1
@@ -539,12 +597,10 @@ let parsePromExpr (input : string) : Result<PromExpr, string> =
             | Result.Error e -> Result.Error e
             | Result.Ok arg ->
               if not (eatChar ')') then Result.Error "expected ')'"
-              elif rangeFns.Contains lower then
+              else
                 match arg with
                 | PeRange _ -> Result.Ok (PeCall (lower, arg))
                 | _ -> Result.Error (sprintf "%s() requires a range selector like foo[5m]" lower)
-              else
-                Result.Ok (PeCall (lower, arg))
         else
           let innerRes =
             match readBraceGroup () with
@@ -645,22 +701,49 @@ let private increaseOver (points : Point[]) (endTs : int64) (windowMs : int64) :
   | None   -> None
   | Some r -> Some (r * float windowMs / 1000.0)
 
+let private aggOp (op : string) (xs : float[]) : float =
+  match op with
+  | "sum"   -> Array.sum xs
+  | "avg"   -> Array.sum xs / float xs.Length
+  | "min"   -> Array.min xs
+  | "max"   -> Array.max xs
+  | "count" -> float xs.Length
+  | _       -> Double.NaN
+
 let private aggregate (op : string) (vs : PromSeries[]) : PromSeries[] =
   let xs =
     vs
     |> Array.map (fun s -> s.value)
     |> Array.filter (fun v -> not (Double.IsNaN v))
   if xs.Length = 0 then [||]
-  else
-    let v =
-      match op with
-      | "sum"   -> Array.sum xs
-      | "avg"   -> Array.sum xs / float xs.Length
-      | "min"   -> Array.min xs
-      | "max"   -> Array.max xs
-      | "count" -> float xs.Length
-      | _       -> Double.NaN
-    [| { labels = [||]; value = v } |]
+  else [| { labels = [||]; value = aggOp op xs } |]
+
+/// Aggregate with an optional `by`/`without` grouping. `None` collapses
+/// to a single label-less sample (legacy behaviour); a grouping retains
+/// the named labels (`by`) or all-but-named labels (`without`), emitting
+/// one sample per group.
+let private aggregateGrouped (op : string) (grp : AggMod option) (vs : PromSeries[]) : PromSeries[] =
+  match grp with
+  | None -> aggregate op vs
+  | Some m ->
+    let keep (labels : (string*string)[]) =
+      if m.without then
+        labels |> Array.filter (fun (k, _) -> k <> "__name__" && not (Array.contains k m.labels))
+      else
+        labels |> Array.filter (fun (k, _) -> Array.contains k m.labels)
+    let groups =
+      System.Collections.Generic.Dictionary<string, (string*string)[] * ResizeArray<float>>()
+    for s in vs do
+      if not (Double.IsNaN s.value) then
+        let gl = keep s.labels
+        let k  = labelsKey gl
+        match groups.TryGetValue k with
+        | true, (_, acc) -> acc.Add s.value
+        | _ ->
+          let acc = ResizeArray<float>()
+          acc.Add s.value
+          groups.[k] <- (gl, acc)
+    [| for KeyValue(_, (gl, acc)) in groups -> { labels = gl; value = aggOp op (acc.ToArray()) } |]
 
 let private applyOp (op : PromOp) (a : float) (b : float) : float =
   match op with
@@ -729,6 +812,10 @@ let rec evalAt (metricStore : MetricStore) (at : int64) (e : PromExpr) : EvalVal
     match evalAt metricStore at arg with
     | VScalar _ as s -> s
     | VVector vs     -> VVector (aggregate name vs)
+  | PeAggr (name, grp, arg) ->
+    match evalAt metricStore at arg with
+    | VScalar _ as s -> s
+    | VVector vs     -> VVector (aggregateGrouped name grp vs)
   | PeBin (op, a, b) ->
     binCombine op (evalAt metricStore at a) (evalAt metricStore at b)
 

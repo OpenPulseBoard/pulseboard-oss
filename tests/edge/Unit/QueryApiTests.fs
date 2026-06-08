@@ -80,7 +80,25 @@ let ``parses unary minus`` () =
 [<Fact>]
 let ``parses aggregation`` () =
   match parsePromExpr "sum(foo)" with
-  | Result.Ok (PeCall ("sum", PeSel _)) -> ()
+  | Result.Ok (PeAggr ("sum", None, PeSel _)) -> ()
+  | other -> failwithf "unexpected AST: %A" other
+
+[<Fact>]
+let ``parses aggregation with by grouping`` () =
+  match parsePromExpr "avg by (instance) (foo)" with
+  | Result.Ok (PeAggr ("avg", Some { without = false; labels = [| "instance" |] }, PeSel _)) -> ()
+  | other -> failwithf "unexpected AST: %A" other
+
+[<Fact>]
+let ``parses aggregation with without grouping`` () =
+  match parsePromExpr "sum without (mode, cpu) (foo)" with
+  | Result.Ok (PeAggr ("sum", Some { without = true; labels = [| "mode"; "cpu" |] }, PeSel _)) -> ()
+  | other -> failwithf "unexpected AST: %A" other
+
+[<Fact>]
+let ``parses aggregation with trailing grouping`` () =
+  match parsePromExpr "sum (foo) by (instance)" with
+  | Result.Ok (PeAggr ("sum", Some { without = false; labels = [| "instance" |] }, PeSel _)) -> ()
   | other -> failwithf "unexpected AST: %A" other
 
 [<Fact>]
@@ -234,6 +252,51 @@ let ``count returns the series count`` () =
     ]
   let v = evalAt s 10_000L (okExpr "count(x)") |> vecVal
   v.[0].value |> should equal 2.0
+
+[<Fact>]
+let ``avg by retains the grouping label and groups per value`` () =
+  let s =
+    store [
+      "cpu{instance=\"h1\",mode=\"idle\"}", [ 0L, 10.0 ]
+      "cpu{instance=\"h1\",mode=\"user\"}", [ 0L, 30.0 ]
+      "cpu{instance=\"h2\",mode=\"idle\"}", [ 0L, 80.0 ]
+      "cpu{instance=\"h2\",mode=\"user\"}", [ 0L, 100.0 ]
+    ]
+  let v = evalAt s 10_000L (okExpr "avg by (instance) (cpu)") |> vecVal
+  v.Length |> should equal 2
+  v |> valueOf "instance" "h1" |> should equal (Some 20.0)
+  v |> valueOf "instance" "h2" |> should equal (Some 90.0)
+  // grouping keeps only the `by` label (mode is dropped)
+  v.[0].labels |> Array.exists (fun (k, _) -> k = "mode") |> should equal false
+
+[<Fact>]
+let ``sum without drops only the named labels`` () =
+  let s =
+    store [
+      "x{instance=\"h1\",mode=\"idle\"}", [ 0L, 1.0 ]
+      "x{instance=\"h1\",mode=\"user\"}", [ 0L, 2.0 ]
+      "x{instance=\"h2\",mode=\"idle\"}", [ 0L, 4.0 ]
+    ]
+  let v = evalAt s 10_000L (okExpr "sum without (mode) (x)") |> vecVal
+  v.Length |> should equal 2
+  v |> valueOf "instance" "h1" |> should equal (Some 3.0)
+  v |> valueOf "instance" "h2" |> should equal (Some 4.0)
+
+[<Fact>]
+let ``avg by (instance) over rate keeps per-instance CPU`` () =
+  // h1 idle rises slowly (rate 0.05/s -> CPU 95); h2 idle rises fast
+  // (rate ~0.983/s -> CPU ~1.667). by(instance) must keep them separate.
+  let s =
+    store [
+      "node_cpu_seconds_total{mode=\"idle\",instance=\"h1\"}", [ 0L, 1000.0; 60_000L, 1003.0 ]
+      "node_cpu_seconds_total{mode=\"idle\",instance=\"h2\"}", [ 0L, 1000.0; 60_000L, 1059.0 ]
+    ]
+  let expr =
+    okExpr """100 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100"""
+  let v = evalAt s 60_000L expr |> vecVal
+  v.Length |> should equal 2
+  (v |> valueOf "instance" "h1" |> Option.get) |> should (equalWithin 1e-6) 95.0
+  (v |> valueOf "instance" "h2" |> Option.get) |> should (equalWithin 1e-4) 1.666666667
 
 [<Fact>]
 let ``scalar binop on scalars returns a scalar`` () =
