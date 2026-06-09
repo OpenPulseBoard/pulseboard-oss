@@ -3991,7 +3991,7 @@ function router() {
   else if (h.startsWith("#/library")) showView("library");
   else if (h.startsWith("#/alerts"))  {
     const sub = h.slice("#/alerts".length).replace(/^\//, "");
-    _alertsSub = (sub === "rules" || sub === "routing" || sub === "silences" || sub === "oncall" || sub === "notify") ? sub : "firing";
+    _alertsSub = (sub === "rules" || sub === "routing" || sub === "silences" || sub === "oncall" || sub === "notify" || sub === "incidents") ? sub : "firing";
     showView("alerts");
   }
   else if (h.startsWith("#/agents"))  showView("agents");
@@ -4468,19 +4468,21 @@ let _firingPollTimer = null;        // refresh while the Firing sub-view is open
 let _badgePollTimer  = null;        // background nav-badge poll (any view)
 
 function showAlertsSub(name) {
-  _alertsSub = (name === "rules" || name === "routing" || name === "silences" || name === "oncall" || name === "notify") ? name : "firing";
+  _alertsSub = (name === "rules" || name === "routing" || name === "silences" || name === "oncall" || name === "notify" || name === "incidents") ? name : "firing";
   $("alerts-sub-firing").classList.toggle("hidden",   _alertsSub !== "firing");
   $("alerts-sub-rules").classList.toggle("hidden",    _alertsSub !== "rules");
   $("alerts-sub-silences").classList.toggle("hidden", _alertsSub !== "silences");
   $("alerts-sub-routing").classList.toggle("hidden",  _alertsSub !== "routing");
   $("alerts-sub-oncall").classList.toggle("hidden",   _alertsSub !== "oncall");
   $("alerts-sub-notify").classList.toggle("hidden",   _alertsSub !== "notify");
+  $("alerts-sub-incidents").classList.toggle("hidden", _alertsSub !== "incidents");
   $("asub-firing").classList.toggle("active",   _alertsSub === "firing");
   $("asub-rules").classList.toggle("active",    _alertsSub === "rules");
   $("asub-silences").classList.toggle("active", _alertsSub === "silences");
   $("asub-routing").classList.toggle("active",  _alertsSub === "routing");
   $("asub-oncall").classList.toggle("active",   _alertsSub === "oncall");
   $("asub-notify").classList.toggle("active",   _alertsSub === "notify");
+  $("asub-incidents").classList.toggle("active", _alertsSub === "incidents");
   stopFiringPoll();
   stopNotifyPoll();
   if (_alertsSub === "firing") { loadFiringAlerts(); startFiringPoll(); }
@@ -4488,7 +4490,56 @@ function showAlertsSub(name) {
   else if (_alertsSub === "silences") loadSilences();
   else if (_alertsSub === "oncall") loadOncall();
   else if (_alertsSub === "notify") { loadNotify(); startNotifyPoll(); }
+  else if (_alertsSub === "incidents") loadIncidents();
   else loadRules();
+}
+
+// ── Post-incident runbook analytics (GET /api/runbooks/incidents) ─────
+// Aggregates runbook progress records per rule: incident count, mean MTTR
+// and the checklist steps most often skipped on resolved incidents.
+async function loadIncidents() {
+  const host = $("incidents-body");
+  host.innerHTML = '<div class="rules-empty">Loading…</div>';
+  try {
+    const rows = await api("GET", "/api/runbooks/incidents");
+    renderIncidents(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    host.innerHTML = `<div class="rules-empty" style="color:var(--err);">Failed to load incidents: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderIncidents(rows) {
+  const host = $("incidents-body");
+  const totalIncidents = rows.reduce((n, r) => n + (r.incidents || 0), 0);
+  $("incidents-summary").textContent =
+    rows.length ? `${rows.length} rule(s) · ${totalIncidents} incident(s)` : "";
+  if (!rows.length) {
+    host.innerHTML = '<div class="rules-empty">No runbook incidents recorded yet. Incidents accrue here once alerts with an inline runbook fire and resolve.</div>';
+    return;
+  }
+  host.innerHTML = rows.map(r => {
+    const mttr = r.resolvedIncidents > 0 ? fmtDur(r.avgMttrMs) : "—";
+    const avgDone = (r.avgCompletedSteps || 0).toFixed(1);
+    const mut = "color:var(--muted);font-size:11px;";
+    const chip = "display:inline-block;padding:1px 7px;border:1px solid var(--border);border-radius:10px;font-size:11px;margin:2px 2px 0 0;";
+    const skipped = (r.skippedSteps || []).slice(0, 5)
+      .map(s => `<span style="${chip}" title="skipped on ${s.count} incident(s)">step ${s.idx + 1} · ${s.count}×</span>`)
+      .join(" ");
+    return `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;background:var(--panel);">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
+          <strong>${escapeHtml(r.ruleName || r.ruleId || "(unnamed)")}</strong>
+          <span style="${mut}">${r.incidents} incident(s) · ${r.resolvedIncidents} resolved</span>
+        </div>
+        <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px;font-size:12px;">
+          <span><span style="${mut}">Avg MTTR</span><br><strong>${escapeHtml(mttr)}</strong></span>
+          <span><span style="${mut}">Avg steps done</span><br><strong>${avgDone}</strong></span>
+          <span><span style="${mut}">Steps completed</span><br><strong>${r.totalStepsCompleted}/${r.totalStepsDefined}</strong></span>
+        </div>
+        ${skipped ? `<div style="margin-top:10px;font-size:12px;">
+          <span style="${mut}">Most-skipped steps:</span> ${skipped}</div>` : ""}
+      </div>`;
+  }).join("");
 }
 
 function startFiringPoll() {
@@ -6926,6 +6977,7 @@ $("asub-silences").addEventListener("click", () => { location.hash = "#/alerts/s
 $("asub-routing").addEventListener("click", () => { location.hash = "#/alerts/routing"; });
 $("asub-oncall").addEventListener("click", () => { location.hash = "#/alerts/oncall"; });
 $("asub-notify").addEventListener("click", () => { location.hash = "#/alerts/notify"; });
+$("asub-incidents").addEventListener("click", () => { location.hash = "#/alerts/incidents"; });
 
 window.addEventListener("hashchange", router);
 router();

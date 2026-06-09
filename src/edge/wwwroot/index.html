@@ -421,6 +421,7 @@
     <button id="asub-routing" class="asub" data-sub="routing">Routing &amp; Receivers</button>
     <button id="asub-oncall" class="asub" data-sub="oncall">On-call</button>
     <button id="asub-notify" class="asub" data-sub="notify">Notifications</button>
+    <button id="asub-incidents" class="asub" data-sub="incidents">Incidents</button>
   </div>
 
   <!-- Firing / pending alert instances -->
@@ -495,6 +496,18 @@
       </div>
     </div>
     <div id="notify-body" style="padding:0 20px 28px;"></div>
+  </div>
+
+  <!-- Post-incident runbook analytics -->
+  <div id="alerts-sub-incidents" class="hidden">
+    <div class="lib-header">
+      <h2>Post-incident analytics</h2>
+      <p>Runbook outcomes aggregated by rule: how many incidents fired, mean
+         time-to-resolve, and which checklist steps get skipped most — so you can
+         tighten the runbooks that aren't working.
+         <span id="incidents-summary" class="meta"></span></p>
+    </div>
+    <div id="incidents-body" style="padding:0 20px 28px;"></div>
   </div>
 </div>
 
