@@ -5,6 +5,10 @@ PulseBoard edge so the **Overview** dashboard (`cpu_usage`,
 `http_requests_total`, `system.disk.used`, `Recent logs`) shows live
 values.
 
+It also emits OTLP/HTTP traces to `/v1/traces` so the **Traces** and
+**Service Map** sections of a workspace are populated with realistic
+cross-service calls.
+
 ```bash
 # single-tenant local edge with no auth
 dotnet run --project tools/DemoFeeder -- --base-url=http://127.0.0.1:8775
@@ -22,6 +26,10 @@ dotnet run --project tools/DemoFeeder -- \
 # burst test: 1s interval, deterministic, for 60 seconds
 dotnet run --project tools/DemoFeeder -- \
   --interval-sec=1 --duration-sec=60 --seed=42 --verbose
+
+# traces-focused run: send 12 traces per batch
+dotnet run --project tools/DemoFeeder -- \
+  --interval-sec=1 --traces-per-batch=12 --duration-sec=120
 ```
 
 Flags: see `--help`.
@@ -34,6 +42,25 @@ Flags: see `--help`.
 | HTTP requests     | `http_requests_total{method=…,status=…}` counters (GET/POST × 200/404/500) |
 | Memory used       | `system.disk.used` (bytes), `system.memory.used`                          |
 | Recent logs       | 3–8 lines per batch across `web/api/worker/db` at info/warn/error         |
+
+## Trace topology (OTLP)
+
+Each synthetic trace follows a service path similar to a real request:
+
+`frontend -> api -> checkout -> postgres`
+
+and
+
+`api -> payments`
+
+Spans include start/end times, status (occasional errors), server/client
+span kinds, and parent-child links, which is enough for both
+`/api/traces` summaries and `/api/servicemap` edge/node stats.
+
+Useful flags:
+
+- `--traces-per-batch=N` controls OTLP trace volume per interval.
+- `--no-traces` disables OTLP emission (metrics/logs only).
 
 ## What it does **not** fake
 

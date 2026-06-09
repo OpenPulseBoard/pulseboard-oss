@@ -24,6 +24,7 @@ open System.Net.Http
 open System.Net.Http.Headers
 open System.Text
 open System.Threading
+open Google.Protobuf
 
 // ---------------------------------------------------------------------------
 // CLI parsing
@@ -35,6 +36,8 @@ type Options =
     basic       : string option   // "user:pass"
     intervalSec : float
     durationSec : float           // 0 = run forever
+    tracesPerBatch : int
+    noTraces    : bool
     seed        : int option
     insecure    : bool
     verbose     : bool }
@@ -45,6 +48,8 @@ let private defaults =
     basic       = None
     intervalSec = 5.0
     durationSec = 0.0
+    tracesPerBatch = 3
+    noTraces    = false
     seed        = None
     insecure    = false
     verbose     = false }
@@ -61,6 +66,8 @@ let private printUsage () =
   printfn "  --basic=USER:PASS    HTTP Basic credentials (mutually exclusive with --token)"
   printfn "  --interval-sec=N     Seconds between batches (default %g)" defaults.intervalSec
   printfn "  --duration-sec=N     Total seconds to run; 0 = forever (default 0)"
+  printfn "  --traces-per-batch=N OTLP traces to POST each batch (default %d)" defaults.tracesPerBatch
+  printfn "  --no-traces          Disable OTLP trace emission"
   printfn "  --seed=N             Deterministic RNG seed"
   printfn "  --insecure           Skip TLS certificate validation (self-signed / staging certs)"
   printfn "  --verbose            Log every batch"
@@ -77,6 +84,7 @@ let private parseArgs (argv : string[]) : Options option =
     | "-h" | "--help" -> showHelp <- true
     | "--verbose"     -> o <- { o with verbose = true }
     | "--insecure"    -> o <- { o with insecure = true }
+    | "--no-traces"   -> o <- { o with noTraces = true }
     | _ ->
       match tryKv "--base-url="     a with
       | Some v -> o <- { o with baseUrl = v.TrimEnd '/' }
@@ -93,6 +101,9 @@ let private parseArgs (argv : string[]) : Options option =
       match tryKv "--duration-sec=" a with
       | Some v -> o <- { o with durationSec = float v }
       | None ->
+      match tryKv "--traces-per-batch=" a with
+      | Some v -> o <- { o with tracesPerBatch = int v }
+      | None ->
       match tryKv "--seed="         a with
       | Some v -> o <- { o with seed = Some (int v) }
       | None ->
@@ -104,6 +115,9 @@ let private parseArgs (argv : string[]) : Options option =
     None
   elif o.token.IsSome && o.basic.IsSome then
     eprintfn "--token and --basic are mutually exclusive"
+    None
+  elif o.tracesPerBatch < 0 then
+    eprintfn "--traces-per-batch must be >= 0"
     None
   else Some o
 
@@ -135,6 +149,21 @@ let private mkClient (o : Options) : HttpClient =
 let private postJson (client : HttpClient) (url : string) (body : string)
                      (verbose : bool) : Async<unit> = async {
   use content = new StringContent(body, Encoding.UTF8, "application/json")
+  try
+    let! resp = client.PostAsync(url, content) |> Async.AwaitTask
+    let! txt  = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+    if not resp.IsSuccessStatusCode then
+      eprintfn "[demo-feeder] %s -> %d: %s" url (int resp.StatusCode) txt
+    elif verbose then
+      printfn "[demo-feeder] %s -> %d: %s" url (int resp.StatusCode) txt
+  with ex ->
+    eprintfn "[demo-feeder] %s failed: %s" url ex.Message
+}
+
+let private postProtobuf (client : HttpClient) (url : string) (payload : byte[])
+                         (verbose : bool) : Async<unit> = async {
+  use content = new ByteArrayContent(payload)
+  content.Headers.ContentType <- MediaTypeHeaderValue("application/x-protobuf")
   try
     let! resp = client.PostAsync(url, content) |> Async.AwaitTask
     let! txt  = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
@@ -271,6 +300,160 @@ let private logsBatch (rng : Random) : string =
   "[" + String.Join(",", lines) + "]"
 
 // ---------------------------------------------------------------------------
+// OTLP traces batch (protobuf)
+// ---------------------------------------------------------------------------
+
+type private DemoSpan =
+  { service   : string
+    operation : string
+    kind      : int
+    traceId   : byte[]
+    spanId    : byte[]
+    parentId  : byte[] option
+    startNs   : uint64
+    endNs     : uint64
+    status    : int }
+
+let private randomBytes (rng : Random) (n : int) =
+  let b = Array.zeroCreate<byte> n
+  rng.NextBytes b
+  b
+
+let private nowUnixNs () : uint64 =
+  uint64 (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) * 1_000_000UL
+
+let private writeNested (fieldNo : int) (f : CodedOutputStream -> unit) (w : CodedOutputStream) =
+  use ms = new IO.MemoryStream()
+  use inner = new CodedOutputStream(ms)
+  f inner
+  inner.Flush()
+  let payload = ms.ToArray()
+  w.WriteTag(fieldNo, WireFormat.WireType.LengthDelimited)
+  w.WriteBytes(ByteString.CopyFrom payload)
+
+let private writeStatus (code : int) (w : CodedOutputStream) =
+  w.WriteTag(3, WireFormat.WireType.Varint)
+  w.WriteEnum(code)
+
+let private writeAnyValueString (v : string) (w : CodedOutputStream) =
+  w.WriteTag(1, WireFormat.WireType.LengthDelimited)
+  w.WriteString(v)
+
+let private writeKeyValue (k : string) (v : string) (w : CodedOutputStream) =
+  w.WriteTag(1, WireFormat.WireType.LengthDelimited)
+  w.WriteString(k)
+  writeNested 2 (writeAnyValueString v) w
+
+let private writeResource (service : string) (w : CodedOutputStream) =
+  writeNested 1 (writeKeyValue "service.name" service) w
+
+let private writeSpan (s : DemoSpan) (w : CodedOutputStream) =
+  w.WriteTag(1, WireFormat.WireType.LengthDelimited)
+  w.WriteBytes(ByteString.CopyFrom s.traceId)
+  w.WriteTag(2, WireFormat.WireType.LengthDelimited)
+  w.WriteBytes(ByteString.CopyFrom s.spanId)
+  match s.parentId with
+  | Some pid ->
+    w.WriteTag(4, WireFormat.WireType.LengthDelimited)
+    w.WriteBytes(ByteString.CopyFrom pid)
+  | None -> ()
+  w.WriteTag(5, WireFormat.WireType.LengthDelimited)
+  w.WriteString(s.operation)
+  w.WriteTag(6, WireFormat.WireType.Varint)
+  w.WriteEnum(s.kind)
+  w.WriteTag(7, WireFormat.WireType.Fixed64)
+  w.WriteFixed64(s.startNs)
+  w.WriteTag(8, WireFormat.WireType.Fixed64)
+  w.WriteFixed64(s.endNs)
+  writeNested 15 (writeStatus s.status) w
+
+let private writeScopeSpans (spans : DemoSpan array) (w : CodedOutputStream) =
+  for s in spans do
+    writeNested 2 (writeSpan s) w
+
+let private writeResourceSpans (service : string) (spans : DemoSpan array) (w : CodedOutputStream) =
+  writeNested 1 (writeResource service) w
+  writeNested 2 (writeScopeSpans spans) w
+
+let private encodeExportTraceRequest (spans : DemoSpan list) : byte[] =
+  let grouped = spans |> List.groupBy (fun s -> s.service)
+  use ms = new IO.MemoryStream()
+  use w = new CodedOutputStream(ms)
+  for service, ss in grouped do
+    let arr = ss |> List.toArray
+    writeNested 1 (writeResourceSpans service arr) w
+  w.Flush()
+  ms.ToArray()
+
+let private randomDurNs (rng : Random) (minMs : int) (maxMs : int) : uint64 =
+  uint64 (rng.Next(minMs, maxMs + 1)) * 1_000_000UL
+
+let private maybeErrorStatus (rng : Random) (p : float) =
+  if rng.NextDouble() < p then 2 else 1
+
+let private traceSpans (rng : Random) : DemoSpan list =
+  let traceId = randomBytes rng 16
+  let rootId = randomBytes rng 8
+  let apiServerId = randomBytes rng 8
+  let apiCheckoutClientId = randomBytes rng 8
+  let checkoutServerId = randomBytes rng 8
+  let checkoutDbClientId = randomBytes rng 8
+  let dbServerId = randomBytes rng 8
+  let apiPaymentsClientId = randomBytes rng 8
+  let paymentsServerId = randomBytes rng 8
+
+  let t0 = nowUnixNs()
+  let dRoot = randomDurNs rng 70 240
+  let dApiServer = randomDurNs rng 50 180
+  let dApiCheckoutClient = randomDurNs rng 15 90
+  let dCheckoutServer = randomDurNs rng 20 100
+  let dCheckoutDbClient = randomDurNs rng 10 80
+  let dDbServer = randomDurNs rng 8 70
+  let dApiPaymentsClient = randomDurNs rng 10 60
+  let dPaymentsServer = randomDurNs rng 15 90
+
+  let rootErr = maybeErrorStatus rng 0.02
+  let paymentsErr = maybeErrorStatus rng 0.06
+  let dbErr = maybeErrorStatus rng 0.04
+
+  [ { service = "frontend"; operation = "GET /checkout"; kind = 2
+      traceId = traceId; spanId = rootId; parentId = None
+      startNs = t0; endNs = t0 + dRoot; status = rootErr }
+
+    { service = "api"; operation = "HTTP GET /api/checkout"; kind = 2
+      traceId = traceId; spanId = apiServerId; parentId = Some rootId
+      startNs = t0 + 2_000_000UL; endNs = t0 + 2_000_000UL + dApiServer; status = 1 }
+
+    { service = "api"; operation = "checkout.grpc/CreateOrder"; kind = 3
+      traceId = traceId; spanId = apiCheckoutClientId; parentId = Some apiServerId
+      startNs = t0 + 8_000_000UL; endNs = t0 + 8_000_000UL + dApiCheckoutClient; status = 1 }
+
+    { service = "checkout"; operation = "CreateOrder"; kind = 2
+      traceId = traceId; spanId = checkoutServerId; parentId = Some apiCheckoutClientId
+      startNs = t0 + 11_000_000UL; endNs = t0 + 11_000_000UL + dCheckoutServer; status = 1 }
+
+    { service = "checkout"; operation = "db.query orders"; kind = 3
+      traceId = traceId; spanId = checkoutDbClientId; parentId = Some checkoutServerId
+      startNs = t0 + 18_000_000UL; endNs = t0 + 18_000_000UL + dCheckoutDbClient; status = dbErr }
+
+    { service = "postgres"; operation = "SELECT/INSERT orders"; kind = 2
+      traceId = traceId; spanId = dbServerId; parentId = Some checkoutDbClientId
+      startNs = t0 + 20_000_000UL; endNs = t0 + 20_000_000UL + dDbServer; status = dbErr }
+
+    { service = "api"; operation = "payments.grpc/Authorize"; kind = 3
+      traceId = traceId; spanId = apiPaymentsClientId; parentId = Some apiServerId
+      startNs = t0 + 13_000_000UL; endNs = t0 + 13_000_000UL + dApiPaymentsClient; status = paymentsErr }
+
+    { service = "payments"; operation = "AuthorizePayment"; kind = 2
+      traceId = traceId; spanId = paymentsServerId; parentId = Some apiPaymentsClientId
+      startNs = t0 + 16_000_000UL; endNs = t0 + 16_000_000UL + dPaymentsServer; status = paymentsErr } ]
+
+let private tracesBatch (rng : Random) (traceCount : int) : byte[] =
+  [ for _ in 1 .. traceCount do
+      yield! traceSpans rng ]
+  |> encodeExportTraceRequest
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -293,14 +476,16 @@ let main argv =
     use client = mkClient opts
     let metricsUrl = opts.baseUrl + "/ingest/metrics"
     let logsUrl    = opts.baseUrl + "/ingest/logs"
+    let tracesUrl  = opts.baseUrl + "/v1/traces"
 
     let auth =
       match opts.token, opts.basic with
       | Some _, _ -> "bearer"
       | _, Some _ -> "basic"
       | _         -> "none"
-    printfn "[demo-feeder] base=%s auth=%s interval=%gs duration=%gs"
+    printfn "[demo-feeder] base=%s auth=%s interval=%gs duration=%gs traces=%s(%d/batch)"
       opts.baseUrl auth opts.intervalSec opts.durationSec
+      (if opts.noTraces then "off" else "on") opts.tracesPerBatch
 
     // Quiet Ctrl-C: flip the flag so the loop exits cleanly.
     let stop = ref false
@@ -318,9 +503,12 @@ let main argv =
               || (DateTime.UtcNow - started).TotalSeconds < opts.durationSec) do
       let mBody = metricsBatch rng cpu disk mem counters
       let lBody = logsBatch rng
+      let tBody = tracesBatch rng opts.tracesPerBatch
       Async.RunSynchronously (async {
         do! postJson client metricsUrl mBody opts.verbose
         do! postJson client logsUrl    lBody opts.verbose
+        if not opts.noTraces then
+          do! postProtobuf client tracesUrl tBody opts.verbose
       })
       batches <- batches + 1
       if not opts.verbose && batches % 12 = 0 then
