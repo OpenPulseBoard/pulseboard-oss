@@ -111,6 +111,47 @@ header.topbar .dot.live {
   box-shadow: 0 0 6px var(--ok, #5cd97a);
 }
 
+.shell-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shell-brand-logo {
+  height: 38px;
+  display: block;
+}
+
+.shell-workspace-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted, #8a93a1);
+  font-size: 12px;
+}
+
+.shell-workspace-pill {
+  background: var(--panel-2, #1f242d);
+  color: var(--accent, #5ec8ff);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.shell-workspace-slug {
+  color: var(--fg, #e6e6e6);
+}
+
+.shell-theme-btn {
+  padding: 3px 9px;
+  font-size: 13px;
+  border-radius: 4px;
+}
+
+.shell-link-with-gap {
+  margin-left: 12px;
+}
+
 body.shell-ready.sidebar-collapsed {
   padding-left: 0;
 }

@@ -84,24 +84,9 @@
     .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 
     header.topbar {
-      background: var(--panel);
-      border-right: 1px solid #000;
       border-bottom: 0;
       padding: 12px;
       gap: 10px;
-    }
-    #main-nav a { color: var(--muted); text-decoration: none; }
-    #main-nav a.active { color: var(--fg); background: var(--panel-2); border-color: var(--grid); }
-    #sidebar-toggle {
-      background: var(--panel-2);
-      color: var(--fg);
-      border: 1px solid var(--grid);
-      cursor: pointer;
-    }
-    #sidebar-backdrop { background: rgba(0, 0, 0, 0.35); }
-
-    @media (max-width: 980px) {
-      header.topbar h1 { justify-content: flex-start; }
     }
   </style>
 </head>
@@ -110,7 +95,7 @@
 <div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <header class="topbar">
-  <h1><img id="brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" style="height:38px;display:block;" /></h1>
+  <h1><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
   <nav id="main-nav">
     <a href="/app">Dashboard</a>
     <a href="/live" class="active">Live</a>
@@ -118,14 +103,11 @@
   </nav>
   <span class="status"><span id="dot" class="dot"></span><span id="conn">connecting…</span></span>
   <span class="status" id="counts"></span>
-  <span class="status" id="workspace-badge" title="Active workspace"
-        style="display:inline-flex; align-items:center; gap:6px;">
-    <span style="background:#1f242d; color:#5ec8ff; font-size:11px;
-                 padding:2px 7px; border-radius:3px;">workspace</span>
+  <span class="status shell-workspace-badge" id="workspace-badge" title="Active workspace">
+    <span class="shell-workspace-pill">workspace</span>
     <span id="workspace-slug">—</span>
   </span>
-  <button id="theme-toggle" title="Toggle light/dark mode"
-          style="padding:3px 9px; font-size:13px; border-radius:4px;">🌙</button>
+  <button id="theme-toggle" class="shell-theme-btn" title="Toggle light/dark mode">🌙</button>
 </header>
 <main>
   <section id="metrics">

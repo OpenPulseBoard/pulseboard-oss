@@ -83,26 +83,13 @@
     .gone { display:none !important; }
 
     header.topbar {
-      background: var(--panel);
-      border-right: 1px solid #000;
       border-bottom: 0;
       padding: 12px;
       gap: 10px;
     }
-    header.topbar h1 { letter-spacing: 2px; }
     header.topbar .who { color: var(--muted); margin-top: auto; margin-left: 0; }
-    #main-nav a { color: var(--muted); text-decoration: none; }
-    #main-nav a.active { color: var(--fg); background: var(--panel-2); border-color: var(--grid); }
-    #sidebar-toggle {
-      background: var(--panel-2);
-      color: var(--fg);
-      border: 1px solid var(--grid);
-      cursor: pointer;
-    }
-    #sidebar-backdrop { background: rgba(0, 0, 0, 0.35); }
 
     @media (max-width: 980px) {
-      header.topbar h1 { justify-content: flex-start; }
       nav.tabs { padding-left: 12px; }
     }
   </style>
@@ -112,21 +99,18 @@
 <div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <header class="topbar">
-  <h1 style="display:flex;align-items:center;gap:10px;"><img id="brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" style="height:38px;display:block;" /><span>· ADMIN</span></h1>
+  <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /><span>· ADMIN</span></h1>
   <nav id="main-nav">
     <a href="/app">Dashboard</a>
     <a href="/admin" class="active">Admin</a>
     <a href="/live">Live</a>
   </nav>
   <span class="who" id="whoami">checking session…</span>
-  <span id="workspace-badge" title="Active workspace"
-        style="display:inline-flex; align-items:center; gap:6px;
-               color:var(--muted); font-size:12px;">
-    <span style="background:#1f242d; color:#5ec8ff; font-size:11px;
-                 padding:2px 7px; border-radius:3px;">workspace</span>
+  <span id="workspace-badge" class="shell-workspace-badge" title="Active workspace">
+    <span class="shell-workspace-pill">workspace</span>
     <span id="workspace-slug">—</span>
   </span>
-  <button class="ghost" id="theme-toggle" title="Toggle light/dark mode">🌙</button>
+  <button class="ghost shell-theme-btn" id="theme-toggle" title="Toggle light/dark mode">🌙</button>
   <button class="ghost" id="signOut" style="display:none;">Sign out</button>
 </header>
 

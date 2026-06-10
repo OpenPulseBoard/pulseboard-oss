@@ -14,7 +14,7 @@
 <div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <header class="topbar">
-  <h1><img id="brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" style="height:38px;display:block;" /></h1>
+  <h1><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
   <nav id="main-nav">
     <a href="#/dashboards" id="tab-dashboards" class="active">Dashboards</a>
     <a href="#/explore"    id="tab-explore">Explore</a>
@@ -28,16 +28,14 @@
     <a href="/live"        target="_blank">Live →</a>
   </nav>
   <div class="grow"></div>
-  <span class="status" id="workspace-badge" title="Active workspace"
-        style="margin-right:12px; display:inline-flex; align-items:center; gap:6px;">
-    <span class="badge" style="background:var(--panel-2); color:var(--accent);
-                               font-size:11px; padding:2px 7px;">workspace</span>
-    <span id="workspace-slug" style="color:var(--fg);">—</span>
+  <span class="status shell-workspace-badge" id="workspace-badge" title="Active workspace">
+    <span class="badge shell-workspace-pill">workspace</span>
+    <span id="workspace-slug" class="shell-workspace-slug">—</span>
   </span>
   <span class="status"><span id="dot" class="dot"></span><span id="conn">offline</span></span>
-  <span class="status" style="margin-left:12px;"><a href="/admin">admin →</a></span>
+  <span class="status shell-link-with-gap"><a href="/admin">admin →</a></span>
   <button id="theme-toggle" title="Toggle light/dark mode"
-          style="margin-left:8px; padding:3px 9px; font-size:13px; border-radius:4px;">🌙</button>
+          class="shell-theme-btn">🌙</button>
 </header>
 
 <!-- Dashboards view -->
