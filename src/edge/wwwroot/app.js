@@ -50,14 +50,14 @@ const fmtNum = (n) => {
   return n.toFixed(3);
 };
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
-const cssVar = (name, fallback) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
+const chartTheme = () => {
+  const theme = document.documentElement.getAttribute("data-theme") || "dark";
+  if (theme === "light") {
+    return { axis: "#4b5563", grid: "#e3e8f0" };
+  }
+  // Original dark-mode chart colors.
+  return { axis: "#8a93a1", grid: "#232833" };
 };
-const chartTheme = () => ({
-  axis: cssVar("--chart-axis", "#8a93a1"),
-  grid: cssVar("--chart-grid", "#232833"),
-});
 
 const state = {
   dashboards: [],          // [{id,title,...}]
