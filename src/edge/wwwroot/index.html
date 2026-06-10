@@ -9,12 +9,13 @@
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
-
-<button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
 <div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <header class="topbar">
-  <h1><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
+  <div class="shell-topbar-row">
+    <h1><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
+    <button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
+  </div>
   <nav id="main-nav">
     <a href="#/dashboards" id="tab-dashboards" class="active">Dashboards</a>
     <a href="#/explore"    id="tab-explore">Explore</a>

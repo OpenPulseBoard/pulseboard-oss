@@ -95,11 +95,13 @@
   </style>
 </head>
 <body>
-<button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
 <div id="sidebar-backdrop" aria-hidden="true"></div>
 
 <header class="topbar">
-  <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /><span>· ADMIN</span></h1>
+  <div class="shell-topbar-row">
+    <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /><span>· ADMIN</span></h1>
+    <button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
+  </div>
   <nav id="main-nav">
     <a href="/app">Dashboard</a>
     <a href="/admin" class="active">Admin</a>

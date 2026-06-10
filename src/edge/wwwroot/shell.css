@@ -1,5 +1,6 @@
 :root {
   --sidebar-w: 260px;
+  --sidebar-collapsed-w: 52px;
 }
 
 body.shell-ready {
@@ -7,9 +8,7 @@ body.shell-ready {
 }
 
 #sidebar-toggle {
-  position: fixed;
-  top: 64px;
-  left: calc(var(--sidebar-w) - 42px);
+  position: static;
   z-index: 110;
   width: 34px;
   height: 34px;
@@ -49,11 +48,19 @@ header.topbar {
   border-right: 1px solid #000;
 }
 
+.shell-topbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 header.topbar h1 {
   margin: 0;
   display: flex;
-  justify-content: center;
-  padding-left: 18px;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 0;
   color: var(--accent, #5ec8ff);
   font-size: 14px;
   letter-spacing: 2px;
@@ -153,16 +160,11 @@ header.topbar .dot.live {
 }
 
 body.shell-ready.sidebar-collapsed {
-  padding-left: 0;
-}
-
-body.shell-ready.sidebar-collapsed #sidebar-toggle {
-  top: 64px;
-  left: 12px;
+  padding-left: var(--sidebar-collapsed-w);
 }
 
 body.shell-ready.sidebar-collapsed header.topbar {
-  transform: translateX(calc(-1 * var(--sidebar-w)));
+  transform: translateX(calc(-1 * var(--sidebar-w) + var(--sidebar-collapsed-w)));
 }
 
 @media (max-width: 980px) {
@@ -171,6 +173,7 @@ body.shell-ready.sidebar-collapsed header.topbar {
   }
 
   #sidebar-toggle {
+    position: fixed;
     top: 12px;
     left: 12px;
   }
