@@ -2,7 +2,85 @@
   const COLLAPSED_KEY = "pb.sidebarCollapsed";
   const THEME_KEY = "pb.theme";
 
+  const NAV_ITEMS = [
+    { id: "tab-dashboards", href: "/app#/dashboards", label: "Dashboards",  icon: "\uD83D\uDCCA" },
+    { id: "tab-explore",    href: "/app#/explore",    label: "Explore",     icon: "\uD83D\uDD0E" },
+    { id: "tab-traces",     href: "/app#/traces",     label: "Traces",      icon: "\uD83E\uDDED" },
+    { id: "tab-map",        href: "/app#/map",        label: "Service Map", icon: "\uD83D\uDDFA\uFE0F" },
+    { id: "tab-library",    href: "/app#/library",    label: "Library",     icon: "\uD83D\uDCDA" },
+    { id: "tab-alerts",     href: "/app#/alerts",     label: "Alerts",      icon: "\uD83D\uDD14", badgeId: "alerts-nav-badge" },
+    { id: "tab-agents",     href: "/app#/agents",     label: "Agents",      icon: "\uD83E\uDD16" },
+    { id: "tab-synthetics", href: "/app#/uptime",     label: "Uptime",      icon: "\u23F1\uFE0F" },
+    { id: "tab-status",     href: "/app#/status",     label: "Status",      icon: "\uD83D\uDEA6" },
+    { id: "tab-live",       href: "/live",            label: "Live",        icon: "\uD83D\uDFE2" },
+    { id: "tab-admin",      href: "/admin",           label: "Admin",       icon: "\u2699\uFE0F" }
+  ];
+
   function byId(id) { return document.getElementById(id); }
+
+  function activeNavId() {
+    const p = location.pathname || "/";
+    if (p.indexOf("/admin") === 0) return "tab-admin";
+    if (p.indexOf("/live") === 0)  return "tab-live";
+    const h = (location.hash || "").replace(/^#\/?/, "").split(/[?\/]/)[0];
+    const map = {
+      "":           "tab-dashboards",
+      "dashboards": "tab-dashboards",
+      "explore":    "tab-explore",
+      "traces":     "tab-traces",
+      "map":        "tab-map",
+      "library":    "tab-library",
+      "alerts":     "tab-alerts",
+      "agents":     "tab-agents",
+      "uptime":     "tab-synthetics",
+      "synthetics": "tab-synthetics",
+      "status":     "tab-status"
+    };
+    return map[h] || "tab-dashboards";
+  }
+
+  function renderSidebar() {
+    const nav = byId("main-nav");
+    if (!nav) return;
+    const active = activeNavId();
+    nav.innerHTML = "";
+    NAV_ITEMS.forEach(function (item) {
+      const a = document.createElement("a");
+      a.id = item.id;
+      a.href = item.href;
+      a.title = item.label;
+      if (item.id === active) a.classList.add("active");
+
+      const icon = document.createElement("span");
+      icon.className = "nav-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = item.icon;
+      a.appendChild(icon);
+
+      const label = document.createElement("span");
+      label.className = "nav-label";
+      label.textContent = item.label;
+      a.appendChild(label);
+
+      if (item.badgeId) {
+        const badge = document.createElement("span");
+        badge.id = item.badgeId;
+        badge.className = "nav-badge hidden";
+        a.appendChild(badge);
+      }
+      nav.appendChild(a);
+    });
+  }
+
+  function syncActiveNav() {
+    const nav = byId("main-nav");
+    if (!nav) return;
+    const active = activeNavId();
+    NAV_ITEMS.forEach(function (item) {
+      const el = byId(item.id);
+      if (el) el.classList.toggle("active", item.id === active);
+    });
+  }
 
   function applyTheme(isDark) {
     document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
@@ -131,6 +209,8 @@
   }
 
   initTheme();
+  renderSidebar();
   initSidebar();
   setWorkspaceBadge();
+  window.addEventListener("hashchange", syncActiveNav);
 })();
