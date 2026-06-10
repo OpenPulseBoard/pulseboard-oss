@@ -5,8 +5,13 @@
   function applyTheme(isDark) {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
     var btn = document.getElementById('theme-toggle');
+    var logo = document.getElementById('brand-logo');
     if (btn) btn.textContent = isDark ? '\uD83C\uDF19' : '\u2600\uFE0F';
     btn && (btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode');
+    if (logo) logo.src = isDark ? '/pulse-board-logo-dark.svg' : '/pulse-board-logo-alternative.svg';
+    document.dispatchEvent(new CustomEvent('pb:themechange', {
+      detail: { theme: isDark ? 'dark' : 'light' }
+    }));
   }
   applyTheme(dark);
   document.addEventListener('DOMContentLoaded', function () {
@@ -104,6 +109,14 @@ const fmtNum = (n) => {
   return n.toFixed(3);
 };
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
+const cssVar = (name, fallback) => {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+};
+const chartTheme = () => ({
+  axis: cssVar("--chart-axis", "#8a93a1"),
+  grid: cssVar("--chart-grid", "#232833"),
+});
 
 const state = {
   dashboards: [],          // [{id,title,...}]
@@ -118,6 +131,11 @@ const state = {
   liveMode:      false,    // 12.3 — WS-driven sub-second refresh
   history:       [],       // 12.3 — [{ts, title, snap}] ring buffer
 };
+
+document.addEventListener("pb:themechange", () => {
+  if (!state.current) return;
+  refreshAll().catch((e) => console.warn("theme refresh failed", e));
+});
 
 function showView(name) {
   $("view-dashboards").classList.toggle("hidden", name !== "dashboards");
@@ -605,6 +623,7 @@ function renderTimeseries(body, result, p) {
   const yMin      = popts.yMin !== "" && popts.yMin != null ? +popts.yMin : undefined;
   const yMax      = popts.yMax !== "" && popts.yMax != null ? +popts.yMax : undefined;
   const seriesDefs = buildSeriesDefs(series.map(s => s.name), xs, popts);
+  const colors = chartTheme();
 
   const uopts = {
     width:  body.clientWidth  || 300,
@@ -616,8 +635,8 @@ function renderTimeseries(body, result, p) {
       y: { min: yMin, max: yMax },
     },
     axes: [
-      { stroke: "#8a93a1", grid: { stroke: "#232833" } },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: makeYAxisSize(unitFmt),
+      { stroke: colors.axis, grid: { stroke: colors.grid } },
+      { stroke: colors.axis, grid: { stroke: colors.grid }, size: makeYAxisSize(unitFmt),
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
     plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, true)],
@@ -1347,6 +1366,7 @@ function renderTrend(body, result, p) {
   const yMin       = popts.yMin !== "" && popts.yMin != null ? +popts.yMin : undefined;
   const yMax       = popts.yMax !== "" && popts.yMax != null ? +popts.yMax : undefined;
   const seriesDefs = buildSeriesDefs(series.map(s => s.name), xs, popts);
+  const colors = chartTheme();
 
   const uopts = {
     width:  body.clientWidth  || 300,
@@ -1358,10 +1378,10 @@ function renderTrend(body, result, p) {
       y: { min: yMin, max: yMax },
     },
     axes: [
-      { stroke: "#8a93a1", grid: { stroke: "#232833" },
+      { stroke: colors.axis, grid: { stroke: colors.grid },
         label: xLabel || undefined,
         values: (u, vals) => vals.map(v => fmtNum(v)) },
-      { stroke: "#8a93a1", grid: { stroke: "#232833" }, size: makeYAxisSize(unitFmt),
+      { stroke: colors.axis, grid: { stroke: colors.grid }, size: makeYAxisSize(unitFmt),
         values: (u, vals) => vals.map(v => unitFmt(v)) },
     ],
     plugins: [tooltipPlugin(series.map(s => s.name), unitFmt, false)],

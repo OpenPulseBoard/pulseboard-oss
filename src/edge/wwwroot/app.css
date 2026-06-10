@@ -12,6 +12,8 @@
       --err: #f25f5c;
       --grid: #232833;
       --border: #2a3140;
+      --chart-axis: #8a93a1;
+      --chart-grid: #232833;
     }
     [data-theme="light"] {
       --bg: #f0f2f5;
@@ -27,6 +29,8 @@
       --err: #dc2626;
       --grid: #d1d9e6;
       --border: #c8d0df;
+      --chart-axis: #4b5563;
+      --chart-grid: #e3e8f0;
     }
     [data-theme="light"] button.primary { color: #fff; }
     [data-theme="light"] button:hover { background: #d0d7e2; }
