@@ -132,6 +132,42 @@ const state = {
   history:       [],       // 12.3 — [{ts, title, snap}] ring buffer
 };
 
+const SIDEBAR_COLLAPSED_KEY = "pb.sidebarCollapsed";
+
+function isMobileSidebar() {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
+function setSidebarToggleAria(expanded) {
+  const btn = $("sidebar-toggle");
+  if (btn) btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function applySidebarLayoutState() {
+  if (isMobileSidebar()) {
+    document.body.classList.remove("sidebar-collapsed");
+    setSidebarToggleAria(document.body.classList.contains("sidebar-open"));
+    return;
+  }
+  document.body.classList.remove("sidebar-open");
+  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  setSidebarToggleAria(!collapsed);
+}
+
+function toggleSidebar() {
+  if (isMobileSidebar()) {
+    const opening = !document.body.classList.contains("sidebar-open");
+    document.body.classList.toggle("sidebar-open", opening);
+    setSidebarToggleAria(opening);
+    return;
+  }
+  const collapsed = !document.body.classList.contains("sidebar-collapsed");
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  setSidebarToggleAria(!collapsed);
+}
+
 document.addEventListener("pb:themechange", () => {
   if (!state.current) return;
   refreshAll().catch((e) => console.warn("theme refresh failed", e));
@@ -163,6 +199,10 @@ function showView(name) {
   if (name === "agents")  loadAgents();
   if (name === "synthetics") loadSynthetics();
   if (name === "status")     loadStatusPages();
+  if (isMobileSidebar()) {
+    document.body.classList.remove("sidebar-open");
+    setSidebarToggleAria(false);
+  }
 }
 
 function uuid() {
@@ -4272,6 +4312,20 @@ $("explore-run").addEventListener("click", runExplore);
 $("explore-expr").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runExplore();
 });
+
+$("sidebar-toggle").addEventListener("click", toggleSidebar);
+$("sidebar-backdrop").addEventListener("click", () => {
+  document.body.classList.remove("sidebar-open");
+  setSidebarToggleAria(false);
+});
+window.addEventListener("resize", applySidebarLayoutState);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("sidebar-open")) {
+    document.body.classList.remove("sidebar-open");
+    setSidebarToggleAria(false);
+  }
+});
+applySidebarLayoutState();
 
 // =====================================================================
 // Traces tab — list summaries + waterfall modal (Phase 4 #4)

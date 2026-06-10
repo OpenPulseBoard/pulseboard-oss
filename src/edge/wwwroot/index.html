@@ -9,9 +9,12 @@
 </head>
 <body>
 
+<button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
+<div id="sidebar-backdrop" aria-hidden="true"></div>
+
 <header class="topbar">
   <h1><img id="brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" style="height:38px;display:block;" /></h1>
-  <nav>
+  <nav id="main-nav">
     <a href="#/dashboards" id="tab-dashboards" class="active">Dashboards</a>
     <a href="#/explore"    id="tab-explore">Explore</a>
     <a href="#/traces"     id="tab-traces">Traces</a>
