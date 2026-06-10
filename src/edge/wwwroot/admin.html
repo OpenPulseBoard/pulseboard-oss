@@ -19,12 +19,6 @@
     * { box-sizing:border-box; }
     body { margin:0; font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
            background:var(--bg); color:var(--fg); }
-    header { padding:10px 16px; background:var(--panel); border-bottom:1px solid #000;
-             display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-    header h1 { font-size:14px; margin:0; letter-spacing:1px; color:var(--accent); }
-    header a { color:var(--accent); text-decoration:none; }
-    header a:hover { text-decoration:underline; }
-    header .who { color:var(--muted); margin-left:auto; }
     nav.tabs { padding:0 16px; background:var(--panel); border-bottom:1px solid var(--grid);
                display:flex; gap:0; }
     nav.tabs button { background:none; color:var(--muted); border:0; padding:10px 14px;
@@ -99,7 +93,7 @@
 
 <header class="topbar">
   <div class="shell-topbar-row">
-    <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /><span>· ADMIN</span></h1>
+    <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
     <button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
   </div>
   <nav id="main-nav"></nav>
