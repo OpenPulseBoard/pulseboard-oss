@@ -379,12 +379,25 @@ let main argv =
   let logStore    = LogStore(capacity = 4096)
   let hub         = new Broadcaster()
 
-  // In-process ring of recent spans per tenant (PLAN Phase 4 #4). Declared
-  // up front so the alert sink can capture trace correlation at fire time
-  // (PLAN-NEXT 14.4); the Traces / Service Map REST surface is mounted later.
+  // Span store (PLAN Phase 4 #4). Postgres-backed when configured,
+  // otherwise an in-process ring per tenant. Declared up front so the
+  // alert sink can capture trace correlation at fire time (PLAN-NEXT
+  // 14.4); the Traces / Service Map REST surface is mounted later.
   let spanStoreCapacity = 10_000
+  let spanStoreMode =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgSpanStore.ensureSchema cs
+        "Postgres"
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres span store: %s" ex.Message
+        exit 2
+    | None -> sprintf "in-memory ring (capacity=%d per tenant)" spanStoreCapacity
   let spanStore : PulseBoard.Spans.ISpanStore =
-    PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
+    match pgConn with
+    | Some cs -> PulseBoard.PgSpanStore.PgSpanStore(cs) :> _
+    | None    -> PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
 
   // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
   // seam is still `IStorageClient`; `InProcessStorageClient` now
@@ -1218,7 +1231,7 @@ let main argv =
   // near `metricStore`, so the alert sink can read it at fire time.)
   let traceApiInner = PulseBoard.TraceApi.webPart multiTenant spanStore
   let rumInner      = PulseBoard.Rum.webPart      multiTenant metricStore logStore
-  printfn "  Spans: in-memory ring (capacity=%d per tenant)" spanStoreCapacity
+  printfn "  Spans: %s" spanStoreMode
   printfn "  RUM: %s"
     (if multiTenant
      then "POST /rum/v1/<tenantId>/events (unauthenticated stub)"

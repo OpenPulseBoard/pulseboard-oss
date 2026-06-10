@@ -41,6 +41,7 @@
     <Compile Include="Ingest.fs" />
     <Compile Include="PromRemoteWrite.fs" />
     <Compile Include="Spans.fs" />
+    <Compile Include="PgSpanStore.fs" />
     <Compile Include="Otlp.fs" />
     <Compile Include="LokiPush.fs" />
     <Compile Include="PromScrape.fs" />
