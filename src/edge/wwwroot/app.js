@@ -2362,6 +2362,17 @@ async function renderVarsBar(dashboard) {
       if (v.type === "custom")     options = (v.options || "").split(",").map(s => s.trim()).filter(Boolean);
       else if (v.type === "query") options = await fetchVarOptions(v.query || "", v.regex || "").catch(() => []);
       if (v.allOption) options = ["$__all", ...options];
+
+      // Keep multi-select state shape stable so first render does not
+      // accidentally pin to a single concrete value.
+      if (v.multi) {
+        if (!Array.isArray(v.current)) {
+          if (typeof v.current === "string" && v.current) v.current = [v.current];
+          else v.current = v.allOption ? ["$__all"] : [];
+        }
+        if (v.allOption && !v.current.length) v.current = ["$__all"];
+      }
+
       const sel = document.createElement("select"); if (v.multi) sel.multiple = true;
       for (const opt of options) {
         const o = document.createElement("option"); o.value = opt;
@@ -2369,6 +2380,10 @@ async function renderVarsBar(dashboard) {
       }
       if (v.multi && Array.isArray(v.current)) {
         for (const o of sel.options) o.selected = v.current.includes(o.value);
+        if (!sel.selectedOptions.length && sel.options.length) {
+          sel.selectedIndex = 0;
+          v.current = Array.from(sel.selectedOptions).map(o => o.value);
+        }
       } else if (v.current) {
         sel.value = v.current;
         if (!sel.value && sel.options.length) { sel.selectedIndex = 0; v.current = sel.value; }
@@ -3470,15 +3485,15 @@ let _libKey = null;
 
 const LIBRARY_CATALOG = [
   {
-    id: "linux-host", icon: "🐧", title: "Linux Host", category: "Infrastructure",
-    description: "CPU, memory, disk I/O, and network throughput via node_exporter. Multi-host aware via the $host variable (auto-populated from the `instance` label that pulseagent stamps on every sample). Requires: pulseagent v0.3+ (auto-stamps `instance`/`host.name`).",
+    id: "linux-host", icon: "🖥️", title: "Host (Linux/Windows)", category: "Infrastructure",
+    description: "CPU, memory, disk I/O, and network throughput for host agents across Linux and Windows. Multi-host aware via the $host variable (auto-populated from the `instance` label that pulseagent stamps on every sample). Requires: pulseagent v0.3+ (auto-stamps `instance`/`host.name`).",
     metrics: ["node_cpu_seconds_total","node_memory_MemTotal_bytes","node_disk_read_bytes_total","node_network_receive_bytes_total"],
-    alerts: { name:"Linux Host Alerts", intervalMs:15000, rules:[
+    alerts: { name:"Host Alerts", intervalMs:15000, rules:[
       { name:"High CPU", lang:"promql", expr:'100 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"CPU > 90% on {{ $labels.instance }}"} },
       { name:"Low disk space", lang:"promql", expr:'(node_filesystem_avail_bytes{fstype!~"tmpfs"} / node_filesystem_size_bytes{fstype!~"tmpfs"}) * 100', cmp:"<", threshold:10, forMs:300000, severity:"critical", labels:{integration:"linux-host"}, annotations:{summary:"Disk free < 10% on {{ $labels.instance }}"} },
       { name:"High memory", lang:"promql", expr:'(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', cmp:">", threshold:90, forMs:300000, severity:"warning", labels:{integration:"linux-host"}, annotations:{summary:"Memory > 90% on {{ $labels.instance }}"} },
     ]},
-    dashboard: { title:"Linux Host", timeRangeSec:3600, refreshSec:15,
+    dashboard: { title:"Host (Linux/Windows)", timeRangeSec:3600, refreshSec:15,
       vars:[
         // Populated from any node_exporter / pulseagent series. The agent
         // auto-stamps `instance=<hostname>` so this list reflects every
