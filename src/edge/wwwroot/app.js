@@ -1,37 +1,3 @@
-// ── Light / Dark theme ──────────────────────────────────────────────
-(function () {
-  var stored = localStorage.getItem('pb.theme');
-  var dark = stored ? stored !== 'light' : !window.matchMedia('(prefers-color-scheme: light)').matches;
-  function applyTheme(isDark) {
-    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    var btn = document.getElementById('theme-toggle');
-    var logo = document.getElementById('brand-logo');
-    if (btn) btn.textContent = isDark ? '\uD83C\uDF19' : '\u2600\uFE0F';
-    btn && (btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode');
-    if (logo) logo.src = isDark ? '/pulse-board-logo-dark.svg' : '/pulse-board-logo-alternative.svg';
-    document.dispatchEvent(new CustomEvent('pb:themechange', {
-      detail: { theme: isDark ? 'dark' : 'light' }
-    }));
-  }
-  applyTheme(dark);
-  function wireToggle() {
-    var btn = document.getElementById('theme-toggle');
-    if (!btn || btn.dataset.wired === '1') return;
-    btn.dataset.wired = '1';
-    btn.textContent = dark ? '\uD83C\uDF19' : '\u2600\uFE0F';
-    btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
-    btn.addEventListener('click', function () {
-      dark = !dark;
-      localStorage.setItem('pb.theme', dark ? 'dark' : 'light');
-      applyTheme(dark);
-    });
-  }
-  wireToggle();
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wireToggle);
-  }
-})();
-
 // Panel SDK — pluggable registry (Phase 12.1)
 // =====================================================================
 //
@@ -73,36 +39,6 @@ const PulseBoard = (() => {
 // =====================================================================
 const $ = (id) => document.getElementById(id);
 
-// --- workspace tenant badge ------------------------------------------
-// Asks the server which tenant the current bearer/session is bound to.
-// Falls back to the hostname-derived slug (suffixed with "?") if the
-// request fails — e.g. before sign-in or on a non-tenant host.
-(async function setWorkspaceBadge() {
-  const el    = document.getElementById("workspace-slug");
-  const badge = document.getElementById("workspace-badge");
-  if (!el) return;
-  const render = (slug, host, confirmed) => {
-    el.textContent = slug;
-    if (badge) badge.title =
-      (confirmed ? "Tenant: " : "Tenant (unconfirmed): ") + slug +
-      (host ? " · host: " + host : "");
-  };
-  try {
-    const tok = sessionStorage.getItem("pb.bearer");
-    const headers = tok ? { "Authorization": "Bearer " + tok } : {};
-    const r = await fetch("/auth/me", { headers, credentials: "same-origin" });
-    if (r.ok) {
-      const me = await r.json();
-      if (me && me.slug) { render(me.slug, location.hostname, true); return; }
-    }
-  } catch { /* fall through to hostname-derived fallback */ }
-  const host  = location.hostname || "";
-  const parts = host.split(".");
-  const slug  = (parts.length >= 3 && parts[0] !== "www") ? parts[0]
-              : (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) ? "local"
-              : host;
-  render(slug + " ?", host, false);
-})();
 const fmtNum = (n) => {
   if (!Number.isFinite(n)) return String(n);
   const a = Math.abs(n);
@@ -137,50 +73,8 @@ const state = {
   history:       [],       // 12.3 — [{ts, title, snap}] ring buffer
 };
 
-const SIDEBAR_COLLAPSED_KEY = "pb.sidebarCollapsed";
-
-function isMobileSidebar() {
-  return window.matchMedia("(max-width: 980px)").matches;
-}
-
-function setSidebarToggleAria(expanded) {
-  const btn = $("sidebar-toggle");
-  if (btn) btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-}
-
-function applySidebarLayoutState() {
-  if (isMobileSidebar()) {
-    document.body.classList.remove("sidebar-collapsed");
-    setSidebarToggleAria(document.body.classList.contains("sidebar-open"));
-    return;
-  }
-  document.body.classList.remove("sidebar-open");
-  const collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
-  document.body.classList.toggle("sidebar-collapsed", collapsed);
-  setSidebarToggleAria(!collapsed);
-}
-
-function toggleSidebar() {
-  if (isMobileSidebar()) {
-    const opening = !document.body.classList.contains("sidebar-open");
-    document.body.classList.toggle("sidebar-open", opening);
-    setSidebarToggleAria(opening);
-    return;
-  }
-  const collapsed = !document.body.classList.contains("sidebar-collapsed");
-  document.body.classList.toggle("sidebar-collapsed", collapsed);
-  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-  setSidebarToggleAria(!collapsed);
-}
-
 document.addEventListener("pb:themechange", () => {
   if (!state.current) return;
-  for (const [id, cached] of state.panels.entries()) {
-    if (cached && cached.uplot) {
-      try { cached.uplot.destroy(); } catch {}
-      state.panels.set(id, { dom: cached.dom });
-    }
-  }
   refreshAll().catch((e) => console.warn("theme refresh failed", e));
 });
 
@@ -210,10 +104,6 @@ function showView(name) {
   if (name === "agents")  loadAgents();
   if (name === "synthetics") loadSynthetics();
   if (name === "status")     loadStatusPages();
-  if (isMobileSidebar()) {
-    document.body.classList.remove("sidebar-open");
-    setSidebarToggleAria(false);
-  }
 }
 
 function uuid() {
@@ -623,10 +513,9 @@ function tooltipPlugin(seriesNames, unitFmt, isTime) {
 }
 
 function plotSpecKey(seriesNames, opts) {
-  const theme = document.documentElement.getAttribute("data-theme") || "dark";
   const ks = ["style","interpolation","lineStyle","lineWidth","fill","colors","legend","yMin","yMax"];
   const perColorKeys = seriesNames.map((_, i) => opts["color" + i] || "").join(",");
-  return theme + "/" + seriesNames.join("|") + "/" + ks.map(k => opts[k] || "").join(",") + "/" + perColorKeys;
+  return seriesNames.join("|") + "/" + ks.map(k => opts[k] || "").join(",") + "/" + perColorKeys;
 }
 
 function renderTimeseries(body, result, p) {
@@ -4324,20 +4213,6 @@ $("explore-run").addEventListener("click", runExplore);
 $("explore-expr").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runExplore();
 });
-
-$("sidebar-toggle").addEventListener("click", toggleSidebar);
-$("sidebar-backdrop").addEventListener("click", () => {
-  document.body.classList.remove("sidebar-open");
-  setSidebarToggleAria(false);
-});
-window.addEventListener("resize", applySidebarLayoutState);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.body.classList.contains("sidebar-open")) {
-    document.body.classList.remove("sidebar-open");
-    setSidebarToggleAria(false);
-  }
-});
-applySidebarLayoutState();
 
 // =====================================================================
 // Traces tab — list summaries + waterfall modal (Phase 4 #4)
