@@ -1551,10 +1551,9 @@ let main argv =
       // page (Sign in / Dashboard / Docs CTAs). The marketing home.html is
       // still reachable at /home for anyone deep-linking it. In single-tenant
       // mode, "/" remains the marketing page.
-      GET >=> path "/"            >=> Files.browseFile wwwroot (if multiTenant then "workspace.html" else "home.html")
+      GET >=> path "/"            >=> (if multiTenant then Redirection.redirect "/app" else Files.browseFile wwwroot "home.html")
       GET >=> path "/index.html"   >=> Files.browseFile wwwroot "home.html"
       GET >=> path "/home"         >=> Files.browseFile wwwroot "home.html"
-      GET >=> path "/workspace"    >=> Files.browseFile wwwroot "workspace.html"
       GET >=> path "/docs"         >=> Files.browseFile wwwroot "docs.html"
       GET >=> path "/docs.html"    >=> Files.browseFile wwwroot "docs.html"
       // /signup, /signup.html, /onboard intentionally NOT served on the

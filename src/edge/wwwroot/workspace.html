@@ -14,12 +14,24 @@
       --accent: #9d4f2e;
       --line: #ddd1c2;
     }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #1a1612;
+      --panel: #231f1b;
+      --ink: #ede8e0;
+      --muted: #a39a8e;
+      --accent: #c96a3e;
+      --line: #3a342c;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Georgia, serif;
       background: linear-gradient(180deg, #fcfaf6, var(--bg));
       color: var(--ink);
+    }
+    [data-theme="dark"] body {
+      background: linear-gradient(180deg, #221e1a, var(--bg));
     }
     main { max-width: 960px; margin: 0 auto; padding: 56px 24px 72px; }
     .panel {
@@ -42,9 +54,27 @@
       background: transparent;
     }
     a.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    #theme-toggle {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 0.85rem;
+      font-family: Georgia, serif;
+      font-weight: 700;
+      color: var(--ink);
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(32, 26, 20, 0.12);
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+    }
+    #theme-toggle:hover { background: var(--line); }
   </style>
 </head>
 <body>
+  <button id="theme-toggle" aria-label="Toggle light/dark mode">🌙 Dark</button>
   <main>
     <section class="panel">
       <h1>Your self-hosted PulseBoard workspace</h1>
@@ -62,5 +92,22 @@
       </div>
     </section>
   </main>
+  <script>
+    (function () {
+      var btn = document.getElementById('theme-toggle');
+      var stored = localStorage.getItem('pb.theme');
+      var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      function apply(isDark) {
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+        btn.textContent = isDark ? '\u2600\uFE0F Light' : '\uD83C\uDF19 Dark';
+      }
+      apply(dark);
+      btn.addEventListener('click', function () {
+        dark = !dark;
+        localStorage.setItem('pb.theme', dark ? 'dark' : 'light');
+        apply(dark);
+      });
+    })();
+  </script>
 </body>
 </html>

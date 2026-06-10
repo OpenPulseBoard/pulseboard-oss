@@ -1,6 +1,27 @@
-"use strict";
+// ── Light / Dark theme ──────────────────────────────────────────────
+(function () {
+  var stored = localStorage.getItem('pb.theme');
+  var dark = stored ? stored !== 'light' : !window.matchMedia('(prefers-color-scheme: light)').matches;
+  function applyTheme(isDark) {
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = isDark ? '\uD83C\uDF19' : '\u2600\uFE0F';
+    btn && (btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+  applyTheme(dark);
+  document.addEventListener('DOMContentLoaded', function () {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    btn.textContent = dark ? '\uD83C\uDF19' : '\u2600\uFE0F';
+    btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    btn.addEventListener('click', function () {
+      dark = !dark;
+      localStorage.setItem('pb.theme', dark ? 'dark' : 'light');
+      applyTheme(dark);
+    });
+  });
+})();
 
-// =====================================================================
 // Panel SDK — pluggable registry (Phase 12.1)
 // =====================================================================
 //

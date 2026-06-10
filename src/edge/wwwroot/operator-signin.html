@@ -3,88 +3,106 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PulseBoard Operator Sign-in</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>PulseBoard · Sign in</title>
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f0f4f4;
-      --card: #ffffff;
-      --ink: #182122;
-      --muted: #617071;
-      --accent: #0e6e78;
-      --line: #d4dfe0;
+      --bg: #0f1115; --panel: #171a21; --panel-2: #1f242d;
+      --fg: #e6e6e6; --muted: #8a93a1; --accent: #5ec8ff;
+      --err: #f25f5c; --line: #232833;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Avenir Next", "Segoe UI", sans-serif;
-      background: linear-gradient(180deg, #f8fbfb, var(--bg));
-      color: var(--ink);
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--bg);
+      color: var(--fg);
       min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 24px;
     }
     .card {
-      width: min(560px, 100%);
-      background: var(--card);
+      width: min(520px, 100%);
+      background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 28px;
-      box-shadow: 0 20px 50px rgba(24, 33, 34, 0.08);
+      border-radius: 6px;
+      padding: 28px 32px;
     }
-    h1 { margin: 0 0 10px; font-size: 2rem; }
-    p { color: var(--muted); line-height: 1.6; }
-    label { display: block; margin: 18px 0 8px; font-weight: 700; }
+    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+    .logo img { height: 32px; display: block; }
+    .logo span { font-size: 14px; letter-spacing: 1px; color: var(--accent); }
+    h1 { margin: 0 0 10px; font-size: 16px; letter-spacing: 0.5px; color: var(--fg); font-weight: 600; }
+    p { color: var(--muted); line-height: 1.6; margin: 0 0 16px; }
+    label { display: block; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }
     textarea {
-      width: 100%; min-height: 118px; resize: vertical;
-      border-radius: 14px; border: 1px solid var(--line); padding: 14px;
+      width: 100%; min-height: 90px; resize: vertical;
+      background: var(--panel-2); color: var(--fg);
+      border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px;
       font: inherit;
     }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .actions { margin-top: 18px; display: flex; align-items: center; gap: 12px; }
     button {
-      margin-top: 18px; border: 0; border-radius: 999px;
-      padding: 12px 18px; background: var(--accent); color: white;
-      font-weight: 700; cursor: pointer;
+      background: var(--panel-2); color: var(--accent);
+      border: 1px solid var(--accent); border-radius: 4px;
+      padding: 8px 18px; font: inherit; cursor: pointer;
     }
-    .note { margin-top: 16px; font-size: 0.95rem; }
+    button:hover { background: rgba(94, 200, 255, 0.1); }
+    .note { color: var(--muted); font-size: 12px; }
+    .note.err { color: var(--err); }
+    .divider { border: none; border-top: 1px solid var(--line); margin: 20px 0; }
+    .oidc-row { display: flex; align-items: center; gap: 10px; }
+    .oidc-row a button { color: var(--muted); border-color: var(--line); }
+    .oidc-row a button:hover { color: var(--accent); border-color: var(--accent); background: var(--panel-2); }
   </style>
 </head>
 <body>
   <section class="card">
+    <div class="logo">
+      <img src="/pulse-board-logo-dark.svg" alt="PulseBoard" />
+      <span>· SIGN IN</span>
+    </div>
     <h1>Operator sign-in</h1>
-    <p>
-      Paste an admin-scoped API key. This page is for break-glass and local
-      operator access on a self-hosted workspace; customer account sign-in lives
-      on the hosted apex.
-    </p>
+    <p>Paste an admin-scoped API key to access the workspace.</p>
     <label for="key">API key</label>
     <textarea id="key" placeholder="pk_..." spellcheck="false"></textarea>
-    <button id="continue">Continue to admin</button>
-    <p class="note" id="msg"></p>
+    <div class="actions">
+      <button id="continue">Continue →</button>
+      <span class="note" id="msg"></span>
+    </div>
+    <hr class="divider" id="oidc-divider" style="display:none;">
+    <div class="oidc-row" id="oidc-row" style="display:none;">
+      <a href="/auth/login?returnTo=/app"><button>Continue with SSO</button></a>
+      <span class="note">OIDC configured</span>
+    </div>
   </section>
   <script>
-    const key = document.getElementById('key');
-    const msg = document.getElementById('msg');
-    document.getElementById('continue').addEventListener('click', async () => {
-      const token = key.value.trim();
-      if (!token) {
-        msg.textContent = 'Paste an API key first.';
-        return;
-      }
-      try {
-        const res = await fetch('/auth/me', {
-          headers: { Authorization: 'Bearer ' + token }
-        });
-        if (!res.ok) {
-          msg.textContent = 'Key rejected by /auth/me.';
-          return;
+    (function () {
+      var key = document.getElementById('key');
+      var msg = document.getElementById('msg');
+      // Show OIDC option if the server has /auth/login
+      fetch('/auth/me', { method: 'HEAD' }).then(function (r) {
+        if (r.status !== 404) {
+          document.getElementById('oidc-divider').style.display = '';
+          document.getElementById('oidc-row').style.display = '';
         }
-        sessionStorage.setItem('pb.bearer', token);
-        window.location.href = '/admin';
-      } catch (err) {
-        msg.textContent = 'Request failed: ' + String(err);
-      }
-    });
+      }).catch(function () {});
+      document.getElementById('continue').addEventListener('click', async function () {
+        var token = key.value.trim();
+        if (!token) { msg.textContent = 'Paste an API key first.'; msg.className = 'note err'; return; }
+        try {
+          var res = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+          if (!res.ok) { msg.textContent = 'Key rejected (' + res.status + ').'; msg.className = 'note err'; return; }
+          sessionStorage.setItem('pb.bearer', token);
+          var returnTo = new URLSearchParams(location.search).get('returnTo') || '/app';
+          window.location.href = returnTo;
+        } catch (err) {
+          msg.textContent = 'Request failed: ' + String(err);
+          msg.className = 'note err';
+        }
+      });
+    })();
   </script>
 </body>
 </html>
