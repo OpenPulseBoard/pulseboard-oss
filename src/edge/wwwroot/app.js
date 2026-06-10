@@ -14,9 +14,10 @@
     }));
   }
   applyTheme(dark);
-  document.addEventListener('DOMContentLoaded', function () {
+  function wireToggle() {
     var btn = document.getElementById('theme-toggle');
-    if (!btn) return;
+    if (!btn || btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
     btn.textContent = dark ? '\uD83C\uDF19' : '\u2600\uFE0F';
     btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
     btn.addEventListener('click', function () {
@@ -24,7 +25,11 @@
       localStorage.setItem('pb.theme', dark ? 'dark' : 'light');
       applyTheme(dark);
     });
-  });
+  }
+  wireToggle();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireToggle);
+  }
 })();
 
 // Panel SDK — pluggable registry (Phase 12.1)
@@ -170,6 +175,12 @@ function toggleSidebar() {
 
 document.addEventListener("pb:themechange", () => {
   if (!state.current) return;
+  for (const [id, cached] of state.panels.entries()) {
+    if (cached && cached.uplot) {
+      try { cached.uplot.destroy(); } catch {}
+      state.panels.set(id, { dom: cached.dom });
+    }
+  }
   refreshAll().catch((e) => console.warn("theme refresh failed", e));
 });
 
@@ -612,9 +623,10 @@ function tooltipPlugin(seriesNames, unitFmt, isTime) {
 }
 
 function plotSpecKey(seriesNames, opts) {
+  const theme = document.documentElement.getAttribute("data-theme") || "dark";
   const ks = ["style","interpolation","lineStyle","lineWidth","fill","colors","legend","yMin","yMax"];
   const perColorKeys = seriesNames.map((_, i) => opts["color" + i] || "").join(",");
-  return seriesNames.join("|") + "/" + ks.map(k => opts[k] || "").join(",") + "/" + perColorKeys;
+  return theme + "/" + seriesNames.join("|") + "/" + ks.map(k => opts[k] || "").join(",") + "/" + perColorKeys;
 }
 
 function renderTimeseries(body, result, p) {
