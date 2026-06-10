@@ -8,7 +8,7 @@ body.shell-ready {
 
 #sidebar-toggle {
   position: fixed;
-  top: 12px;
+  top: 64px;
   left: calc(var(--sidebar-w) - 42px);
   z-index: 110;
   width: 34px;
@@ -157,6 +157,7 @@ body.shell-ready.sidebar-collapsed {
 }
 
 body.shell-ready.sidebar-collapsed #sidebar-toggle {
+  top: 64px;
   left: 12px;
 }
 
@@ -170,6 +171,7 @@ body.shell-ready.sidebar-collapsed header.topbar {
   }
 
   #sidebar-toggle {
+    top: 12px;
     left: 12px;
   }
 
