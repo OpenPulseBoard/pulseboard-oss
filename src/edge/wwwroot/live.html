@@ -33,12 +33,36 @@
     section h2 { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--muted);
                  border-bottom: 1px solid var(--grid); text-transform: uppercase; letter-spacing: 1px; }
     #metrics { grid-column: 1 / span 2; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 10px; padding: 10px; }
+    @media (max-width: 1400px) {
+      .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+    }
     .card { background: var(--panel-2); border-radius: 4px; padding: 8px 10px; }
-    .card .name { color: var(--accent); font-weight: bold; font-size: 12px; }
+    .card .name { margin-bottom: 4px; }
+    .card .name .base {
+      color: var(--accent); font-weight: bold; font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .card .name .parts {
+      display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+      color: var(--muted); font-size: 11px;
+    }
+    .card .name .part {
+      display: inline-block; max-width: 100%;
+      padding: 1px 6px; border-radius: 10px;
+      background: rgba(94, 200, 255, 0.12);
+      border: 1px solid rgba(94, 200, 255, 0.24);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .card .value { font-size: 22px; margin-top: 2px; }
-    .card canvas { display: block; width: 100%; height: 40px; margin-top: 4px; }
+    .card canvas { display: block; width: 100%; height: 120px; margin-top: 4px; }
     #logs ul { list-style: none; margin: 0; padding: 6px 10px; max-height: 50vh; overflow: auto; }
     #logs li { padding: 3px 4px; border-bottom: 1px dashed var(--grid); white-space: pre-wrap; }
     #logs .level-error { color: var(--err); }
@@ -85,6 +109,10 @@
 <script>
 const MAX_POINTS = 120;
 const MAX_LOGS   = 300;
+const DEFAULT_LOOKBACK_MS = 60 * 60 * 1000;
+const SERIES_COLORS = [
+  '#5ec8ff', '#5cd97a', '#f0c452', '#f25f5c', '#7ee0d4', '#c39bff', '#ff9f68', '#89a8ff'
+];
 
 const state = {
   metrics: new Map(), // name -> { points: [{ts,value}], el, canvas }
@@ -125,16 +153,58 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(3)) : String(n);
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
 
+function parseMetricName(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return { base: 'unknown', parts: [] };
+
+  const qIdx = raw.indexOf('?');
+  if (qIdx >= 0) {
+    const base = raw.slice(0, qIdx) || raw;
+    const params = new URLSearchParams(raw.slice(qIdx + 1));
+    const parts = [];
+    for (const [k, v] of params.entries()) parts.push(`${k}: ${v}`);
+    return { base, parts };
+  }
+
+  const m = raw.match(/^(.*?)\{(.*)\}$/);
+  if (m) {
+    const base = m[1].trim() || raw;
+    const body = m[2].trim();
+    const parts = [];
+    const re = /([^=,\s]+)\s*=\s*"([^"]*)"/g;
+    let hit;
+    while ((hit = re.exec(body)) !== null) parts.push(`${hit[1]}: ${hit[2]}`);
+    if (parts.length === 0 && body) {
+      for (const p of body.split(',')) {
+        const t = p.trim();
+        if (t) parts.push(t.replace(/\s*=\s*/g, ': '));
+      }
+    }
+    return { base, parts };
+  }
+
+  return { base: raw, parts: [] };
+}
+
 function ensureMetric(name) {
   let m = state.metrics.get(name);
   if (m) return m;
   const card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = `<div class="name"></div><div class="value">—</div><canvas></canvas>`;
-  card.querySelector('.name').textContent = name;
+  card.innerHTML = `<div class="name"><div class="base"></div><div class="parts"></div></div><div class="value">—</div><canvas></canvas>`;
+  const parsed = parseMetricName(name);
+  card.querySelector('.base').textContent = parsed.base;
+  const partsEl = card.querySelector('.parts');
+  for (const part of parsed.parts) {
+    const chip = document.createElement('span');
+    chip.className = 'part';
+    chip.textContent = part;
+    chip.title = part;
+    partsEl.appendChild(chip);
+  }
   $('metric-grid').appendChild(card);
   m = { points: [], el: card, valueEl: card.querySelector('.value'),
-        canvas: card.querySelector('canvas') };
+        canvas: card.querySelector('canvas'), color: SERIES_COLORS[state.metrics.size % SERIES_COLORS.length] };
   state.metrics.set(name, m);
   return m;
 }
@@ -155,17 +225,52 @@ function drawSparkline(m) {
   const ctx = c.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+
+  const ml = 42, mr = 8, mt = 10, mb = 24;
+  const pw = Math.max(1, w - ml - mr);
+  const ph = Math.max(1, h - mt - mb);
+
+  ctx.strokeStyle = '#2a3140';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ml, mt);
+  ctx.lineTo(ml, h - mb);
+  ctx.lineTo(w - mr, h - mb);
+  ctx.stroke();
+
   const pts = m.points;
-  if (pts.length < 2) return;
+  if (pts.length < 2) {
+    ctx.fillStyle = '#8a93a1';
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText('value', 4, mt + ph / 2);
+    ctx.fillText('time', w - 30, h - 6);
+    return;
+  }
+
   let lo = +Infinity, hi = -Infinity;
   for (const p of pts) { if (p.value < lo) lo = p.value; if (p.value > hi) hi = p.value; }
   if (lo === hi) { lo -= 1; hi += 1; }
-  ctx.strokeStyle = '#5ec8ff';
+
+  ctx.fillStyle = '#8a93a1';
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(fmt(hi), ml - 4, mt + 8);
+  ctx.fillText(fmt(lo), ml - 4, h - mb);
+  ctx.textAlign = 'left';
+  ctx.fillText(new Date(pts[0].ts).toISOString().substr(11, 5), ml + 2, h - 6);
+  ctx.textAlign = 'right';
+  ctx.fillText(new Date(pts[pts.length - 1].ts).toISOString().substr(11, 5), w - mr, h - 6);
+  ctx.textAlign = 'left';
+  ctx.fillText('value', 4, mt + ph / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText('time', ml + (pw / 2), h - 14);
+
+  ctx.strokeStyle = m.color;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   pts.forEach((p, i) => {
-    const x = (i / (pts.length - 1)) * w;
-    const y = h - ((p.value - lo) / (hi - lo)) * (h - 2) - 1;
+    const x = ml + (i / (pts.length - 1)) * pw;
+    const y = mt + (1 - ((p.value - lo) / (hi - lo))) * ph;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
@@ -208,8 +313,9 @@ function escapeHtml(s) {
 async function bootstrap() {
   try {
     const names = await (await fetch('/api/metrics')).json();
+    const sinceMs = Date.now() - DEFAULT_LOOKBACK_MS;
     for (const n of names) {
-      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n))).json();
+      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs)).json();
       for (const [ts, v] of series) pushMetric(n, ts, v);
     }
     const logs = await (await fetch('/api/logs?tail=100')).json();
