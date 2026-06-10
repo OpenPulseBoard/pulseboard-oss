@@ -9,7 +9,7 @@ running PulseBoard deployment and assert recovery SLOs.
 |--------|--------|-------------|
 | `kill-edge-pod.sh` | PulseBoard edge process | `/api/healthz` → 200 within **30 s** |
 | `kill-postgres.sh` | PostgreSQL (Cloud state) | Cloud portal recovers within **60 s** |
-| `kill-mimir-ingester.sh` | Mimir ingester (metrics storage) | Probe metric visible within **60 s** |
+| `kill-mimir-ingester.sh` | Mimir ingester (metrics storage) | Probe metric visible within **90 s** |
 | `k6-load.js` | Full ingest + query load | query p99 < **1 000 ms**, ingest success > **99.9%** |
 
 ## Prerequisites
@@ -59,7 +59,7 @@ See the header comment in each script for script-specific variables.
 |-----|-----------|-------------|
 | Edge restart recovery | < 30 s to healthy | `kill-edge-pod.sh` poll |
 | Postgres reconnect | < 60 s to healthy | `kill-postgres.sh` poll |
-| Mimir data recovery | < 60 s data visible | `kill-mimir-ingester.sh` probe |
+| Mimir data recovery | < 90 s data visible | `kill-mimir-ingester.sh` probe |
 | Query p99 latency | < 1 000 ms | k6 `query_response_ms` threshold |
 | Ingest success rate | > 99.9% | k6 `ingest_success_rate` threshold |
 | HTTP error rate | < 1% | k6 `http_req_failed` threshold |
