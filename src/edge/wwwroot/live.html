@@ -130,9 +130,7 @@ const SERIES_COLORS = [
 const state = {
   metrics: new Map(), // name -> { points: [{ts,value}], el, canvas }
   logs: [],
-  alerts: [],
-  backfilled: new Set(),      // names with last-hour history already loaded
-  backfillPending: new Map()  // name -> queued ws points while history loads
+  alerts: []
 };
 
 const $ = (id) => document.getElementById(id);
@@ -229,37 +227,6 @@ function pushMetric(name, ts, value) {
   if (m.points.length > MAX_POINTS) m.points.splice(0, m.points.length - MAX_POINTS);
   m.valueEl.textContent = fmt(value);
   drawSparkline(m);
-}
-
-async function loadMetricWindow(name, sinceMs) {
-  const series = await authFetchJson('/api/metrics/' + encodeURIComponent(name) + '?sinceMs=' + sinceMs + '&step=raw');
-  for (const [ts, v] of series) pushMetric(name, ts, v);
-  state.backfilled.add(name);
-}
-
-function queueOrPushLiveMetric(name, ts, value) {
-  if (state.backfilled.has(name)) {
-    pushMetric(name, ts, value);
-    return;
-  }
-
-  const pending = state.backfillPending.get(name);
-  if (pending) {
-    pending.push({ ts, value });
-    return;
-  }
-
-  state.backfillPending.set(name, [{ ts, value }]);
-  const sinceMs = Date.now() - DEFAULT_LOOKBACK_MS;
-
-  loadMetricWindow(name, sinceMs)
-    .catch((e) => console.warn('metric backfill failed', name, e))
-    .finally(() => {
-      const queued = state.backfillPending.get(name) || [];
-      state.backfillPending.delete(name);
-      for (const p of queued) pushMetric(name, p.ts, p.value);
-      state.backfilled.add(name);
-    });
 }
 
 function drawSparkline(m) {
@@ -360,7 +327,8 @@ async function bootstrap() {
     const names = await authFetchJson('/api/metrics');
     const sinceMs = Date.now() - DEFAULT_LOOKBACK_MS;
     for (const n of names) {
-      await loadMetricWindow(n, sinceMs);
+      const series = await authFetchJson('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs + '&step=raw');
+      for (const [ts, v] of series) pushMetric(n, ts, v);
     }
     const logs = await authFetchJson('/api/logs?tail=100');
     for (const e of logs) pushLog(e);
@@ -377,7 +345,7 @@ function connect() {
   };
   ws.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'metric') queueOrPushLiveMetric(msg.name, msg.ts, msg.value);
+    if (msg.type === 'metric') pushMetric(msg.name, msg.ts, msg.value);
     else if (msg.type === 'log') pushLog(msg);
     else if (msg.type === 'alert') pushAlert(msg);
     $('counts').textContent =
