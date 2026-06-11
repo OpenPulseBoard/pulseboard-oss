@@ -56,6 +56,12 @@ let main argv =
     exit 2
   | None -> ()
 
+  // Bootstrap OTel before any span helper runs. Gated by env vars — when
+  // OTEL_SDK_DISABLED=true (or no agent listening) init is a no-op and the
+  // ActivitySource emits drop-on-the-floor spans. Mirrors the cloud wiring.
+  PulseBoard.Otel.init "pulseboard-edge"
+  PulseBoard.Otel.registerShutdown ()
+
   let dataDir =
     match argv |> Array.tryFind (fun a -> a.StartsWith "--data=") with
     | Some s -> s.Substring 7
@@ -1717,7 +1723,7 @@ let main argv =
   printfn "  WS   /ws               (live feed)"
   printfn "  GET  /                 (dashboard)"
 
-  startWebServer config (withAccessLog app)
+  startWebServer config (withAccessLog (PulseBoard.Otel.withTracing app))
   GC.KeepAlive ruleEvaluator
   GC.KeepAlive notifyWorkers
   GC.KeepAlive alertingPipeline
