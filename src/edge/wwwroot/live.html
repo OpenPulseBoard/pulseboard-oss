@@ -299,7 +299,7 @@ async function bootstrap() {
     const names = await (await fetch('/api/metrics')).json();
     const sinceMs = Date.now() - DEFAULT_LOOKBACK_MS;
     for (const n of names) {
-      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs)).json();
+      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs + '&step=raw')).json();
       for (const [ts, v] of series) pushMetric(n, ts, v);
     }
     const logs = await (await fetch('/api/logs?tail=100')).json();
