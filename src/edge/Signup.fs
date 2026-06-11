@@ -292,9 +292,9 @@ let private snippetsFor (host : string) (key : string) (lang : string) =
     |]
   | "go" ->
     [|
-      "install", "go get github.com/pulseboard/pulseboard-go"
+      "install", "go get github.com/OpenPulseBoard/pulseboard-go"
       "init",
-        sprintf "import \"github.com/pulseboard/pulseboard-go\"\n\nclient := pulseboard.New(\"%s\", \"%s\")\nclient.Counter(\"requests_total\").Inc()" host key
+        sprintf "import \"github.com/OpenPulseBoard/pulseboard-go\"\n\nclient := pulseboard.New(\"%s\", \"%s\")\nclient.Counter(\"requests_total\").Inc()" host key
     |]
   | "java" ->
     [|
