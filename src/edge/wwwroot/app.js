@@ -74,6 +74,18 @@ const state = {
 };
 
 document.addEventListener("pb:themechange", () => {
+  const colors = chartTheme();
+  for (const cached of state.panels.values()) {
+    const u = cached && cached.uplot;
+    if (!u || !u.axes) continue;
+    try {
+      for (const ax of u.axes) {
+        ax.stroke = colors.axis;
+        if (ax.grid) ax.grid.stroke = colors.grid;
+      }
+      if (typeof u.redraw === "function") u.redraw();
+    } catch {}
+  }
   if (!state.current) return;
   refreshAll().catch((e) => console.warn("theme refresh failed", e));
 });
