@@ -137,6 +137,34 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(3)) : String(n);
 const fmtTs = (ms) => new Date(ms).toISOString().substr(11, 8);
 
+function pbBearer() { return sessionStorage.getItem('pb.bearer'); }
+function pbAuthHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const tok = pbBearer();
+  if (tok) h.Authorization = 'Bearer ' + tok;
+  return h;
+}
+function pbRedirectSignin() {
+  sessionStorage.removeItem('pb.bearer');
+  const back = location.pathname + location.search + location.hash;
+  location.href = '/signin?returnTo=' + encodeURIComponent(back);
+}
+async function authFetch(url, opts) {
+  const req = Object.assign({ credentials: 'same-origin' }, opts || {});
+  req.headers = pbAuthHeaders(req.headers);
+  const r = await fetch(url, req);
+  if (r.status === 401 || r.status === 403) {
+    pbRedirectSignin();
+    throw new Error('unauthorized');
+  }
+  return r;
+}
+async function authFetchJson(url, opts) {
+  const r = await authFetch(url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  return r.json();
+}
+
 function parseMetricName(name) {
   const raw = String(name || '').trim();
   if (!raw) return { base: 'unknown', parts: [] };
@@ -296,13 +324,13 @@ function escapeHtml(s) {
 
 async function bootstrap() {
   try {
-    const names = await (await fetch('/api/metrics')).json();
+    const names = await authFetchJson('/api/metrics');
     const sinceMs = Date.now() - DEFAULT_LOOKBACK_MS;
     for (const n of names) {
-      const series = await (await fetch('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs + '&step=raw')).json();
+      const series = await authFetchJson('/api/metrics/' + encodeURIComponent(n) + '?sinceMs=' + sinceMs + '&step=raw');
       for (const [ts, v] of series) pushMetric(n, ts, v);
     }
-    const logs = await (await fetch('/api/logs?tail=100')).json();
+    const logs = await authFetchJson('/api/logs?tail=100');
     for (const e of logs) pushLog(e);
   } catch (e) { console.warn('bootstrap failed', e); }
 }
