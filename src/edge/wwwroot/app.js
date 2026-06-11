@@ -2281,12 +2281,38 @@ PulseBoard.registerPanel({
 // Replace $varName and ${varName} in an expression with the current value
 // of the matching dashboard variable.  Multi-select values are joined
 // with "|" (Prometheus alternation); "$__all" expands to ".+" (match all).
+function getVarCurrent(v) {
+  return Object.prototype.hasOwnProperty.call(v, "runtimeCurrent") ? v.runtimeCurrent : v.current;
+}
+
+function setVarCurrent(v, value) {
+  v.runtimeCurrent = value;
+}
+
+function clearRuntimeVarState(dashboard) {
+  for (const v of ((dashboard && dashboard.vars) || [])) delete v.runtimeCurrent;
+}
+
+function dashboardForSave(dashboard) {
+  const snap = JSON.parse(JSON.stringify(dashboard));
+  clearRuntimeVarState(snap);
+  return snap;
+}
+
+function shouldDefaultVarToAll(v) {
+  return v && v.multi && v.allOption
+    && v.name === "host"
+    && v.type === "query"
+    && v.query === "label_values(node_cpu_seconds_total, instance)";
+}
+
 function applyVars(expr) {
   const vars = (state.current && state.current.vars) || [];
   for (const v of vars) {
-    const val = Array.isArray(v.current)
-      ? (v.allOption && v.current.includes("$__all") ? ".+" : v.current.join("|"))
-      : (v.current === "$__all" ? ".+" : (v.current || ""));
+    const current = getVarCurrent(v);
+    const val = Array.isArray(current)
+      ? (v.allOption && current.includes("$__all") ? ".+" : current.join("|"))
+      : (current === "$__all" ? ".+" : (current || ""));
     expr = expr.replace(new RegExp(`\\$\\{${v.name}\\}`, "g"), val);
     expr = expr.replace(new RegExp(`\\$${v.name}(?![a-zA-Z0-9_])`, "g"), val);
   }
@@ -2324,20 +2350,22 @@ async function renderVarsBar(dashboard) {
   if (!vars.length) { bar.classList.add("hidden"); return; }
   bar.classList.remove("hidden");
   for (const v of vars) {
+    if (shouldDefaultVarToAll(v)) v.current = ["$__all"];
+    let current = getVarCurrent(v);
     const chip = document.createElement("div"); chip.className = "var-chip";
     const lbl  = document.createElement("label"); lbl.textContent = (v.label || v.name) + ":";
     chip.appendChild(lbl);
     if (v.type === "textbox") {
-      const inp = document.createElement("input"); inp.type = "text"; inp.value = v.current || "";
-      inp.addEventListener("change", () => { v.current = inp.value; refreshAll(); });
+      const inp = document.createElement("input"); inp.type = "text"; inp.value = current || "";
+      inp.addEventListener("change", () => { setVarCurrent(v, inp.value); refreshAll(); });
       chip.appendChild(inp);
     } else if (v.type === "interval") {
       const sel = document.createElement("select");
       for (const opt of ["1m","5m","15m","30m","1h","6h","24h"]) {
         const o = document.createElement("option"); o.value = opt; o.textContent = opt; sel.appendChild(o);
       }
-      sel.value = v.current || "5m";
-      sel.addEventListener("change", () => { v.current = sel.value; refreshAll(); });
+      sel.value = current || "5m";
+      sel.addEventListener("change", () => { setVarCurrent(v, sel.value); refreshAll(); });
       chip.appendChild(sel);
     } else {
       let options = [];
@@ -2348,11 +2376,12 @@ async function renderVarsBar(dashboard) {
       // Keep multi-select state shape stable so first render does not
       // accidentally pin to a single concrete value.
       if (v.multi) {
-        if (!Array.isArray(v.current)) {
-          if (typeof v.current === "string" && v.current) v.current = [v.current];
-          else v.current = v.allOption ? ["$__all"] : [];
+        if (!Array.isArray(current)) {
+          if (typeof current === "string" && current) current = [current];
+          else current = v.allOption ? ["$__all"] : [];
         }
-        if (v.allOption && !v.current.length) v.current = ["$__all"];
+        if (v.allOption && !current.length) current = ["$__all"];
+        setVarCurrent(v, current);
       }
 
       const sel = document.createElement("select"); if (v.multi) sel.multiple = true;
@@ -2360,18 +2389,18 @@ async function renderVarsBar(dashboard) {
         const o = document.createElement("option"); o.value = opt;
         o.textContent = opt === "$__all" ? "All" : opt; sel.appendChild(o);
       }
-      if (v.multi && Array.isArray(v.current)) {
-        for (const o of sel.options) o.selected = v.current.includes(o.value);
+      if (v.multi && Array.isArray(current)) {
+        for (const o of sel.options) o.selected = current.includes(o.value);
         if (!sel.selectedOptions.length && sel.options.length) {
           sel.selectedIndex = 0;
-          v.current = Array.from(sel.selectedOptions).map(o => o.value);
+          setVarCurrent(v, Array.from(sel.selectedOptions).map(o => o.value));
         }
-      } else if (v.current) {
-        sel.value = v.current;
-        if (!sel.value && sel.options.length) { sel.selectedIndex = 0; v.current = sel.value; }
-      } else if (sel.options.length) { sel.selectedIndex = 0; v.current = sel.value; }
+      } else if (current) {
+        sel.value = current;
+        if (!sel.value && sel.options.length) { sel.selectedIndex = 0; setVarCurrent(v, sel.value); }
+      } else if (sel.options.length) { sel.selectedIndex = 0; setVarCurrent(v, sel.value); }
       sel.addEventListener("change", () => {
-        v.current = v.multi ? Array.from(sel.selectedOptions).map(o => o.value) : sel.value;
+        setVarCurrent(v, v.multi ? Array.from(sel.selectedOptions).map(o => o.value) : sel.value);
         refreshAll();
       });
       chip.appendChild(sel);
@@ -2468,7 +2497,7 @@ function saveCurrentView() {
   if (!name) return;
   const views = loadSavedViews();
   const vars = {};
-  for (const v of (state.current.vars || [])) vars[v.name] = v.current;
+  for (const v of (state.current.vars || [])) vars[v.name] = getVarCurrent(v);
   const entry = { name, timeRangeSec: state.current.timeRangeSec, vars };
   const i = views.findIndex(x => x.name === name);
   if (i >= 0) views[i] = entry; else views.push(entry);
@@ -2482,7 +2511,7 @@ function applyView(name) {
   $("time-range").value = String(v.timeRangeSec);
   for (const [vn, val] of Object.entries(v.vars || {})) {
     const vd = (state.current.vars || []).find(x => x.name === vn);
-    if (vd) vd.current = val;
+    if (vd) setVarCurrent(vd, val);
   }
   renderVarsBar(state.current).then(() => refreshAll());
 }
@@ -2512,7 +2541,7 @@ function openHistory() {
     btn.addEventListener("click", async () => {
       if (!confirm(`Restore revision from ${ts.textContent}?`)) return;
       try {
-        const r = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id), h.snap);
+        const r = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id), dashboardForSave(h.snap));
         state.current = r || h.snap;
         await openDashboard(state.current.id);
       } catch (e) { alert("Restore failed: " + e.message); }
@@ -2662,7 +2691,8 @@ function resolveLink(url, seriesName, value) {
     .replace(/\$\{__to\}/g,     String(now))
     .replace(/\$\{__dash\}/g,   (state.current && state.current.id) || "");
   for (const v of ((state.current && state.current.vars) || [])) {
-    const val = Array.isArray(v.current) ? v.current.join(",") : (v.current || "");
+    const current = getVarCurrent(v);
+    const val = Array.isArray(current) ? current.join(",") : (current || "");
     url = url.replace(new RegExp(`\\$\\{${v.name}\\}`, "g"), encodeURIComponent(val));
     url = url.replace(new RegExp(`\\$${v.name}(?![a-zA-Z0-9_])`, "g"), encodeURIComponent(val));
   }
@@ -2784,7 +2814,7 @@ async function saveCurrent() {
   if (!state.current) return;
   pushHistory(state.current);
   const saved = await api("PUT", "/api/dashboards/" + encodeURIComponent(state.current.id),
-                          state.current);
+                          dashboardForSave(state.current));
   state.current = saved;
   // Update the picker label in-place — no need to refetch/re-render all panels.
   const opt = $('dash-picker').querySelector(`option[value="${CSS.escape(saved.id)}"]`);
@@ -4145,6 +4175,7 @@ $("share-import-btn").addEventListener("click", async () => {
 // Variables editor modal
 $("vars-modal-close").addEventListener("click", async () => {
   $("vars-modal").classList.add("hidden");
+  clearRuntimeVarState(state.current);
   await renderVarsBar(state.current);
   await saveCurrent();
 });
