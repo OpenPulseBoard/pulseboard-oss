@@ -4,7 +4,7 @@
 PulseBoard deployment — public certs, internal mTLS certs, and the
 private-PKI intermediate / root.
 
-See [PLAN.md → Phase 6 #2](../../PLAN.md) for the trust-zone topology
+See  for the trust-zone topology
 this runbook operates against.
 
 ---

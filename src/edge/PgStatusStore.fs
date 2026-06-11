@@ -1,6 +1,6 @@
 module PulseBoard.PgStatusStore
 
-// Postgres-backed IStatusStore (PLAN-NEXT 14.6).
+// Postgres-backed IStatusStore.
 //
 // One row per (tenant_id, page_id) in pb_status_page. The whole `StatusPage`
 // record is stored as an opaque JSON body using the same `serialisePage` /

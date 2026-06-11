@@ -18,7 +18,7 @@ open PulseBoard.Tenancy
 open PulseBoard.TimeSeries
 open PulseBoard.QueryApi
 
-// Persisted rule groups (PLAN.md Phase 5 step 1). Today's hardcoded
+// Persisted rule groups. Today's hardcoded
 // `cpu > 0.9` lives in `Alerts.fs`; this module replaces that with a
 // tenant-scoped CRUD model plus a sharded evaluator pool. Every rule
 // expresses a *boolean alarm* on top of an embedded PromQL/LogQL
@@ -98,7 +98,7 @@ type Rule =
     severity    : Severity
     labels      : Map<string,string>
     annotations : Map<string,string>
-    runbook     : string option }     // optional markdown runbook (PLAN-NEXT 14.1)
+    runbook     : string option }     // optional markdown runbook
 
 [<NoComparison>]
 type RuleGroup =

@@ -8,7 +8,7 @@ open PulseBoard.Tenancy
 open PulseBoard.Storage
 
 // Per-tenant retention policies and the embedded-backend compactor
-// (PLAN.md Phase 3 step 3).
+//.
 //
 // Shape:
 //   * `RetentionPolicy` carries an optional TTL (milliseconds) per
@@ -26,13 +26,13 @@ open PulseBoard.Storage
 //     `LogStore` on a timer and prunes anything older than the
 //     effective horizon.
 //
-// Multi-tenant embedded caveat (documented in PLAN.md too): the
-// embedded `MetricStore` and `LogStore` are process-global, not keyed
-// by tenant. The compactor therefore enforces the *most generous* TTL
-// across all configured tenants for each pillar — i.e. it never drops
-// data that *any* tenant's policy still wants. Per-tenant retention is
-// fully honoured by the cloud backends (Mimir / Loki / Tempo) which
-// have native tenant-aware lifecycle rules; the embedded compactor is
+// Multi-tenant embedded caveat: the embedded `MetricStore` and
+// `LogStore` are process-global, not keyed by tenant. The compactor
+// therefore enforces the *most generous* TTL across all configured
+// tenants for each pillar — i.e. it never drops data that *any*
+// tenant's policy still wants. Per-tenant retention is fully honoured
+// by the cloud backends (Mimir / Loki / Tempo) which have native
+// tenant-aware lifecycle rules; the embedded compactor is
 // a best-effort floor for the OSS / single-binary deployment.
 
 [<NoComparison>]

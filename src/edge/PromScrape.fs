@@ -20,7 +20,7 @@ open PulseBoard.Audit
 open PulseBoard.Gateway
 open PulseBoard.Ingest
 
-// Prometheus scrape mode (PLAN.md Phase 2 step 3). A tenant registers a
+// Prometheus scrape mode. A tenant registers a
 // `ScrapeTarget` (URL + interval + optional bearer token + optional extra
 // labels) and a background worker periodically GETs each target's
 // `/metrics`, parses the Prometheus text exposition format, and writes

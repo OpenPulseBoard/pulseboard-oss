@@ -245,7 +245,7 @@
       display: none; white-space: pre;
     }
 
-    /* Correlation context menu (PLAN-NEXT 14.4) */
+    /* Correlation context menu */
     .ctx-menu {
       position: fixed; z-index: 200; background: var(--panel-2);
       border: 1px solid var(--border); border-radius: 6px; padding: 4px;

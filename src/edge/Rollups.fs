@@ -7,7 +7,7 @@ open System.Threading
 open PulseBoard.TimeSeries
 
 // Per-resolution rollup buckets and the embedded background worker
-// that fills them (PLAN.md Phase 3 step 4).
+// that fills them.
 //
 // Shape:
 //   * `Resolution` enumerates the supported bucket widths

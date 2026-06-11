@@ -4,7 +4,7 @@ open System
 open System.Collections.Concurrent
 open PulseBoard.Tenancy
 
-// Per-tenant resource limits enforced at the edge. PLAN.md Phase 1 step 5.
+// Per-tenant resource limits enforced at the edge.
 //
 // Today: ingest RPS, query RPS, alert evaluation RPS, log bytes/day, and
 // active series cardinality. All RPS-style limits share a token-bucket

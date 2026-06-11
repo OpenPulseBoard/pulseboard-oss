@@ -14,6 +14,6 @@ dotnet build src/edge/PulseBoard.fsproj
 dotnet run --project src/edge -- --port=8775 --data=./pulse-data
 ```
 
-See [PLAN.md](../../PLAN.md) phases 1–2 for the upcoming work that lands
-here: OTLP receiver, Prometheus `remote_write`, Loki push, tenant
-context, quota middleware.
+See the feature guides under [../../docs/](../../docs/) for the OTLP
+receiver, Prometheus `remote_write`, Loki push, tenant context, and
+quota middleware that live here.

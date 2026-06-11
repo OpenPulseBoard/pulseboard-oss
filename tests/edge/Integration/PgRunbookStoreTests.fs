@@ -8,7 +8,7 @@ open PulseBoard.Runbooks
 open PulseBoard.Tests.Helpers.TestPostgres
 
 // ---------------------------------------------------------------------------
-// PgRunbookStore integration tests (PLAN-NEXT 14.1). Exercises the
+// PgRunbookStore integration tests. Exercises the
 // Postgres-backed IRunbookStore against a real container: upsert/get
 // roundtrip, idempotent overwrite, and per-tenant listing/isolation.
 // ---------------------------------------------------------------------------

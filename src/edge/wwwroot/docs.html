@@ -180,15 +180,6 @@
    tenant + API key on demand. Recommended for a hosted product. The
    public marketing pages are served alongside, so a small deployment can
    keep “website” and “edge” in one process.</p>
-<div class="note">
-  In a larger hosted deployment you would run the marketing pages on a
-  dedicated <code>pulseboard.cloud</code> host that <em>only</em> serves
-  <code>/</code>, <code>/docs</code>, <code>/pricing</code>, <code>/signup</code>, and proxies the actual
-  <code>POST /api/signup</code> to a provisioning service that spins up a
-  per-tenant workspace on a subdomain like <code>https://acme.pulseboard.cloud</code>.
-  See <a href="#selfhost">self-hosting</a> for the current recipe and the
-  project <code>PLAN.md</code> for the hosted/provisioner roadmap.
-</div>
 
 <h2 id="quickstart">Quickstart</h2>
 <p>Sign up gets you an API key. Use it as a <code>Bearer</code> on every data-plane call.</p>

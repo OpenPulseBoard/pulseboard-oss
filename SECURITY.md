@@ -29,7 +29,7 @@ In scope:
 - The PulseBoard edge service (this repo): ingest, query, alerting,
   notify, auth modules.
 - Anything that could let one tenant read or write another tenant's data
-  once multi-tenancy lands (Phase 1 in [PLAN.md](PLAN.md)).
+  once multi-tenancy lands (Phase 1 in ).
 - Credential / token handling, signed webhook receivers, audit log
   integrity.
 

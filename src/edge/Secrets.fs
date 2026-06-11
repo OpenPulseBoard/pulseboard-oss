@@ -7,7 +7,7 @@ open System.Text
 open System.Text.Json
 open System.Collections.Concurrent
 
-// -- PLAN.md Phase 6 #4 -----------------------------------------------------
+// -- ----------------------------------------------------
 // Envelope encryption for sensitive log fields. A single root KEK
 // (master key) wraps a per-tenant DEK; PII values inside log messages get
 // encrypted with the DEK using AES-256-GCM and persisted in the wire form

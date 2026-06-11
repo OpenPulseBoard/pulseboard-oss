@@ -1,9 +1,9 @@
 # Contributing to PulseBoard
 
 Thanks for considering a contribution! PulseBoard is pre-alpha — APIs and
-internals can change without notice. The roadmap is in [PLAN.md](PLAN.md);
-issues and PRs that move the project along that plan are the easiest to
-get merged.
+internals can change without notice. The feature guides under
+[docs/](docs/) describe the current shape of each subsystem; issues and
+PRs that fit cleanly into those subsystems are the easiest to get merged.
 
 ## Ground rules
 

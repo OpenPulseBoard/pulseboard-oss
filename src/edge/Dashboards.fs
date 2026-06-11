@@ -14,7 +14,7 @@ open Suave.RequestErrors
 open Suave.ServerErrors
 open PulseBoard.Tenancy
 
-// In-house dashboards (PLAN.md Phase 4 step 2). One JSON document per
+// In-house dashboards. One JSON document per
 // dashboard, keyed by (tenantId, dashId). Tenants are isolated at the
 // store layer: every CRUD handler reads `tryGetTenant ctx` and only
 // touches its own slice. In single-tenant mode all dashboards live

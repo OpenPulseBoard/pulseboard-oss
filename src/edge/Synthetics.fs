@@ -1,6 +1,6 @@
 module PulseBoard.Synthetics
 
-// PLAN-NEXT 14.8 — Synthetic & uptime checks.
+// Synthetic & uptime checks.
 //
 // Small `http` / `tcp` / `dns` probes run from this edge on a fixed cadence.
 // Tenants define targets in the portal; every probe result lands in the same

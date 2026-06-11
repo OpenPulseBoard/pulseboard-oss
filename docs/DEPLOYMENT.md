@@ -116,7 +116,7 @@ CLI flags worth knowing:
 
 | Image | Dockerfile | Entrypoint | Used for |
 | --- | --- | --- | --- |
-| Workspace image | [`../Dockerfile`](../Dockerfile) | `dotnet PulseBoard.dll` | Self-hosted OSS deployments and the workspace image consumed by the hosted control plane. Published as `registry.fly.io/pulseboard1`. |
+| Workspace image | [`../Dockerfile`](../Dockerfile) | `dotnet PulseBoard.dll` | Self-hosted OSS deployments. Published by CI to GitHub Container Registry under the repository owner's namespace. |
 
 ### 4.1 Workspace image
 

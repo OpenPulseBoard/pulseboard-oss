@@ -21,7 +21,7 @@ open PulseBoard.Audit
 open PulseBoard.Gateway
 open PulseBoard.Ingest
 
-// StatsD UDP + Carbon plaintext TCP (PLAN.md Phase 2 step 5). Both are
+// StatsD UDP + Carbon plaintext TCP. Both are
 // auth-less wire protocols by tradition; we attribute traffic to a
 // tenant by listener — each registered listener owns one TCP/UDP port,
 // and every line received on that port is charged to that tenant's

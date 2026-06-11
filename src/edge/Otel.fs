@@ -8,12 +8,14 @@ open OpenTelemetry.Exporter
 open OpenTelemetry.Resources
 open OpenTelemetry.Trace
 
-// Manual OpenTelemetry wiring for the edge / workspace runtime. Mirrors
-// pulseboard-cloud/src/cloud/Otel.fs so both binaries emit spans with the
-// same shape; the only differences are the ActivitySource name and the
-// default service.name. The sidecar pulseagent baked into the image owns
-// auth + retry + buffering upstream, so we only configure a localhost
-// HTTP/protobuf exporter pointing at 127.0.0.1:4318.
+// Manual OpenTelemetry wiring for the PulseBoard edge / workspace
+// runtime. Exposes ActivitySource "pulseboard.edge" plus init,
+// withTracing, inSpan/inSpanAsync, tagCurrent and registerShutdown
+// helpers so request handlers can emit server + internal spans without
+// taking a direct dependency on the OpenTelemetry SDK. The sidecar
+// pulseagent baked into the image owns auth + retry + buffering
+// upstream, so we only configure a localhost HTTP/protobuf exporter
+// pointing at 127.0.0.1:4318.
 
 [<Literal>]
 let SourceName = "pulseboard.edge"

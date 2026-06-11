@@ -7,7 +7,7 @@ open PulseBoard.TimeSeries
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 
-// Pluggable storage backends (PLAN.md Phase 3 step 1) and
+// Pluggable storage backends and
 // cardinality enforcement (Phase 3 step 2).
 //
 // `IMetricBackend` / `ILogBackend` / `ITraceBackend` decouple the

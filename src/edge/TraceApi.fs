@@ -11,7 +11,7 @@ open Suave.RequestErrors
 open PulseBoard.Tenancy
 open PulseBoard.Spans
 
-// REST surface for the Traces / Service Map tabs (PLAN Phase 4 #4).
+// REST surface for the Traces / Service Map tabs.
 // All routes are read-only and tenant-scoped via the same Rbac gate
 // as `Dashboards.fs`. Span ingest happens upstream in `Otlp.traces`.
 

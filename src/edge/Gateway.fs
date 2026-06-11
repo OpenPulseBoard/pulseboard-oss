@@ -19,7 +19,7 @@ open PulseBoard.TimeSeries
 open PulseBoard.Hub
 open PulseBoard.Storage
 
-// Edge / storage split (PLAN.md Phase 2 step 6).
+// Edge / storage split.
 //
 // `IStorageClient` is the seam every ingest path now writes through.
 // * `InProcessStorageClient` keeps the monolith behaviour (writes

@@ -7,7 +7,7 @@ open PulseBoard.Tenancy
 open PulseBoard.TimeSeries
 open PulseBoard.Dashboards
 
-// -- PLAN.md Phase 6 #6 -----------------------------------------------------
+// -- ----------------------------------------------------
 // Self-observability. PulseBoard records its own `pulse_*` metrics into the
 // process-wide MetricStore today; this module reserves a dedicated meta
 // tenant, seeds a curated dashboard for those series, and runs a small

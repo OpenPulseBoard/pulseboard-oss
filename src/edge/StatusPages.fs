@@ -1,6 +1,6 @@
 module PulseBoard.StatusPages
 
-// PLAN-NEXT 14.6 — Built-in public status pages.
+// Built-in public status pages.
 //
 // Per workspace an operator defines one or more "status pages", each carrying
 // a list of components and (optionally) scheduled maintenance windows. A

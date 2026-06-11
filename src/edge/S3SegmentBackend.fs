@@ -2,7 +2,7 @@ module PulseBoard.S3SegmentBackend
 
 // S3-compatible object storage backend for metric time-series segments.
 // Replaces the local-filesystem SegmentStore (Segments.fs) as the
-// "no external TSDB" persistence tier (PLAN.md Phase 3).
+// "no external TSDB" persistence tier.
 //
 // Key layout:   <prefix><sanitized-metric>/seg-<ts20>.bin
 // File format:  identical to SegmentStore — 16-byte little-endian records

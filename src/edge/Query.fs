@@ -80,7 +80,7 @@ let metricNames (store : MetricStore) : WebPart =
 
 /// GET /api/metrics/<name>?sinceMs=...&step=<ms|auto|raw>&agg=avg|min|max|sum|count
 ///
-/// Resolution selection (PLAN.md Phase 3 step 4):
+/// Resolution selection:
 ///   * `step=<N>` — explicit bucket width in ms. Must match a
 ///     configured rollup resolution (1m=60000, 5m=300000,
 ///     1h=3600000). Anything else falls back to raw.

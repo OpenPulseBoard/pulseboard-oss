@@ -1,6 +1,6 @@
 module PulseBoard.Runbooks
 
-// PLAN-NEXT 14.1 — Inline runbooks for alerts.
+// Inline runbooks for alerts.
 //
 // Every alert rule carries an optional markdown `runbook` (see
 // `Rules.Rule.runbook`). This module turns that free-text markdown into

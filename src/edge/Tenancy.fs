@@ -7,7 +7,7 @@ open System.Text
 
 // Phase 1 (foundations). In-memory tenant model + scoped API keys. Postgres
 // implementation of `ITenantStore` lands later behind the same interface —
-// see PLAN.md Phase 1 step 1.
+//
 
 type TenantId = TenantId of string
 type ApiKeyId = ApiKeyId of string
@@ -41,7 +41,7 @@ let scopesForRole = function
 /// Commercial tier of a tenant. Plan controls default quotas, feature
 /// entitlements (SSO, BYOK, impersonation), and Stripe billing. New
 /// tenants land on `Free`; promotions are Admin-only (`PATCH /api/admin/
-/// tenants/<id>/plan`). PLAN.md Phase 7 #2.
+/// tenants/<id>/plan`).
 type Plan =
   | Free
   | Pro
@@ -136,7 +136,7 @@ let private pbkdf2 (secret : string) (salt : byte[]) (iterations : int) =
     hashAlgorithm = HashAlgorithmName.SHA256,
     outputLength = 32)
 
-// -- Argon2id (PLAN.md Phase 6 #3) ------------------------------------------
+// -- Argon2id ------------------------------------------
 // New API keys hash with Argon2id; existing PBKDF2 keys keep verifying via
 // the legacy path so a rotation isn't required to upgrade. Parameters are
 // tunnelled through `hashAlgorithm` so the persisted schema (`pb_api_keys`)
@@ -212,7 +212,7 @@ type ITenantStore =
   abstract Tenants            : unit -> Tenant[]
   /// Update the commercial plan on an existing tenant. Returns the
   /// post-update record or `None` if the tenant does not exist.
-  /// PLAN.md Phase 7 #2.
+  ///
   abstract UpdateTenantPlan   : TenantId * Plan -> Tenant option
   abstract IssueApiKey        :
     tenantId : TenantId * label : string * role : Role * scopes : Scope ->

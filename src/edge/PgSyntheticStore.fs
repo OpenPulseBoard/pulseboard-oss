@@ -1,6 +1,6 @@
 module PulseBoard.PgSyntheticStore
 
-// Postgres-backed ISyntheticStore (PLAN-NEXT 14.8).
+// Postgres-backed ISyntheticStore.
 //
 // One row per (tenant_id, check_id) in pb_synthetic_check. The whole `Check`
 // record is stored as an opaque JSON body using the same `serialiseCheck` /

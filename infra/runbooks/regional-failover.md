@@ -3,7 +3,7 @@
 **Scope:** Promote the warm standby region to primary when the active
 region is degraded or unreachable. Targets **RPO ≤ 60 s, RTO ≤ 15 min.**
 
-See [PLAN.md → Phase 6 #1](../../PLAN.md) for the topology this runbook
+See  for the topology this runbook
 operates against.
 
 ---

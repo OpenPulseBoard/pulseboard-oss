@@ -1,6 +1,6 @@
 module PulseBoard.ExportCode
 
-// Export-as-code (PLAN-NEXT.md 14.5). Pure serialisers that render a
+// Export-as-code. Pure serialisers that render a
 // dashboard / rule-group / routing config as either Terraform (HCL,
 // matching the `pulseboard/pulseboard` provider schema) or YAML (the
 // git-sync on-disk surface). Exposed read-only over

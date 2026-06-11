@@ -649,7 +649,7 @@ let webPart (store : ITenantStore) (quotaStore : QuotaStore)
   ]
 
 // ---------------------------------------------------------------------------
-// PLAN.md Phase 6 #4 — envelope-encryption / PII surface. Kept in this file
+// envelope-encryption / PII surface. Kept in this file
 // rather than `Secrets.fs` because `Secrets.fs` compiles before `Rbac.fs`
 // and these handlers consume `Rbac.tryGetTenant` indirectly (the caller
 // composes `requireScope Admin` over the whole web part).
@@ -742,7 +742,7 @@ let private secretsDecrypt (secrets : PulseBoard.Secrets.ISecretsStore)
                       ctx
   }
 
-/// PLAN.md Phase 6 #4 REST surface. Mount under `Rbac.requireScope Admin`.
+/// Envelope-encryption / PII REST surface. Mount under `Rbac.requireScope Admin`.
 let secretsWebPart (secrets : PulseBoard.Secrets.ISecretsStore)
                    (policy  : PulseBoard.Secrets.IPiiPolicyStore)
                    (log     : IAuditLog) : WebPart =
@@ -754,7 +754,7 @@ let secretsWebPart (secrets : PulseBoard.Secrets.ISecretsStore)
   ]
 
 // ---------------------------------------------------------------------------
-// PLAN.md Phase 7 #1 + #2 — commercial admin surface: plan mutation, usage
+// commercial admin surface: plan mutation, usage
 // snapshot, on-demand billing flush. Mount under `Rbac.requireScope Admin`.
 // ---------------------------------------------------------------------------
 

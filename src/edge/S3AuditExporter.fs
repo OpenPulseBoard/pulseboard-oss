@@ -9,9 +9,9 @@ open Amazon.S3
 open Amazon.S3.Model
 open PulseBoard.Audit
 
-// Nightly S3 export of the Postgres-backed audit log (PLAN.md Phase 1
-// step 4). One object per UTC calendar day, newline-delimited JSON, key
-// shape `<prefix>YYYY/MM/DD.ndjson`. Idempotent across restarts via the
+// Nightly S3 export of the Postgres-backed audit log. One object per
+// UTC calendar day, newline-delimited JSON, key shape
+// `<prefix>YYYY/MM/DD.ndjson`. Idempotent across restarts via the
 // `pb_audit_exports` table managed in `PgAuditLog`.
 //
 // Credentials are resolved by the AWS default credential chain

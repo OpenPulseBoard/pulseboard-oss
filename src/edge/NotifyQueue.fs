@@ -30,7 +30,7 @@ let internal notifyDebug =
 let internal nqlog (msg : string) =
   if notifyDebug then eprintfn "[notify] %s" msg
 
-// Persistent outbound notification queue (PLAN.md Phase 5 step 5).
+// Persistent outbound notification queue.
 // Replaces `Notify.postJson`'s fire-and-forget posture with a durable
 // enqueue → lease → ack/fail/dead pipeline. The queue itself is
 // transport-agnostic: each message carries `receiverType` + `url` + body,

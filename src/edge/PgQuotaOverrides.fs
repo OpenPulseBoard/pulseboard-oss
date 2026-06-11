@@ -7,7 +7,7 @@ open Npgsql
 open PulseBoard.Tenancy
 open PulseBoard.Quotas
 
-// Postgres backing for per-tenant quota overrides (PLAN.md Phase 1 step 5).
+// Postgres backing for per-tenant quota overrides.
 // One row per (tenant_id, kind). The literal string "cardinality" is used
 // as the kind for the integer cardinality cap; `capacity` carries the
 // count and `refill_rate` is unused (stored as 0).

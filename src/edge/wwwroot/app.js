@@ -906,7 +906,7 @@ function renderHistogram(body, result, p) {
     body._hro = new ResizeObserver(() => { if (body.isConnected) renderHistogram(body, result, p); });
     body._hro.observe(body);
   }
-  // Exemplars on by default (PLAN-NEXT 14.4): place trace markers along the
+  // Exemplars on by default: place trace markers along the
   // latency (le) axis at the x matching each exemplar's durationMs, clickable
   // to open the trace. No opt-in config required.
   overlayHistogramExemplars(body, p, buckets, { svgW, svgH, unit });
@@ -1105,7 +1105,7 @@ async function renderAlertList(body, result, p) {
         ? `<button style="font-size:10px;padding:1px 6px;"
                    onclick='openRunbook(${JSON.stringify(a.fingerprint)}, ${JSON.stringify(name)})'>Runbook</button>`
         : "";
-      // Correlated signals (PLAN-NEXT 14.4): offered for active/firing alerts.
+      // Correlated signals: offered for active/firing alerts.
       const st = (a.state || "ok").toLowerCase();
       const corr = (st === "firing" || st === "alerting" || st === "active" || st === "pending")
         ? `<button style="font-size:10px;padding:1px 6px;"
@@ -1222,7 +1222,7 @@ function renderHeatmap(body, result, p) {
     body._hmro = new ResizeObserver(() => { if (body.isConnected) renderHeatmap(body, result, p); });
     body._hmro.observe(body);
   }
-  // Exemplars on by default (PLAN-NEXT 14.4): overlay clickable trace markers
+  // Exemplars on by default: overlay clickable trace markers
   // at (time, latency) positions on top of the heatmap canvas.
   overlayHeatmapExemplars(body, p, buckets, { W, H, numT });
 }
@@ -2602,7 +2602,7 @@ function openShare() {
   $("share-modal").classList.remove("hidden");
 }
 
-// Export-as-code (PLAN-NEXT 14.5). Fetches the chosen resource in both
+// Export-as-code. Fetches the chosen resource in both
 // Terraform and YAML, caches them, and shows a copyable modal. `kind`
 // is "dashboards" | "rules" | "routing".
 const _codeExport = { kind: null, id: null, fmt: "tf", cache: {} };
@@ -3204,7 +3204,7 @@ async function runExplore() {
 }
 
 // =====================================================================
-// End-to-end correlation (PLAN-NEXT 14.4)
+// End-to-end correlation
 // =====================================================================
 // One place that ties metrics ↔ logs ↔ traces together:
 //   • gotoExplore       — programmatically open the Explore tab on a query
@@ -3456,7 +3456,7 @@ $("corr-modal").addEventListener("click", (e) => {
   if (e.target === $("corr-modal")) $("corr-modal").classList.remove("open");
 });
 
-// ── Exemplars (PLAN-NEXT 14.4) ───────────────────────────────────────
+// ── Exemplars ───────────────────────────────────────
 // Trace exemplars for a (service, window) — surfaced on histogram/heatmap
 // panels by default (no exemplar-ingest path or opt-in config required).
 async function fetchExemplars(service, fromMs, toMs, limit) {
@@ -4127,7 +4127,7 @@ $("share-modal").addEventListener("click", (e) => {
   if (e.target === $("share-modal")) $("share-modal").classList.add("hidden");
 });
 
-// Export-as-code modal (PLAN-NEXT 14.5)
+// Export-as-code modal
 $("code-close").addEventListener("click", () => $("code-modal").classList.add("hidden"));
 $("code-modal").addEventListener("click", (e) => {
   if (e.target === $("code-modal")) $("code-modal").classList.add("hidden");
@@ -4365,7 +4365,7 @@ function renderWaterfall(data) {
       services: ${summary.services.map(escapeHtml).join(", ")}
     </div>
     <div class="waterfall">${rows}</div>`;
-  // Trace → metrics jump (PLAN-NEXT 14.4): each span links to its service's metrics.
+  // Trace → metrics jump: each span links to its service's metrics.
   $("trace-modal-body").querySelectorAll(".wf-metrics-link").forEach(a => {
     a.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -4382,7 +4382,7 @@ $("trace-modal").addEventListener("click", (e) => {
   if (e.target === $("trace-modal")) $("trace-modal").classList.remove("open");
 });
 
-// ── Inline runbook (PLAN-NEXT 14.1) ──────────────────────────────────
+// ── Inline runbook ──────────────────────────────────
 // Presents the acker with the alert's runbook as a tracked checklist.
 // Toggling a step PATCHes progress server-side (which records the
 // `pulse_runbook_step_seconds` metric); an "Acknowledge" button reuses
@@ -6488,7 +6488,7 @@ $("agents-token-modal").addEventListener("click", (e) => {
 // ── End Phase 13 agents ─────────────────────────────────────────────────────
 
 // =====================================================================
-// Synthetic & uptime checks (PLAN-NEXT 14.8)
+// Synthetic & uptime checks
 // =====================================================================
 // CRUD over /api/synthetics plus a multi-region matrix view
 // (/api/synthetics/matrix) showing each check's up/down status per edge
@@ -6652,7 +6652,7 @@ $("syn-modal").addEventListener("click", (e) => {
   if (e.target === $("syn-modal")) $("syn-modal").classList.remove("open");
 });
 
-// ── Public status pages (PLAN-NEXT 14.6) ──────────────────────────────
+// ── Public status pages ──────────────────────────────
 let _stEditId = null;
 let _stChecks = [];   // [{id, name}] synthetic checks for the source dropdown
 

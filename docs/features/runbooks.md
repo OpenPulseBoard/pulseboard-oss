@@ -1,6 +1,6 @@
 # Runbooks
 
-Inline runbooks (PLAN-NEXT 14.1) attach a markdown checklist to an alert rule so
+Inline runbooks attach a markdown checklist to an alert rule so
 responders can work through remediation steps directly from a firing alert, with
 per-step completion tracking and post-incident MTTR analytics.
 

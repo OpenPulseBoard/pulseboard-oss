@@ -1,6 +1,6 @@
 module PulseBoard.GitSync
 
-// GitOps "git-sync" mode (PLAN-NEXT.md 14.5). When configured, the
+// GitOps "git-sync" mode. When configured, the
 // workspace treats a Git repository as the source of truth for
 // dashboards and rule groups: every `intervalMs` it pulls the repo,
 // reads `<path>/dashboards/*.json` and `<path>/rules/*.json`, and

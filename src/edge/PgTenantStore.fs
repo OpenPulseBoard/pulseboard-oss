@@ -7,7 +7,7 @@ open Npgsql
 open NpgsqlTypes
 open PulseBoard.Tenancy
 
-// Postgres-backed `ITenantStore` (PLAN.md Phase 1 step 1). Schema is owned
+// Postgres-backed `ITenantStore`. Schema is owned
 // by this module: `EnsureSchema` runs idempotent `CREATE TABLE IF NOT EXISTS`
 // at startup so a fresh database is usable without an out-of-band migration
 // step. Tables are namespaced with the `pb_` prefix so cohabiting with other
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS pb_tenants (
   created_at  TIMESTAMPTZ NOT NULL
 );
 
--- Phase 7 #2: commercial plan. Idempotent column-add for existing
--- databases predating Phase 7; defaults to 'free' for backfill.
+-- Commercial plan column. Idempotent column-add for existing
+-- databases that pre-date the column; defaults to 'free' for backfill.
 ALTER TABLE pb_tenants
   ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
 

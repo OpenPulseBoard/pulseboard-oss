@@ -31,7 +31,7 @@ let internal notifyDebug =
 let internal nlog (msg : string) =
   if notifyDebug then eprintfn "[notify] %s" msg
 
-// Alertmanager-equivalent (PLAN.md Phase 5 step 2): a single per-tenant
+// Alertmanager-equivalent: a single per-tenant
 // config document drives routing, grouping, dedup, inhibition, silences,
 // and time-based mutes. We deliberately mirror Alertmanager's data model
 // because operators already know it, and because translating an existing
@@ -120,7 +120,7 @@ type Route =
   { id              : string
     matchers        : Matcher[]
     receiverId      : string option
-    policyId        : string option   // Escalation policy (PLAN Phase 5 #4)
+    policyId        : string option   // Escalation policy
     groupBy         : string[]
     groupWaitMs     : int64
     groupIntervalMs : int64
@@ -636,7 +636,7 @@ type private TenantGroups =
 /// Envelope that goes onto the outbound queue. The transport layer in
 /// `NotifyQueue.fs` does receiver-specific HTTP shaping.
 ///
-/// When an alert carries an inline runbook (PLAN-NEXT 14.1) we attach a
+/// When an alert carries an inline runbook we attach a
 /// top-level `runbooks` array carrying a truncated excerpt plus a deep
 /// link into the portal so the on-call engineer can open the full
 /// checklist straight from the notification body.
@@ -681,7 +681,7 @@ let private envelope (publicUrl : string)
         w.WriteString("deepLink", deepLinkFor publicUrl a.fingerprint)
         w.WriteEndObject()
       w.WriteEndArray()
-    // End-to-end correlation (PLAN-NEXT 14.4): attach the fire-time snapshot
+    // End-to-end correlation: attach the fire-time snapshot
     // (top log lines + slowest trace) captured by the correlation
     // snapshotter. The provider returns a ready-made JSON object string so
     // Routing stays decoupled from the Correlation module.
@@ -710,7 +710,7 @@ type Pipeline(configStore : IConfigStore,
   // bodies. Empty → emit a relative `#/alerts/<fp>` hash link.
   let mutable publicUrl = ""
 
-  // Correlation snapshot provider (PLAN-NEXT 14.4). Returns a ready-made
+  // Correlation snapshot provider. Returns a ready-made
   // JSON object string (the serialized fire-time snapshot) for an alert, or
   // None when no snapshot is available. Wired post-construction by
   // `Program.fs` so Routing stays decoupled from the Correlation module.
@@ -999,11 +999,11 @@ type Pipeline(configStore : IConfigStore,
     escalator <- Some esc
 
   /// Portal base URL used to render runbook deep links in notification
-  /// bodies (PLAN-NEXT 14.1). Empty disables the absolute prefix.
+  /// bodies. Empty disables the absolute prefix.
   member _.SetPublicUrl(url : string) =
     publicUrl <- (if isNull url then "" else url)
 
-  /// Correlation snapshot provider (PLAN-NEXT 14.4): maps a firing alert to
+  /// Correlation snapshot provider: maps a firing alert to
   /// a serialized fire-time snapshot JSON object embedded into notification
   /// bodies. Pass `fun _ -> None` to disable.
   member _.SetCorrelationProvider(f : AlertInstance -> string option) =

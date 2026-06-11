@@ -1,6 +1,6 @@
 module PulseBoard.Correlation
 
-// PLAN-NEXT 14.4 — End-to-end correlation by default.
+// End-to-end correlation by default.
 //
 // PulseBoard already keeps metrics, logs and traces in one process. This
 // module wires them together so an operator never has to copy a service

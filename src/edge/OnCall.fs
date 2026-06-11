@@ -1,6 +1,6 @@
 module PulseBoard.OnCall
 
-// PLAN.md Phase 5 #4 — On-call schedules + escalation policies + acks.
+// On-call schedules + escalation policies + acks.
 //
 // This module owns three pieces:
 //

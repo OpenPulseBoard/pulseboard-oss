@@ -123,7 +123,7 @@ let main argv =
   let auditLog : PulseBoard.Audit.IAuditLog =
     // In-memory ring is always present so `GET /api/admin/audit` can serve
     // recent tail; when Postgres is configured we fan out to a durable
-    // sink as well (PLAN.md Phase 1 step 4). The ring is listed first so
+    // sink as well. The ring is listed first so
     // `Tail` reads from it.
     let ring = PulseBoard.Audit.InMemoryAuditLog(1024) :> PulseBoard.Audit.IAuditLog
     match pgConn with
@@ -139,7 +139,7 @@ let main argv =
         ring
     | None -> ring
 
-  // -- Per-tenant quotas (token bucket; PLAN.md Phase 1 step 5) -------------
+  // -- Per-tenant quotas (token bucket) -------------
   // Defaults are generous enough that the demo and smoke tests never trip
   // them; set capacity to 0 (via --quota-*-burst=0) to disable a kind.
   let parseFloat (envName : string) (flag : string) (fallback : float) =
@@ -287,7 +287,7 @@ let main argv =
     eprintfn "  [ERROR] OIDC requires --multi-tenant"
     exit 2
 
-  // -- GitOps git-sync (PLAN-NEXT.md 14.5) ---------------------------------
+  // -- GitOps git-sync ---------------------------------
   // When a Git URL is configured the workspace pulls dashboards & rules
   // from the repo on a fixed cadence and treats Git as the source of
   // truth (CRUD APIs return 405). Auth: HTTPS token (the *name* of the
@@ -342,7 +342,7 @@ let main argv =
   let webhookUrls = argUrls "--webhook=" @ envUrls "PULSE_WEBHOOKS"
   let slackUrls   = argUrls "--slack="   @ envUrls "PULSE_SLACK"
 
-  // -- Edge / storage split (PLAN.md Phase 2 step 6) -----------------------
+  // -- Edge / storage split -----------------------
   // Three roles, default `all` (monolith — today's behaviour):
   //   * `all`     : runs every component in one process; receivers write
   //                 through `InProcessStorageClient`. Optionally also
@@ -385,10 +385,10 @@ let main argv =
   let logStore    = LogStore(capacity = 4096)
   let hub         = new Broadcaster()
 
-  // Span store (PLAN Phase 4 #4). Postgres-backed when configured,
+  // Span store. Postgres-backed when configured,
   // otherwise an in-process ring per tenant. Declared up front so the
-  // alert sink can capture trace correlation at fire time (PLAN-NEXT
-  // 14.4); the Traces / Service Map REST surface is mounted later.
+  // alert sink can capture trace correlation at fire time; the Traces
+  // / Service Map REST surface is mounted later.
   let spanStoreCapacity = 10_000
   let spanStoreMode =
     match pgConn with
@@ -405,7 +405,7 @@ let main argv =
     | Some cs -> PulseBoard.PgSpanStore.PgSpanStore(cs) :> _
     | None    -> PulseBoard.Spans.InMemorySpanStore(spanStoreCapacity) :> _
 
-  // Pluggable storage backends (PLAN.md Phase 3). The receiver-facing
+  // Pluggable storage backends. The receiver-facing
   // seam is still `IStorageClient`; `InProcessStorageClient` now
   // delegates to these. With `--mimir-url=`, `--loki-url=`, or
   // `--tempo-url=` set, the matching pillar fans out over HTTP to an
@@ -513,7 +513,7 @@ let main argv =
     | :? PulseBoard.CloudBackends.IRawTraceBackend as rt -> Some rt
     | _ -> None
 
-  // -- Retention (PLAN.md Phase 3 step 3) -------------------------------
+  // -- Retention -------------------------------
   // System defaults are configurable per pillar; `0` or unset means
   // "keep forever / no enforcement" (the same convention as the
   // existing quota flags). Per-tenant overrides live in Postgres when
@@ -585,7 +585,7 @@ let main argv =
     else None
   let _ = retentionCompactor   // keep alive for process lifetime
 
-  // -- Downsampling rollups (PLAN.md Phase 3 step 4) -------------------
+  // -- Downsampling rollups -------------------
   // Background job re-aggregates the embedded MetricStore into
   // 1m / 5m / 1h buckets so wide-window queries don't have to scan
   // raw points. Skipped when metrics are in cloud mode (Mimir does
@@ -706,7 +706,7 @@ let main argv =
   let workspaceBootstrapToken =
     envOrEarly "PULSE_BOOTSTRAP_TOKEN" (argValueEarly "--bootstrap-token=")
 
-  // -- Alerting pipeline (PLAN.md Phase 5) --------------------------------
+  // -- Alerting pipeline --------------------------------
   // 1. Rule engine: persisted PromQL/LogQL rule groups under
   //    `<dataDir>/rules/<tenant>/<groupId>.json`, evaluator pool with
   //    group-id shard hashing, `pulse_rule_eval_seconds` metric.
@@ -798,7 +798,7 @@ let main argv =
   let alertingPipeline =
     PulseBoard.Routing.Pipeline(routingStore, notifyQueue, metricStore)
 
-  // On-call schedules + escalation policies + acks (PLAN.md Phase 5 #4).
+  // On-call schedules + escalation policies + acks.
   let onCallCatalog : PulseBoard.OnCall.ICatalogStore =
     match pgConn with
     | Some cs ->
@@ -814,12 +814,12 @@ let main argv =
   alertingPipeline.SetEscalator(escalator :> PulseBoard.Routing.IEscalator)
 
   // Portal base URL for runbook deep links embedded in notifications
-  // (PLAN-NEXT 14.1). Empty → a relative `#/alerts/<fp>` hash link.
+  //. Empty → a relative `#/alerts/<fp>` hash link.
   let publicUrl =
     envOr "PULSE_PUBLIC_URL" (argValue "--public-url=") |> Option.defaultValue ""
   alertingPipeline.SetPublicUrl publicUrl
 
-  // Inline runbooks (PLAN-NEXT 14.1): per-alert markdown checklists with
+  // Inline runbooks: per-alert markdown checklists with
   // progress tracking + a post-incident view. Postgres-backed when a
   // connection is configured, else a per-tenant NDJSON journal.
   let runbookStore : PulseBoard.Runbooks.IRunbookStore =
@@ -831,7 +831,7 @@ let main argv =
       PulseBoard.Runbooks.FileRunbookStore(Path.Combine(dataDir, "runbooks")) :> _
   let runbookTracker = PulseBoard.Runbooks.Tracker(runbookStore)
 
-  // End-to-end correlation (PLAN-NEXT 14.4): when an alert starts firing we
+  // End-to-end correlation: when an alert starts firing we
   // freeze the top log lines + slowest trace from the breach window into a
   // bounded per-tenant cache, so the portal and notifications can show the
   // correlated signal even minutes later. Reads the same in-process log +
@@ -840,7 +840,7 @@ let main argv =
     PulseBoard.Correlation.Snapshotter(logStore, spanStore)
 
   // Feed fire-time correlation snapshots into outbound notifications so each
-  // alert carries its top log lines + slowest trace (PLAN-NEXT 14.4).
+  // alert carries its top log lines + slowest trace.
   alertingPipeline.SetCorrelationProvider(fun a ->
     correlationSnapshotter.TryGet(a.tenantId, a.fingerprint)
     |> Option.map PulseBoard.Correlation.serialiseSnapshot)
@@ -885,7 +885,7 @@ let main argv =
   let runbookInner     =
     PulseBoard.Runbooks.webPart multiTenant runbookStore metricStore
       (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
-  // Correlation REST surface (PLAN-NEXT 14.4): per-alert fire-time snapshots
+  // Correlation REST surface: per-alert fire-time snapshots
   // plus ad-hoc window correlation + trace exemplars. Shares the active-alert
   // lookup with the runbook surface so a snapshot can be computed live for an
   // alert that fired before the snapshotter observed it.
@@ -893,7 +893,7 @@ let main argv =
     PulseBoard.Correlation.webPart multiTenant logStore spanStore correlationSnapshotter
       (fun tid fp -> ruleEvaluator.Active tid |> Array.tryFind (fun a -> a.fingerprint = fp))
 
-  // Synthetic & uptime checks (PLAN-NEXT 14.8): small http/tcp/dns probes run
+  // Synthetic & uptime checks: small http/tcp/dns probes run
   // from this edge on a cadence; every result lands as metrics
   // (`pulse_synthetic_up`, `pulse_synthetic_duration_seconds`) + a log line so
   // it is alertable through the existing rule engine. The region label drives
@@ -938,7 +938,7 @@ let main argv =
     (Path.Combine(dataDir, "oncall"))
     (Path.Combine(dataDir, "acks"))
 
-  // -- Nightly audit-log S3 export (PLAN.md Phase 1 step 4) ----------------
+  // -- Nightly audit-log S3 export ----------------
   // Opt-in: requires both Postgres (durable audit source) and --audit-s3-bucket.
   // Credentials use the AWS default chain (env / shared config / IAM role);
   // never accept inline secrets via CLI. Endpoint override exists for
@@ -981,7 +981,7 @@ let main argv =
   let wwwroot = resolveWwwRoot ()
   printfn "PulseBoard serving static files from %s" wwwroot
 
-  // Public status pages (PLAN-NEXT 14.6): per-workspace status pages whose
+  // Public status pages: per-workspace status pages whose
   // components reuse the synthetic (`pulse_synthetic_up`) and SLO/metric
   // series already in the MetricStore. Incidents are auto-derived from the
   // live firing alerts; maintenance windows are operator-authored. The
@@ -1047,13 +1047,14 @@ let main argv =
     | None ->
       printfn "  [WARN] --multi-tenant set without --seed-tenant=<slug>. No tenants exist; all gated routes will 403."
 
-  // -- Workspace heartbeat client (PLAN.md Phase 9 step 6) -----------------
-  // When this process is itself a workspace machine spawned by the
-  // provisioner (multi-tenant + PULSE_SLUG + PULSE_PROVISIONER_URL all
-  // set), fire-and-forget a background loop that POSTs
-  // `{slug, version}` to <provisioner>/provision/heartbeat every 15s.
-  // The provisioner is on flycast-only, so no auth is needed; failures
-  // are swallowed (heartbeats are informational only).
+  // -- Workspace heartbeat client -----------------
+  // When this process is itself a workspace machine spawned by an
+  // upstream provisioner (multi-tenant + PULSE_SLUG +
+  // PULSE_PROVISIONER_URL all set), fire-and-forget a background loop
+  // that POSTs `{slug, version}` to <provisioner>/provision/heartbeat
+  // every 15s. The provisioner is reached over a private network, so
+  // no auth is needed; failures are swallowed (heartbeats are
+  // informational only).
   if multiTenant then
     let hbSlug = Environment.GetEnvironmentVariable "PULSE_SLUG"
     let hbProv = Environment.GetEnvironmentVariable "PULSE_PROVISIONER_URL"
@@ -1088,7 +1089,7 @@ let main argv =
 
   // -- Route composition ------------------------------------------------------
 
-  // -- Secrets / envelope encryption (PLAN.md Phase 6 #4) ------------------
+  // -- Secrets / envelope encryption ------------------
   // KEK is loaded from PULSE_MASTER_KEY (base64, 32 bytes) when set,
   // otherwise auto-generated at <dataDir>/secrets/master.key. Per-tenant
   // DEKs live next to it. Inline [[pii:<value>]] markers in log messages
@@ -1126,7 +1127,7 @@ let main argv =
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore (Some metricStore)
 
-  // -- Prometheus / Loki query APIs (PLAN.md Phase 4 step 1) ---------
+  // -- Prometheus / Loki query APIs ---------
   // When the metric / log pillar is wired to a cloud backend we
   // forward the standard HTTP query surface to the upstream verbatim;
   // otherwise we serve an embedded subset (vector selectors only for
@@ -1154,7 +1155,7 @@ let main argv =
   describeQueryBackend "PromQL API" promUpstream
   describeQueryBackend "LogQL  API" lokiUpstream
 
-  // -- Dashboards (PLAN.md Phase 4 step 2) --------------------------------
+  // -- Dashboards --------------------------------
   // Postgres-backed when --postgres= is provided; falls back to the
   // file-backed repo so single-binary / dev deployments keep working
   // without a database. Auto-seeds an overview dashboard the first
@@ -1179,7 +1180,7 @@ let main argv =
   let dashboardsInner =
     PulseBoard.Dashboards.webPart multiTenant dashboardRepo
 
-  // -- GitOps git-sync + export-as-code (PLAN-NEXT.md 14.5) ----------------
+  // -- GitOps git-sync + export-as-code ----------------
   // When git-sync is configured, start the background syncer (after an
   // immediate boot-time pull) and expose a read-only guard so the CRUD
   // APIs return 405. Export-as-code endpoints are always available.
@@ -1215,7 +1216,7 @@ let main argv =
       else PulseBoard.Dashboards.singleTenantId
     PulseBoard.ExportCode.webPart resolveExportTenant dashboardRepo ruleStore routingStore
 
-  // -- Self-observability (PLAN.md Phase 6 #6) -----------------------------
+  // -- Self-observability -----------------------------
   // Reserve the `__meta__` tenant, seed its dashboard, and start an SLO
   // derivation loop that emits `pulse_slo_*_5m` series every 30 s.
   if multiTenant then
@@ -1229,7 +1230,7 @@ let main argv =
     printfn "  Self: meta tenant skipped (single-tenant mode)"
 
 
-  // -- Spans / service map / RUM (PLAN.md Phase 4 step 4) ----------------
+  // -- Spans / service map / RUM ----------------
   // In-process ring of recent spans per tenant. Real persistence still
   // happens via the Tempo passthrough (`--tempo-url=`); this store
   // powers the SPA's Traces + Service Map tabs without depending on
@@ -1245,7 +1246,7 @@ let main argv =
 
   let adminInner = PulseBoard.Admin.webPart tenantStore quotaStore metricBackend retentionStore auditLog
 
-  // -- Prometheus scrape mode (PLAN.md Phase 2 step 3) --------------------
+  // -- Prometheus scrape mode --------------------
   // Tenant-defined scrape targets; background worker fans out HTTP GETs
   // and writes through the same MetricStore as remote_write.
   let scrapeRepo : PulseBoard.PromScrape.IScrapeRepo =
@@ -1268,7 +1269,7 @@ let main argv =
   let scrapeAdminInner =
     PulseBoard.PromScrape.adminWebPart scrapeRepo tenantStore auditLog
 
-  // -- StatsD UDP + Carbon plaintext TCP (PLAN.md Phase 2 step 5) ----------
+  // -- StatsD UDP + Carbon plaintext TCP ----------
   // Each listener owns one port; traffic is attributed to the owning
   // tenant. Repo is in-memory; lifecycle wraps actual socket binds.
   let listenerRepo : PulseBoard.Listeners.IListenerRepo =
@@ -1548,7 +1549,7 @@ let main argv =
       secretsAdmin   // /api/secrets/* — also Admin-scoped, sibling of admin
       PulseBoard.Admin.pricingWebPart ()   // Phase 8 #5 — public rate card + calculator
       agentApiInner // Phase 13 — agent enroll/checkin + portal fleet endpoints
-      statusPublicInner // PLAN-NEXT 14.6 — public status pages (/api/public/status*, /status*)
+      statusPublicInner // public status pages (/api/public/status*, /status*)
       query
       (match oidcRoutes with Some r -> r | None -> fun _ -> async { return None })
       whoamiRoute
@@ -1598,8 +1599,9 @@ let main argv =
   // .NET on Linux defaults IPv6 sockets to IPV6_V6ONLY=1 (unlike the
   // kernel's default of 0), so a single `::` listener does NOT accept
   // IPv4 traffic. Listing both `::` and `0.0.0.0` gives a real
-  // dual-stack listener: Fly's loopback health check (127.0.0.1) and
-  // flycast's IPv6 traffic both arrive at the same Suave instance.
+  // dual-stack listener: a loopback (127.0.0.1) health check and
+  // private-network IPv6 traffic both arrive at the same Suave
+  // instance.
   let bindAddrs =
     match Environment.GetEnvironmentVariable "PULSE_BIND_ADDR" with
     | null | "" -> [ IPAddress.Loopback ]

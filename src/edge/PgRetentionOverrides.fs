@@ -5,12 +5,11 @@ open Npgsql
 open PulseBoard.Tenancy
 open PulseBoard.Retention
 
-// Postgres backing for per-tenant retention overrides (PLAN.md
-// Phase 3 step 3). One row per tenant; each pillar's TTL is nullable
-// so a row can carry partial overrides (e.g. logsMs set, metricsMs
-// falls back to default). Schema is owned in-module and applied
-// idempotently via `ensureSchema` alongside the other Pg* modules at
-// startup.
+// Postgres backing for per-tenant retention overrides. One row per
+// tenant; each pillar's TTL is nullable so a row can carry partial
+// overrides (e.g. logsMs set, metricsMs falls back to default).
+// Schema is owned in-module and applied idempotently via
+// `ensureSchema` alongside the other Pg* modules at startup.
 
 let private schema = """
 CREATE TABLE IF NOT EXISTS pb_retention_overrides (

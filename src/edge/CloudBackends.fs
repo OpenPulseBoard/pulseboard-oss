@@ -15,11 +15,10 @@ open Snappier
 open PulseBoard.TimeSeries
 open PulseBoard.Storage
 
-// Cloud backends for PLAN.md Phase 3 step 1: HTTP clients that
-// implement `IMetricBackend` / `ILogBackend` / `ITraceBackend` so
-// PulseBoard can fan out to Mimir (Prometheus remote_write 1.0),
-// Loki (`/loki/api/v1/push`, JSON encoding), and Tempo (OTLP/HTTP
-// passthrough on `/v1/traces`).
+// Cloud backends: HTTP clients that implement `IMetricBackend` /
+// `ILogBackend` / `ITraceBackend` so PulseBoard can fan out to Mimir
+// (Prometheus remote_write 1.0), Loki (`/loki/api/v1/push`, JSON
+// encoding), and Tempo (OTLP/HTTP passthrough on `/v1/traces`).
 //
 // Design constraints these clients share:
 //

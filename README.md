@@ -2,24 +2,21 @@
 
 > Real-time metrics, logs, and alerts — a fast, opinionated observability platform.
 
-PulseBoard started as a single-binary F#/Suave demo and is on its way to a
-full SaaS observability product. The roadmap, decisions, and acceptance
-tests are in [PLAN.md](PLAN.md).
+PulseBoard started as a single-binary F#/Suave demo and has grown into
+a multi-tenant observability runtime that speaks OTLP / Prometheus
+`remote_write` / Loki push, embeds Mimir/Loki/Tempo for storage, and
+emits sub-second alerts.
 
 This repository is the OSS workspace/runtime product.
 
 | Target | Project / image | Used for |
 | --- | --- | --- |
-| OSS workspace runtime | [`src/edge/PulseBoard.fsproj`](src/edge/PulseBoard.fsproj), [`Dockerfile`](Dockerfile) | Self-hosted PulseBoard and the workspace image used by the hosted product. CI publishes `registry.fly.io/pulseboard1`. |
-
-Hosted control-plane code now lives outside this repo. The public OSS
-repo exposes the workspace/runtime only; the hosted cloud side consumes
-the published workspace image and the documented HTTP contract.
+| OSS workspace runtime | [`src/edge/PulseBoard.fsproj`](src/edge/PulseBoard.fsproj), [`Dockerfile`](Dockerfile) | Self-hosted PulseBoard. CI publishes the image to GitHub Container Registry under the repository owner's namespace. |
 
 | | |
 | --- | --- |
 | **Status** | Pre-alpha. APIs and storage formats can change without notice. |
-| **License** | [AGPL-3.0-or-later](LICENSE). The OSS edition is a lead-gen funnel for the (forthcoming) PulseBoard Cloud SaaS; commercial licenses available on request. |
+| **License** | [AGPL-3.0-or-later](LICENSE). Commercial licenses available on request. |
 | **Language** | F# on .NET 10 |
 | **HTTP stack** | [Suave](https://suave.io) |
 
@@ -72,29 +69,24 @@ open http://127.0.0.1:8775/
 
 ## Where it's going
 
-Read [PLAN.md](PLAN.md). TL;DR: a multi-tenant SaaS that speaks OTLP /
-Prometheus `remote_write` / Loki push, embeds Mimir/Loki/Tempo for
-storage, and competes on cost transparency, predictable pricing, and
-sub-second alerts.
+Multi-tenant ingest, embedded Mimir/Loki/Tempo storage, and operator
+workflows (dashboards, alert routing, on-call, status pages). See
+[docs/](docs/) for the per-feature design notes.
 
-## Repository layout (target — see [PLAN.md](PLAN.md))
+## Repository layout
 
 ```
 .
 ├── src/
-│   ├── edge/             # F#/Suave: ingest, query, alerting, notify (THIS is today's PulseBoard)
-│   ├── control-plane/    # tenants, identity, billing, admin API
-│   └── ui/               # dashboards, onboarding, account UI
-├── infra/                # Terraform, Helm, Dockerfiles, CI deploy bits
-├── docs/                 # MkDocs / Docusaurus source for the public docs site
-├── PLAN.md
+│   └── edge/             # F#/Suave: ingest, query, alerting, notify, dashboards
+├── infra/                # Helm charts, Mimir / Loki / Tempo configs, runbooks
+├── docs/                 # Feature guides and HTTP API reference
+├── tests/                # Unit, integration, chaos, and load tests
+├── Dockerfile
+├── docker-compose.yml
 ├── README.md
 └── LICENSE
 ```
-
-The edge service code now lives under [src/edge/](src/edge/). The
-sibling `src/control-plane/` and `src/ui/` trees are still stubs to be
-filled per [PLAN.md](PLAN.md).
 
 For operators, the practical ownership in this repo is straightforward:
 
@@ -115,5 +107,5 @@ or later](LICENSE). If you operate a modified version on a network
 service, AGPL §13 requires you to offer the modified source to its users.
 
 A commercial license (for proprietary embedding or hosted resale without
-AGPL obligations) will be available alongside PulseBoard Cloud — open a
-discussion if you need one before launch.
+AGPL obligations) is available on request — open a discussion if you
+need one.

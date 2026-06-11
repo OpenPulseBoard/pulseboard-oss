@@ -6,7 +6,7 @@ open NpgsqlTypes
 open PulseBoard.Tenancy
 open PulseBoard.Audit
 
-// Postgres-backed audit trail (PLAN.md Phase 1 step 4). The in-memory
+// Postgres-backed audit trail. The in-memory
 // `InMemoryAuditLog` keeps the recent window for `GET /api/admin/audit`;
 // this module is responsible for durability and is the source-of-truth
 // the S3 exporter reads from.

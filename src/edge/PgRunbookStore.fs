@@ -1,6 +1,6 @@
 module PulseBoard.PgRunbookStore
 
-// Postgres-backed IRunbookStore (PLAN-NEXT 14.1).
+// Postgres-backed IRunbookStore.
 //
 // One row per (tenant_id, fingerprint) in pb_runbook_progress. The whole
 // `RunbookProgress` record is stored as an opaque JSON body using the same
