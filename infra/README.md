@@ -8,7 +8,6 @@ Current layout:
 ```
 infra/
 ├── mimir/          # Mimir runtime config used by docker-compose and Helm
-├── pulseagent/     # Sidecar agent config + entrypoint wrapper baked into the workspace image
 └── runbooks/       # Operator runbooks: failover, rotation, portal & billing
 ```
 

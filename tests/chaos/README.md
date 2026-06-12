@@ -8,7 +8,7 @@ running PulseBoard deployment and assert recovery SLOs.
 | Script | Target | Recovery SLO |
 |--------|--------|-------------|
 | `kill-edge-pod.sh` | PulseBoard edge process | `/api/healthz` → 200 within **30 s** |
-| `kill-postgres.sh` | PostgreSQL (Cloud state) | Cloud portal recovers within **60 s** |
+| `kill-postgres.sh` | PostgreSQL (portal state) | Portal recovers within **60 s** |
 | `kill-mimir-ingester.sh` | Mimir ingester (metrics storage) | Probe metric visible within **90 s** |
 | `k6-load.js` | Full ingest + query load | query p99 < **1 000 ms**, ingest success > **99.9%** |
 
@@ -17,7 +17,6 @@ running PulseBoard deployment and assert recovery SLOs.
 - `curl`, `bash` ≥ 4
 - For Docker mode: `docker` CLI
 - For Kubernetes mode: `kubectl` with context pointing at the target cluster
-- For Fly.io mode: `fly` CLI authenticated
 - For k6 load test: [`k6`](https://k6.io/docs/getting-started/installation/) ≥ 0.45
 
 ## Quick start (local Docker Compose)
@@ -47,7 +46,7 @@ All scripts share these common variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BASE_URL` | `http://localhost:8080` | PulseBoard edge base URL |
-| `DEPLOY_MODE` | `docker` | `docker` \| `k8s` \| `fly` |
+| `DEPLOY_MODE` | `docker` | `docker` \| `k8s` |
 | `API_KEY` | *(none)* | Bearer token for multi-tenant mode |
 | `RECOVER_SECS` | varies | Max seconds to wait for recovery |
 

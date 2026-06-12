@@ -8,19 +8,16 @@
 #   - Zero 5xx responses from the query endpoint after recovery
 #
 # Supports two deployment modes (auto-detected or forced via DEPLOY_MODE):
-#   fly  — uses fly scale and fly status (Fly.io)
-#   k8s  — uses kubectl delete pod (Kubernetes)
+#   k8s    — uses kubectl delete pod (Kubernetes)
 #   docker — kills and restarts the container (local Docker Compose)
 #
 # Usage:
-#   DEPLOY_MODE=fly   APP_NAME=pulseboard-edge  bash tests/chaos/kill-edge-pod.sh
 #   DEPLOY_MODE=k8s   POD_LABEL=app=pulseboard-edge NAMESPACE=pulseboard bash tests/chaos/kill-edge-pod.sh
 #   DEPLOY_MODE=docker CONTAINER=pulseboard-edge bash tests/chaos/kill-edge-pod.sh
 #
 # Environment variables (all optional with sane defaults for local docker):
-#   DEPLOY_MODE  — fly | k8s | docker (default: docker)
+#   DEPLOY_MODE  — k8s | docker (default: docker)
 #   BASE_URL     — PulseBoard base URL (default: http://localhost:8080)
-#   APP_NAME     — Fly.io app name (default: pulseboard-edge)
 #   POD_LABEL    — kubectl selector label (default: app=pulseboard-edge)
 #   NAMESPACE    — Kubernetes namespace (default: pulseboard)
 #   CONTAINER    — Docker container name (default: pulseboard-edge)
@@ -31,7 +28,6 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 DEPLOY_MODE="${DEPLOY_MODE:-docker}"
-APP_NAME="${APP_NAME:-pulseboard-edge}"
 POD_LABEL="${POD_LABEL:-app=pulseboard-edge}"
 NAMESPACE="${NAMESPACE:-pulseboard}"
 CONTAINER="${CONTAINER:-pulseboard-edge}"
@@ -65,12 +61,6 @@ ok "Baseline health OK (HTTP $BASELINE)"
 log "Step 2 — killing edge instance (mode=$DEPLOY_MODE)"
 
 case "$DEPLOY_MODE" in
-  fly)
-    log "  Suspending Fly.io machine(s) for app $APP_NAME..."
-    fly scale count 0 --app "$APP_NAME" --yes
-    sleep 3
-    fly scale count 1 --app "$APP_NAME" --yes
-    ;;
   k8s)
     log "  Deleting pod(s) with label $POD_LABEL in namespace $NAMESPACE..."
     kubectl delete pods -l "$POD_LABEL" -n "$NAMESPACE" --grace-period=0 --force
@@ -80,7 +70,7 @@ case "$DEPLOY_MODE" in
     docker restart "$CONTAINER"
     ;;
   *)
-    fail "Unknown DEPLOY_MODE=$DEPLOY_MODE — use fly, k8s, or docker"
+    fail "Unknown DEPLOY_MODE=$DEPLOY_MODE — use k8s or docker"
     ;;
 esac
 

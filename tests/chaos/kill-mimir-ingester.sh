@@ -16,20 +16,18 @@
 # Modes:
 #   docker — docker restart <container>
 #   k8s    — kubectl delete pod -l component=ingester
-#   fly    — fly machine stop/start on the Mimir app machine
 #
 # Usage:
 #   DEPLOY_MODE=docker CONTAINER=mimir-ingester bash tests/chaos/kill-mimir-ingester.sh
 #   DEPLOY_MODE=k8s POD_LABEL=component=ingester NAMESPACE=pulseboard bash tests/chaos/kill-mimir-ingester.sh
 #
 # Environment variables:
-#   DEPLOY_MODE    — fly | k8s | docker (default: docker)
+#   DEPLOY_MODE    — k8s | docker (default: docker)
 #   BASE_URL       — PulseBoard base URL (default: http://localhost:8080)
 #   MIMIR_URL      — Mimir API base URL (default: http://localhost:9009)
 #   CONTAINER      — Docker container name (default: mimir-ingester)
 #   POD_LABEL      — kubectl selector (default: component=ingester)
 #   NAMESPACE      — Kubernetes namespace (default: pulseboard)
-#   MIMIR_APP      — Fly.io app name for Mimir (default: pulseboard-mimir)
 #   OUTAGE_SECS    — seconds to keep ingester down (default: 15)
 #   RECOVER_SECS   — max seconds to wait for data recovery (default: 90)
 #   PROBE_METRIC   — metric name to probe for data continuity (default: pulseboard_ingest_total)
@@ -43,7 +41,6 @@ DEPLOY_MODE="${DEPLOY_MODE:-docker}"
 CONTAINER="${CONTAINER:-mimir-ingester}"
 POD_LABEL="${POD_LABEL:-component=ingester}"
 NAMESPACE="${NAMESPACE:-pulseboard}"
-MIMIR_APP="${MIMIR_APP:-pulseboard-mimir}"
 OUTAGE_SECS="${OUTAGE_SECS:-15}"
 RECOVER_SECS="${RECOVER_SECS:-90}"
 PROBE_METRIC="${PROBE_METRIC:-pulseboard_ingest_total}"
@@ -81,22 +78,12 @@ log "  Recording probe metric baseline at t=$PROBE_BEFORE_TS"
 # ---------------------------------------------------------------------------
 log "Step 2 — killing Mimir ingester (mode=$DEPLOY_MODE, outage=${OUTAGE_SECS}s)"
 
-MIMIR_MACHINE_ID=""
-
 case "$DEPLOY_MODE" in
   docker)
     docker stop "$CONTAINER"
     ;;
   k8s)
     kubectl delete pods -l "$POD_LABEL" -n "$NAMESPACE" --grace-period=0 --force
-    ;;
-  fly)
-    MIMIR_MACHINE_ID=$(fly machine list --app "$MIMIR_APP" --json | \
-      python3 -c "import sys,json; m=json.load(sys.stdin); print(m[0]['id'])" 2>/dev/null || true)
-    if [[ -z "$MIMIR_MACHINE_ID" ]]; then
-      fail "Could not resolve Fly.io Mimir machine ID for app $MIMIR_APP"
-    fi
-    fly machine stop "$MIMIR_MACHINE_ID" --app "$MIMIR_APP"
     ;;
   *)
     fail "Unknown DEPLOY_MODE=$DEPLOY_MODE"
@@ -138,9 +125,6 @@ case "$DEPLOY_MODE" in
     ;;
   k8s)
     log "  (Kubernetes will recreate the pod automatically)"
-    ;;
-  fly)
-    fly machine start "$MIMIR_MACHINE_ID" --app "$MIMIR_APP"
     ;;
 esac
 

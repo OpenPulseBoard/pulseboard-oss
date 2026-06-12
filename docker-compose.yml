@@ -69,6 +69,8 @@ services:
       # Leave unset to run without token auth (open ingest — fine for local dev).
       PULSE_TOKENS: "${PULSE_TOKENS:-}"
     command:
+      - dotnet
+      - PulseBoard.dll
       - --port=8080
       - --postgres=Host=pulseboard-postgres;Port=5432;Database=pulseboard;Username=pulseboard;Password=pulseboard
     ports:
