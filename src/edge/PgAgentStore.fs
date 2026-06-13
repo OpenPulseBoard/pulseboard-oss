@@ -83,25 +83,60 @@ type PgAgentStore(connectionString : string) =
   interface IAgentStore with
 
     member _.Enroll(tenantId, hostname, version) =
-      let id      = generateId()
+      // Idempotent by (tenant_id, hostname): rotate the key on repeat
+      // calls (so a redeployed Fly machine that lost its credentials.json
+      // gets fresh creds but keeps the same id), only INSERT on first
+      // sighting. Wrapped in a transaction so a concurrent enroll from
+      // the same host can't insert a duplicate row.
       let apiKey  = generateKey()
       let keyHash = hashKey apiKey
       let now     = nowMs()
       use conn = openConn ()
-      use cmd =
+      use tx = conn.BeginTransaction()
+      use sel =
         new NpgsqlCommand(
-          "INSERT INTO pb_agents \
-           (id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms, api_key_hash) \
-           VALUES (@id, @tid, @host, @ver, '', @ls, @en, @kh)",
-          conn)
-      cmd.Parameters.AddWithValue("id",   id)       |> ignore
-      cmd.Parameters.AddWithValue("tid",  tenantId) |> ignore
-      cmd.Parameters.AddWithValue("host", hostname) |> ignore
-      cmd.Parameters.AddWithValue("ver",  version)  |> ignore
-      cmd.Parameters.AddWithValue("ls",   now)      |> ignore
-      cmd.Parameters.AddWithValue("en",   now)      |> ignore
-      cmd.Parameters.AddWithValue("kh",   keyHash)  |> ignore
-      cmd.ExecuteNonQuery() |> ignore
+          "SELECT id, enrolled_at_ms FROM pb_agents \
+            WHERE tenant_id = @tid AND hostname = @host \
+            LIMIT 1 FOR UPDATE",
+          conn, tx)
+      sel.Parameters.AddWithValue("tid",  tenantId) |> ignore
+      sel.Parameters.AddWithValue("host", hostname) |> ignore
+      let existing =
+        use r = sel.ExecuteReader()
+        if r.Read() then Some (r.GetString 0, r.GetInt64 1) else None
+      let id, enrolledAt =
+        match existing with
+        | Some (eid, eat) ->
+          use upd =
+            new NpgsqlCommand(
+              "UPDATE pb_agents \
+                 SET api_key_hash = @kh, version = @ver, last_seen_ms = @ls \
+               WHERE id = @id",
+              conn, tx)
+          upd.Parameters.AddWithValue("kh",  keyHash) |> ignore
+          upd.Parameters.AddWithValue("ver", version) |> ignore
+          upd.Parameters.AddWithValue("ls",  now)     |> ignore
+          upd.Parameters.AddWithValue("id",  eid)     |> ignore
+          upd.ExecuteNonQuery() |> ignore
+          eid, eat
+        | None ->
+          let newId = generateId()
+          use ins =
+            new NpgsqlCommand(
+              "INSERT INTO pb_agents \
+               (id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms, api_key_hash) \
+               VALUES (@id, @tid, @host, @ver, '', @ls, @en, @kh)",
+              conn, tx)
+          ins.Parameters.AddWithValue("id",   newId)    |> ignore
+          ins.Parameters.AddWithValue("tid",  tenantId) |> ignore
+          ins.Parameters.AddWithValue("host", hostname) |> ignore
+          ins.Parameters.AddWithValue("ver",  version)  |> ignore
+          ins.Parameters.AddWithValue("ls",   now)      |> ignore
+          ins.Parameters.AddWithValue("en",   now)      |> ignore
+          ins.Parameters.AddWithValue("kh",   keyHash)  |> ignore
+          ins.ExecuteNonQuery() |> ignore
+          newId, now
+      tx.Commit()
       // Match InMemoryAgentStore: temporarily stash the raw key in
       // `configHash` so the caller can extract it before discarding.
       { id         = id
@@ -110,7 +145,7 @@ type PgAgentStore(connectionString : string) =
         version    = version
         configHash = apiKey
         lastSeen   = now
-        enrolledAt = now }
+        enrolledAt = enrolledAt }
 
     member _.Checkin(agentId, version, configHash, _metaJson) =
       use conn = openConn ()

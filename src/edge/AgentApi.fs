@@ -49,6 +49,10 @@ type EnrollToken =
 // ---------------------------------------------------------------------------
 
 type IAgentStore =
+  /// Idempotent by (tenantId, hostname): if a record already exists for
+  /// that pair the api_key is rotated and the existing id is returned, so
+  /// repeat enrollments from the same host don't accumulate duplicate
+  /// rows on the agents page.
   abstract Enroll       : tenantId:string * hostname:string * version:string -> AgentRecord
   abstract Checkin      : agentId:string * version:string * configHash:string * metaJson:string -> bool
   abstract List         : tenantId:string -> AgentRecord list
@@ -88,22 +92,30 @@ type InMemoryAgentStore() =
 
   interface IAgentStore with
     member _.Enroll(tenantId, hostname, version) =
-      let id     = generateId()
-      let apiKey = generateKey()
-      // store hash so the key itself isn't in memory in plain text
+      let apiKey  = generateKey()
       let keyHash = SHA256.HashData(Encoding.UTF8.GetBytes apiKey) |> Convert.ToHexString
-      let record =
-        { id         = id
-          tenantId   = tenantId
-          hostname   = hostname
-          version    = version
-          configHash = ""
-          lastSeen   = nowMs()
-          enrolledAt = nowMs() }
-      agents.[id] <- (record, keyHash)
-      // Return record with the raw api key embedded temporarily in `configHash`
-      // field so the caller can extract it before discarding.
-      { record with configHash = apiKey }
+      let existing =
+        agents.Values
+        |> Seq.tryFind (fun (r, _) -> r.tenantId = tenantId && r.hostname = hostname)
+      match existing with
+      | Some (r, _) ->
+        let updated = { r with version = version; lastSeen = nowMs() }
+        agents.[r.id] <- (updated, keyHash)
+        { updated with configHash = apiKey }
+      | None ->
+        let id = generateId()
+        let record =
+          { id         = id
+            tenantId   = tenantId
+            hostname   = hostname
+            version    = version
+            configHash = ""
+            lastSeen   = nowMs()
+            enrolledAt = nowMs() }
+        agents.[id] <- (record, keyHash)
+        // Return record with the raw api key embedded temporarily in `configHash`
+        // field so the caller can extract it before discarding.
+        { record with configHash = apiKey }
 
     member _.Checkin(agentId, version, configHash, _metaJson) =
       match agents.TryGetValue agentId with
@@ -191,9 +203,18 @@ let private agentAuth (store : IAgentStore) (handler : AgentRecord -> WebPart) :
 // ---------------------------------------------------------------------------
 
 // POST /api/agent/v1/enroll
+// Two ways to authenticate:
+//   1. Body carries `token` — single-use 30-min enrollment token previously
+//      issued by an operator via POST /api/agents/token.
+//   2. `Authorization: Bearer <tenant pk_...>` — a tenant API key already
+//      attached upstream by `Auth.resolveApiKey`. Useful when the same
+//      shared key is planted on every machine (dogfood / Fly secrets).
+// Idempotent by (tenantId, hostname): repeat enrollments rotate the
+// per-agent api_key but reuse the same agentId, keeping the agents page
+// clean across machine redeploys.
 let private handleEnroll (store : IAgentStore) : WebPart =
-  request (fun req ->
-    let body = Encoding.UTF8.GetString req.rawForm
+  fun ctx -> async {
+    let body = Encoding.UTF8.GetString ctx.request.rawForm
     try
       use doc      = JsonDocument.Parse body
       let root     = doc.RootElement
@@ -205,17 +226,27 @@ let private handleEnroll (store : IAgentStore) : WebPart =
       let hostname = getStr "hostname"
       let version  = getStr "version"
 
-      match store.RedeemToken token with
+      let tenantIdFromKey =
+        PulseBoard.Rbac.tryGetTenant ctx
+        |> Option.map (fun tc -> let (TenantId t) = tc.tenant.id in t)
+      let tenantIdFromToken =
+        if String.IsNullOrEmpty token then None
+        else store.RedeemToken token
+
+      match tenantIdFromToken |> Option.orElse tenantIdFromKey with
       | None ->
-        UNAUTHORIZED "Invalid or expired enrollment token"
+        return! UNAUTHORIZED
+                  "Provide an enrollment token in the request body or a tenant API key via Authorization: Bearer"
+                  ctx
       | Some tenantId ->
         let record = store.Enroll(tenantId, hostname, version)
         // configHash field temporarily carries the raw API key — extract and
         // clear it from the response object.
         let apiKey = record.configHash
-        jsonOk {| agentId = record.id; apiKey = apiKey |}
+        return! jsonOk {| agentId = record.id; apiKey = apiKey |} ctx
     with ex ->
-      BAD_REQUEST (sprintf "Invalid JSON: %s" ex.Message))
+      return! BAD_REQUEST (sprintf "Invalid JSON: %s" ex.Message) ctx
+  }
 
 // POST /api/agent/v1/checkin
 let private handleCheckin (store : IAgentStore) : WebPart =

@@ -1514,15 +1514,22 @@ let main argv =
       PulseBoard.Gateway.internalWebPart inproc secret
     | _ -> fun _ -> async { return None }
 
-  // Agent enroll/checkin are unauthenticated (the agent has no credentials yet).
-  // The portal fleet endpoints (GET /api/agents, POST /api/agents/token) need a
-  // tenant session — wrap them in the same resolveSession + resolveApiKey chain
-  // used by admin and query so that tryGetTenant finds the context it expects.
+  // Agent enroll/checkin are unauthenticated for the agent itself, but
+  // /api/agent/v1/enroll also accepts a tenant `pk_...` bearer (so a
+  // shared dogfood key planted via Fly secrets can self-enroll without
+  // operator-minted tokens). Wrap that endpoint in resolveApiKey so the
+  // TenantCtx is available inside the handler. The portal fleet
+  // endpoints (GET /api/agents, POST /api/agents/token) need a tenant
+  // session.
   let agentApiInner =
     let raw = PulseBoard.AgentApi.webPart multiTenant agentStore
     if multiTenant then
       choose [
-        // Let the unauthenticated agent endpoints pass through first.
+        // Enroll: tenant-key bearer is optional but recognised.
+        POST >=> path "/api/agent/v1/enroll" >=>
+          PulseBoard.Auth.resolveApiKey tenantStore raw
+        // Other unauthenticated agent endpoints (checkin/config use their
+        // own agent bearer auth inside the handlers).
         POST >=> pathStarts "/api/agent/v1/" >=> raw
         GET  >=> path "/api/agent/v1/config" >=> raw
         // Portal fleet endpoints require a session.
