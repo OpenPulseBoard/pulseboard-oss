@@ -309,11 +309,23 @@ let main argv =
         |> Option.map (fun secs -> max 5 secs * 1000)
         |> Option.defaultValue 30_000
       let sshKeyPath = envOr "PULSE_GITOPS_SSH_KEY" (argValue "--gitops-ssh-key=")
+      // Token resolution order:
+      //   1. PULSE_GITOPS_TOKEN directly (the common case — set the secret
+      //      under its conventional name, done).
+      //   2. PULSE_GITOPS_TOKEN_ENV / --gitops-token-env=NAME indirection,
+      //      for ops who keep the secret under a custom env var name.
+      //   3. None — clone proceeds anonymous (works for public repos only).
       let token =
-        envOr "PULSE_GITOPS_TOKEN_ENV" (argValue "--gitops-token-env=")
-        |> Option.bind (fun name ->
-             let v = Environment.GetEnvironmentVariable name
-             if String.IsNullOrWhiteSpace v then None else Some v)
+        let direct =
+          let v = Environment.GetEnvironmentVariable "PULSE_GITOPS_TOKEN"
+          if String.IsNullOrWhiteSpace v then None else Some v
+        match direct with
+        | Some _ -> direct
+        | None ->
+          envOr "PULSE_GITOPS_TOKEN_ENV" (argValue "--gitops-token-env=")
+          |> Option.bind (fun name ->
+               let v = Environment.GetEnvironmentVariable name
+               if String.IsNullOrWhiteSpace v then None else Some v)
       let prune =
         match envOr "PULSE_GITOPS_PRUNE" (argValue "--gitops-prune=") with
         | Some s -> not (s.Trim().ToLowerInvariant() = "false" || s = "0")
@@ -1195,8 +1207,13 @@ let main argv =
       (try s.SyncOnce(force = true) |> ignore
        with ex -> eprintfn "  [WARN] initial git-sync failed: %s" ex.Message)
       s.Start()
-      printfn "  GitOps: git-sync ACTIVE (url=%s branch=%s interval=%dms) — dashboards/rules read-only via API"
-        cfg.url cfg.branch cfg.intervalMs
+      let authDesc =
+        match cfg.token, cfg.sshKeyPath with
+        | Some _, _    -> "https-token"
+        | None, Some _ -> "ssh-key"
+        | None, None   -> "anonymous"
+      printfn "  GitOps: git-sync ACTIVE (url=%s branch=%s interval=%dms auth=%s) — dashboards/rules read-only via API"
+        cfg.url cfg.branch cfg.intervalMs authDesc
       Some s
     | None -> None
   let gitOpsGuardInner : WebPart =
