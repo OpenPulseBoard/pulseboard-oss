@@ -27,6 +27,15 @@ open Suave
 open Suave.Operators
 open PulseBoard.Tenancy
 
+let private logInfo (msg : string) =
+  printfn "[gitsync] %s" msg
+
+let private logWarn (msg : string) =
+  eprintfn "[gitsync] WARN %s" msg
+
+let private logErr (msg : string) =
+  eprintfn "[gitsync] ERROR %s" msg
+
 // -- config -----------------------------------------------------------------
 
 type Config =
@@ -72,16 +81,26 @@ let readDesired (root : string)
           let id = Path.GetFileNameWithoutExtension f
           match PulseBoard.Dashboards.parseDashboard (File.ReadAllText f) with
           | Result.Ok d -> yield id, d
-          | Result.Error e -> errors.Add (sprintf "dashboards/%s: %s" (Path.GetFileName f) e) ]
-    else []
+          | Result.Error e ->
+            let msg = sprintf "dashboards/%s: %s" (Path.GetFileName f) e
+            logWarn msg
+            errors.Add msg ]
+    else
+      logInfo (sprintf "no dashboards/ directory under %s (skipping)" root)
+      []
   let groups =
     if Directory.Exists ruleDir then
       [ for f in Directory.EnumerateFiles(ruleDir, "*.json") |> Seq.sortBy Path.GetFileName do
           let id = Path.GetFileNameWithoutExtension f
           match PulseBoard.Rules.parseGroup (File.ReadAllText f) with
           | Result.Ok g -> yield id, g
-          | Result.Error e -> errors.Add (sprintf "rules/%s: %s" (Path.GetFileName f) e) ]
-    else []
+          | Result.Error e ->
+            let msg = sprintf "rules/%s: %s" (Path.GetFileName f) e
+            logWarn msg
+            errors.Add msg ]
+    else
+      logInfo (sprintf "no rules/ directory under %s (skipping)" root)
+      []
   List.ofSeq dashboards, List.ofSeq groups, List.ofSeq errors
 
 /// Reconcile the desired set into the live stores: upsert everything
@@ -154,21 +173,31 @@ let private ensureCheckout (cfg : Config) : Result<unit, string> =
   let env = gitEnv cfg
   let gitDir = Path.Combine(cfg.workDir, ".git")
   if Directory.Exists gitDir then
+    logInfo (sprintf "fetching %s (branch=%s) into %s" cfg.url cfg.branch cfg.workDir)
     match runGit (Some cfg.workDir) env [ "fetch"; "--depth"; "1"; authedUrl cfg; cfg.branch ] with
-    | Result.Error e -> Result.Error e
+    | Result.Error e ->
+      logErr (sprintf "fetch failed: %s" e)
+      Result.Error e
     | Result.Ok _ ->
-      runGit (Some cfg.workDir) env [ "reset"; "--hard"; "FETCH_HEAD" ]
-      |> Result.map ignore
+      match runGit (Some cfg.workDir) env [ "reset"; "--hard"; "FETCH_HEAD" ] with
+      | Result.Error e ->
+        logErr (sprintf "reset --hard FETCH_HEAD failed: %s" e)
+        Result.Error e
+      | Result.Ok _ -> Result.Ok ()
   else
     let parent = Path.GetDirectoryName cfg.workDir
     if not (String.IsNullOrEmpty parent) then Directory.CreateDirectory parent |> ignore
+    logInfo (sprintf "cloning %s (branch=%s) into %s" cfg.url cfg.branch cfg.workDir)
     match runGit None env
             [ "clone"; "--depth"; "1"; "--single-branch"; "--branch"; cfg.branch
               authedUrl cfg; cfg.workDir ] with
-    | Result.Error e -> Result.Error e
+    | Result.Error e ->
+      logErr (sprintf "clone failed: %s" e)
+      Result.Error e
     | Result.Ok _ ->
       // Scrub any embedded token from the persisted remote.
       runGit (Some cfg.workDir) env [ "remote"; "set-url"; "origin"; cfg.url ] |> ignore
+      logInfo "clone OK"
       Result.Ok ()
 
 let private currentCommit (cfg : Config) : Result<string, string> =
@@ -200,9 +229,13 @@ type Syncer
     | Result.Error e -> lastError <- Some e; Result.Error e
     | Result.Ok () ->
       match currentCommit cfg with
-      | Result.Error e -> lastError <- Some e; Result.Error e
+      | Result.Error e ->
+        logErr (sprintf "could not resolve HEAD: %s" e)
+        lastError <- Some e
+        Result.Error e
       | Result.Ok commit ->
         if commit = lastCommit && not force then
+          logInfo (sprintf "commit %s unchanged; skipping reconcile" (commit.Substring(0, min 7 commit.Length)))
           let r = { commit = commit; dashboards = 0; rules = 0; deleted = 0
                     unchanged = true; errors = [] }
           lastReport <- Some r; lastError <- None
@@ -211,22 +244,39 @@ type Syncer
           let root =
             if String.IsNullOrWhiteSpace cfg.subPath then cfg.workDir
             else Path.Combine(cfg.workDir, cfg.subPath)
-          let dashboards, groups, errs = readDesired root
-          let tid = targetTenant ()
-          let deleted = applyDesired dashRepo ruleStore tid cfg.prune dashboards groups
-          lastCommit <- commit
-          let r = { commit = commit; dashboards = List.length dashboards
-                    rules = List.length groups; deleted = deleted
-                    unchanged = false; errors = errs }
-          lastReport <- Some r; lastError <- None
-          Result.Ok r
+          let shortSha = commit.Substring(0, min 7 commit.Length)
+          logInfo (sprintf "reconciling commit %s (path=%s)" shortSha (if cfg.subPath = "" then "/" else cfg.subPath))
+          if not (Directory.Exists root) then
+            let msg = sprintf "subPath %s not found in checkout %s" cfg.subPath cfg.workDir
+            logErr msg
+            lastError <- Some msg
+            Result.Error msg
+          else
+            let dashboards, groups, errs = readDesired root
+            let tid = targetTenant ()
+            let (PulseBoard.Tenancy.TenantId tidStr) = tid
+            logInfo (sprintf "found %d dashboard(s), %d rule group(s) on disk (tenant=%s, prune=%b)"
+              (List.length dashboards) (List.length groups) tidStr cfg.prune)
+            let deleted = applyDesired dashRepo ruleStore tid cfg.prune dashboards groups
+            lastCommit <- commit
+            let r = { commit = commit; dashboards = List.length dashboards
+                      rules = List.length groups; deleted = deleted
+                      unchanged = false; errors = errs }
+            lastReport <- Some r; lastError <- None
+            logInfo (sprintf "reconcile DONE (upserted %d dashboards, %d rules; deleted %d; %d parse error(s))"
+              r.dashboards r.rules r.deleted (List.length r.errors))
+            Result.Ok r
 
   member this.Start() =
+    logInfo (sprintf "starting background syncer (interval=%dms)" cfg.intervalMs)
     let worker =
       async {
         while not cts.Token.IsCancellationRequested do
-          let _ = (try this.SyncOnce() |> ignore
-                   with ex -> lastError <- Some ex.Message)
+          try
+            this.SyncOnce() |> ignore
+          with ex ->
+            logErr (sprintf "background SyncOnce threw: %s" ex.Message)
+            lastError <- Some ex.Message
           do! Async.Sleep cfg.intervalMs
       }
     Async.Start(worker, cts.Token)
