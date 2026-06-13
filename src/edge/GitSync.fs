@@ -209,7 +209,12 @@ type Syncer
     ( cfg : Config,
       dashRepo : PulseBoard.Dashboards.IDashboardRepo,
       ruleStore : PulseBoard.Rules.IRuleStore,
-      targetTenant : unit -> TenantId ) =
+      // Returns None when the configured slug doesn't resolve to a known
+      // tenant; the reconcile is skipped with a clear error rather than
+      // writing dashboards under a fabricated id that no request will
+      // ever resolve to (the original cause of duplicated slug-keyed +
+      // id-keyed rows in pb_dashboards).
+      targetTenant : unit -> TenantId option ) =
 
   let cts = new CancellationTokenSource()
   let mutable lastCommit = ""
@@ -252,20 +257,26 @@ type Syncer
             lastError <- Some msg
             Result.Error msg
           else
-            let dashboards, groups, errs = readDesired root
-            let tid = targetTenant ()
-            let (PulseBoard.Tenancy.TenantId tidStr) = tid
-            logInfo (sprintf "found %d dashboard(s), %d rule group(s) on disk (tenant=%s, prune=%b)"
-              (List.length dashboards) (List.length groups) tidStr cfg.prune)
-            let deleted = applyDesired dashRepo ruleStore tid cfg.prune dashboards groups
-            lastCommit <- commit
-            let r = { commit = commit; dashboards = List.length dashboards
-                      rules = List.length groups; deleted = deleted
-                      unchanged = false; errors = errs }
-            lastReport <- Some r; lastError <- None
-            logInfo (sprintf "reconcile DONE (upserted %d dashboards, %d rules; deleted %d; %d parse error(s))"
-              r.dashboards r.rules r.deleted (List.length r.errors))
-            Result.Ok r
+            match targetTenant () with
+            | None ->
+              let msg = "gitops tenant slug does not resolve to a known tenant; skipping reconcile"
+              logErr msg
+              lastError <- Some msg
+              Result.Error msg
+            | Some tid ->
+              let dashboards, groups, errs = readDesired root
+              let (PulseBoard.Tenancy.TenantId tidStr) = tid
+              logInfo (sprintf "found %d dashboard(s), %d rule group(s) on disk (tenant=%s, prune=%b)"
+                (List.length dashboards) (List.length groups) tidStr cfg.prune)
+              let deleted = applyDesired dashRepo ruleStore tid cfg.prune dashboards groups
+              lastCommit <- commit
+              let r = { commit = commit; dashboards = List.length dashboards
+                        rules = List.length groups; deleted = deleted
+                        unchanged = false; errors = errs }
+              lastReport <- Some r; lastError <- None
+              logInfo (sprintf "reconcile DONE (upserted %d dashboards, %d rules; deleted %d; %d parse error(s))"
+                r.dashboards r.rules r.deleted (List.length r.errors))
+              Result.Ok r
 
   member this.Start() =
     logInfo (sprintf "starting background syncer (interval=%dms)" cfg.intervalMs)

@@ -1199,22 +1199,40 @@ let main argv =
   let gitSyncer =
     match gitOpsConfig with
     | Some cfg ->
-      // Tenant resolution order:
+      // Tenant resolution. The configured value is always a *slug*; we
+      // resolve it through `tenantStore.TryGetTenantBySlug` to the
+      // opaque TenantId the auth layer attaches to API requests.
+      // Writing under the raw slug would create parallel rows in
+      // pb_dashboards (slug-keyed + id-keyed) that are invisible to
+      // each other.
+      //
+      // Slug resolution order:
       //   1. --gitops-tenant= / PULSE_GITOPS_TENANT (explicit override)
       //   2. PULSE_WORKSPACE_SLUG (set by the cloud provisioner for every
       //      workspace machine — the conventional name for "this
       //      workspace's tenant"; lets dogfood work with zero extra config)
-      //   3. singleTenantId sentinel (__local__) — useful for single-tenant
-      //      dev runs but invisible to multi-tenant workspaces.
-      let targetTenant () =
-        let pick =
-          envOr "PULSE_GITOPS_TENANT" (argValue "--gitops-tenant=")
-          |> Option.orElseWith (fun () ->
-               let v = Environment.GetEnvironmentVariable "PULSE_WORKSPACE_SLUG"
-               if String.IsNullOrWhiteSpace v then None else Some v)
-        match pick with
-        | Some slug -> PulseBoard.Tenancy.TenantId (slug.Trim())
-        | None -> PulseBoard.Dashboards.singleTenantId
+      //   3. None — single-tenant mode pins to the __local__ sentinel;
+      //      multi-tenant returns None and the syncer skips the
+      //      reconcile with a logged error.
+      let targetTenant () : PulseBoard.Tenancy.TenantId option =
+        if not multiTenant then
+          Some PulseBoard.Dashboards.singleTenantId
+        else
+          let slug =
+            envOr "PULSE_GITOPS_TENANT" (argValue "--gitops-tenant=")
+            |> Option.orElseWith (fun () ->
+                 let v = Environment.GetEnvironmentVariable "PULSE_WORKSPACE_SLUG"
+                 if String.IsNullOrWhiteSpace v then None else Some v)
+          match slug with
+          | None ->
+            eprintfn "  [gitops] no tenant slug configured (set PULSE_GITOPS_TENANT or PULSE_WORKSPACE_SLUG)"
+            None
+          | Some s ->
+            match tenantStore.TryGetTenantBySlug s with
+            | Some t -> Some t.id
+            | None ->
+              eprintfn "  [gitops] tenant slug %s not found in store; cannot sync" s
+              None
       let s = PulseBoard.GitSync.Syncer(cfg, dashboardRepo, ruleStore, targetTenant)
       (try s.SyncOnce(force = true) |> ignore
        with ex -> eprintfn "  [WARN] initial git-sync failed: %s" ex.Message)
