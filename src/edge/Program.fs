@@ -1199,8 +1199,20 @@ let main argv =
   let gitSyncer =
     match gitOpsConfig with
     | Some cfg ->
+      // Tenant resolution order:
+      //   1. --gitops-tenant= / PULSE_GITOPS_TENANT (explicit override)
+      //   2. PULSE_WORKSPACE_SLUG (set by the cloud provisioner for every
+      //      workspace machine — the conventional name for "this
+      //      workspace's tenant"; lets dogfood work with zero extra config)
+      //   3. singleTenantId sentinel (__local__) — useful for single-tenant
+      //      dev runs but invisible to multi-tenant workspaces.
       let targetTenant () =
-        match envOr "PULSE_GITOPS_TENANT" (argValue "--gitops-tenant=") with
+        let pick =
+          envOr "PULSE_GITOPS_TENANT" (argValue "--gitops-tenant=")
+          |> Option.orElseWith (fun () ->
+               let v = Environment.GetEnvironmentVariable "PULSE_WORKSPACE_SLUG"
+               if String.IsNullOrWhiteSpace v then None else Some v)
+        match pick with
         | Some slug -> PulseBoard.Tenancy.TenantId (slug.Trim())
         | None -> PulseBoard.Dashboards.singleTenantId
       let s = PulseBoard.GitSync.Syncer(cfg, dashboardRepo, ruleStore, targetTenant)
