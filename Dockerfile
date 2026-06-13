@@ -6,8 +6,10 @@ RUN dotnet publish src/edge/PulseBoard.fsproj -c Release -o /out \
         /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
-# curl for container health checks (aspnet image is Debian slim and ships without it).
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# curl: container health checks (aspnet image is Debian slim and ships
+# without it). git: GitOps dashboard/rule syncer (GitSync.fs shells out
+# to the `git` CLI for clone/fetch).
+RUN apt-get update && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out .
