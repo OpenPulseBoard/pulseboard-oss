@@ -1090,7 +1090,12 @@ function renderDashList(body, result, p) {
 
 // ── Alert list ────────────────────────────────────────────────────────
 // Fetches /api/alerts and shows name + state.
+// In-flight guard: the dashboard refresh ticker re-renders panels on a
+// short interval, so we drop overlapping calls instead of stacking them.
+let _alertListInFlight = false;
 async function renderAlertList(body, result, p) {
+  if (_alertListInFlight) return;
+  _alertListInFlight = true;
   body.innerHTML = '<div class="empty">loading…</div>';
   const editLink = `<div style="text-align:right;margin-bottom:4px;">
        <a href="#/alerts" style="font-size:10px;color:var(--accent);">Edit rules →</a></div>`;
@@ -4578,12 +4583,21 @@ function renderIncidents(rows) {
 
 function startFiringPoll() {
   stopFiringPoll();
-  _firingPollTimer = setInterval(() => {
-    if (_alertsSub === "firing" && !document.hidden) loadFiringAlerts(true);
-  }, 10000);
+  // Self-rescheduling tick: only queue the next call after the current
+  // one settles, so a slow /api/alerts response can't stack overlapping
+  // requests (which otherwise compound on the server and ourselves).
+  const tick = async () => {
+    if (_alertsSub === "firing" && !document.hidden) {
+      try { await loadFiringAlerts(true); } catch { /* logged inside */ }
+    }
+    if (_alertsSub === "firing") {
+      _firingPollTimer = setTimeout(tick, 10000);
+    }
+  };
+  _firingPollTimer = setTimeout(tick, 10000);
 }
 function stopFiringPoll() {
-  if (_firingPollTimer) { clearInterval(_firingPollTimer); _firingPollTimer = null; }
+  if (_firingPollTimer) { clearTimeout(_firingPollTimer); _firingPollTimer = null; }
 }
 
 function updateFiringBadge(alerts) {
@@ -4595,20 +4609,36 @@ function updateFiringBadge(alerts) {
 }
 
 // Background poll so the nav badge reflects firing alerts from any view.
+// In-flight guard: this ticker runs from every view and can race with
+// loadFiringAlerts on the Firing sub-view, so we drop the badge poll
+// whenever a request is still in flight.
+let _badgePollInFlight = false;
 async function pollFiringBadge() {
+  if (_badgePollInFlight) return;
+  _badgePollInFlight = true;
   try {
     const r = await authFetch("/api/alerts");
     if (!r.ok) return;
     updateFiringBadge(await r.json());
   } catch { /* best-effort */ }
+  finally { _badgePollInFlight = false; }
 }
 function startBadgePoll() {
   if (_badgePollTimer) return;
+  const tick = async () => {
+    if (!document.hidden) await pollFiringBadge();
+    _badgePollTimer = setTimeout(tick, 20000);
+  };
   pollFiringBadge();
-  _badgePollTimer = setInterval(() => { if (!document.hidden) pollFiringBadge(); }, 20000);
+  _badgePollTimer = setTimeout(tick, 20000);
 }
 
 async function loadFiringAlerts(quiet) {
+  // In-flight guard: the firing-tab poller, the nav-badge poller, and
+  // ack-button handlers can all call this concurrently. Drop overlaps so
+  // /api/alerts isn't called again before the previous response returns.
+  if (loadFiringAlerts._inFlight) return;
+  loadFiringAlerts._inFlight = true;
   const host = $("firing-list");
   if (!quiet) host.innerHTML = '<div class="rules-empty" style="padding:0 20px;">Loading…</div>';
   try {
@@ -4632,6 +4662,8 @@ async function loadFiringAlerts(quiet) {
     renderFiringAlerts();
   } catch (e) {
     host.innerHTML = `<div class="rules-empty" style="padding:0 20px;color:var(--err);">Failed to load alerts: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    loadFiringAlerts._inFlight = false;
   }
 }
 
