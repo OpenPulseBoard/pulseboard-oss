@@ -118,7 +118,7 @@ let ``Syncer clones a repo and reconciles dashboards and rules`` () =
         { url = repo; branch = "main"; subPath = ""; intervalMs = 30000
           sshKeyPath = None; token = None
           workDir = Path.Combine(tmpDir (), "checkout"); prune = true }
-    let s = Syncer(cfg, dashRepo, ruleStore, fun () -> tid)
+    let s = Syncer(cfg, dashRepo, ruleStore, fun () -> Some tid)
 
     match s.SyncOnce(force = true) with
     | Result.Ok r ->
