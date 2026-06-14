@@ -81,7 +81,7 @@
       padding: 12px;
       gap: 10px;
     }
-    header.topbar .who { color: var(--muted); margin-top: auto; margin-left: 0; }
+    header.topbar .who { color: var(--muted); }
 
     @media (max-width: 980px) {
       nav.tabs { padding-left: 12px; }
@@ -94,16 +94,16 @@
 
 <header class="topbar">
   <div class="shell-topbar-row">
-    <h1 class="shell-brand-row"><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
+    <h1><img id="brand-logo" class="shell-brand-logo" src="/pulse-board-logo-dark.svg" alt="PulseBoard" /></h1>
     <button id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="main-nav" aria-expanded="true">☰</button>
   </div>
   <nav id="main-nav"></nav>
-  <span class="who" id="whoami">checking session…</span>
-  <span id="workspace-badge" class="shell-workspace-badge" title="Active workspace">
+  <span class="status who" id="whoami">checking session…</span>
+  <span class="status shell-workspace-badge" id="workspace-badge" title="Active workspace">
     <span class="shell-workspace-pill">workspace</span>
-    <span id="workspace-slug">—</span>
+    <span id="workspace-slug" class="shell-workspace-slug">—</span>
   </span>
-  <button class="ghost shell-theme-btn" id="theme-toggle" title="Toggle light/dark mode">🌙</button>
+  <button id="theme-toggle" class="ghost shell-theme-btn" title="Toggle light/dark mode">🌙</button>
   <button class="ghost" id="signOut" style="display:none;">Sign out</button>
 </header>
 
