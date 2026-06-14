@@ -1385,6 +1385,32 @@ let main argv =
       printfn "  AgentStore:  in-memory (ephemeral — pass --postgres=... to persist enrolled agents)"
       PulseBoard.AgentApi.InMemoryAgentStore() :> _
 
+  // Per-tenant desired-config groups + HMAC-signed config push.
+  let agentGroupStore : PulseBoard.AgentGroups.IAgentGroupStore =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgAgentGroupStore.ensureSchema cs
+        printfn "  AgentGroupStore: Postgres (schema ensured)"
+        PulseBoard.PgAgentGroupStore.PgAgentGroupStore(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres agent-group store: %s" ex.Message
+        exit 2
+    | None ->
+      printfn "  AgentGroupStore: in-memory (ephemeral)"
+      PulseBoard.AgentGroups.InMemoryAgentGroupStore() :> _
+
+  // HMAC key used to sign GET /api/agent/v1/config payloads. Loaded
+  // from PULSE_AGENT_CONFIG_HMAC_KEY (base64) when set, otherwise
+  // minted on first start and persisted under dataDir so the same key
+  // survives restarts and is handed back to every newly-enrolled agent.
+  let agentHmacKey, agentHmacKeyB64 =
+    let envKey =
+      let v = System.Environment.GetEnvironmentVariable "PULSE_AGENT_CONFIG_HMAC_KEY"
+      if System.String.IsNullOrWhiteSpace v then None else Some v
+    let path = Path.Combine(dataDir, "agent-config-hmac.key")
+    PulseBoard.AgentGroups.loadOrInitSecret envKey path
+
   let protectIngest (inner : WebPart) : WebPart =
     if multiTenant then
       resolveSession (
@@ -1522,7 +1548,9 @@ let main argv =
   // endpoints (GET /api/agents, POST /api/agents/token) need a tenant
   // session.
   let agentApiInner =
-    let raw = PulseBoard.AgentApi.webPart multiTenant agentStore
+    let raw =
+      PulseBoard.AgentApi.webPart
+        multiTenant agentStore agentGroupStore agentHmacKey agentHmacKeyB64
     if multiTenant then
       choose [
         // Enroll: tenant-key bearer is optional but recognised.

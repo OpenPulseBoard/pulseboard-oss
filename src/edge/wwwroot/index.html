@@ -261,17 +261,27 @@
 <div id="view-agents" class="hidden">
   <div class="lib-header">
     <h2>Agent Fleet</h2>
-    <p>Manage PulseAgent instances enrolled in this workspace.</p>
+    <p>Manage PulseAgent instances enrolled in this workspace. Each agent
+       belongs to a <strong>group</strong>; the group&rsquo;s overlay TOML is
+       merged on top of the agent&rsquo;s local config on every poll.</p>
     <button id="agents-gen-token-btn" class="primary" style="margin-top:8px;">Generate enrollment token</button>
+    <button id="ag-new-btn" style="margin-top:8px;margin-left:6px;">+ New group</button>
   </div>
+
+  <div style="padding:0 20px 8px;">
+    <h3 style="font-size:13px;color:var(--muted);font-weight:500;margin:8px 0;">Groups</h3>
+    <div id="agent-groups-list" class="agent-groups-list"></div>
+  </div>
+
   <table class="agents-table" id="agents-table">
     <thead>
       <tr>
         <th></th>
         <th>Hostname</th>
         <th>Version</th>
+        <th>Config</th>
+        <th>Group</th>
         <th>Last seen</th>
-        <th>Enrolled</th>
       </tr>
     </thead>
     <tbody id="agents-body"></tbody>
@@ -599,6 +609,43 @@
         <pre id="agents-token-snippet" style="background:var(--panel-2);border-radius:6px;padding:10px;
              font-size:12px;margin-top:8px;overflow-x:auto;"></pre>
       </details>
+    </div>
+  </div>
+</div>
+
+<!-- Agent group editor modal -->
+<div class="modal-backdrop" id="ag-modal">
+  <div class="modal" style="max-width:640px;">
+    <header>
+      <h2 id="ag-modal-title">Agent group</h2>
+      <button id="ag-modal-close">×</button>
+    </header>
+    <div class="body">
+      <div class="rule-field-row">
+        <label for="ag-f-id">Id</label>
+        <input id="ag-f-id" type="text" placeholder="production" />
+      </div>
+      <div class="rule-field-row">
+        <label for="ag-f-name">Name</label>
+        <input id="ag-f-name" type="text" placeholder="Production hosts" />
+      </div>
+      <div class="rule-field-row" style="align-items:flex-start;">
+        <label for="ag-f-overlay" style="padding-top:6px;">Overlay TOML</label>
+        <textarea id="ag-f-overlay" rows="14"
+          style="width:100%;font-family:monospace;font-size:12px;"
+          placeholder="[processors.cardinality_guard]
+max_series_per_metric = 5000
+"></textarea>
+      </div>
+      <p style="color:var(--muted);font-size:12px;">
+        Overlay TOML is merged on top of each agent&rsquo;s local config.
+        Tables merge recursively; arrays and scalars in the overlay replace
+        the base. Saving bumps the group version so agents pick the change
+        up on their next poll.
+      </p>
+      <div style="text-align:right;margin-top:12px;">
+        <button id="ag-save-btn" class="primary">Save</button>
+      </div>
     </div>
   </div>
 </div>

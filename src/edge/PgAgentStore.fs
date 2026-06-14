@@ -24,9 +24,13 @@ CREATE TABLE IF NOT EXISTS pb_agents (
   config_hash     TEXT   NOT NULL DEFAULT '',
   last_seen_ms    BIGINT NOT NULL,
   enrolled_at_ms  BIGINT NOT NULL,
-  api_key_hash    TEXT   NOT NULL
+  api_key_hash    TEXT   NOT NULL,
+  group_id        TEXT   NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS pb_agents_tenant_idx ON pb_agents (tenant_id);
+-- Backfill for installs that pre-date the group_id column. Safe to run
+-- repeatedly; ADD COLUMN IF NOT EXISTS keeps it idempotent on PG 9.6+.
+ALTER TABLE pb_agents ADD COLUMN IF NOT EXISTS group_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS pb_agent_enroll_tokens (
   token         TEXT   PRIMARY KEY,
@@ -78,7 +82,8 @@ type PgAgentStore(connectionString : string) =
       version    = r.GetString 3
       configHash = r.GetString 4
       lastSeen   = r.GetInt64  5
-      enrolledAt = r.GetInt64  6 }
+      enrolledAt = r.GetInt64  6
+      groupId    = (if r.FieldCount > 7 && not (r.IsDBNull 7) then r.GetString 7 else "") }
 
   interface IAgentStore with
 
@@ -145,7 +150,8 @@ type PgAgentStore(connectionString : string) =
         version    = version
         configHash = apiKey
         lastSeen   = now
-        enrolledAt = enrolledAt }
+        enrolledAt = enrolledAt
+        groupId    = "" }
 
     member _.Checkin(agentId, version, configHash, _metaJson) =
       use conn = openConn ()
@@ -165,7 +171,7 @@ type PgAgentStore(connectionString : string) =
       use conn = openConn ()
       use cmd =
         new NpgsqlCommand(
-          "SELECT id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms \
+          "SELECT id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms, group_id \
              FROM pb_agents WHERE tenant_id = @tid ORDER BY enrolled_at_ms DESC",
           conn)
       cmd.Parameters.AddWithValue("tid", tenantId) |> ignore
@@ -178,7 +184,7 @@ type PgAgentStore(connectionString : string) =
       use conn = openConn ()
       use cmd =
         new NpgsqlCommand(
-          "SELECT id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms \
+          "SELECT id, tenant_id, hostname, version, config_hash, last_seen_ms, enrolled_at_ms, group_id \
              FROM pb_agents WHERE id = @id",
           conn)
       cmd.Parameters.AddWithValue("id", agentId) |> ignore
@@ -231,6 +237,16 @@ type PgAgentStore(connectionString : string) =
         if nowMs() <= exp then Some tid else None
       else
         None
+
+    member _.SetGroup(agentId, groupId) =
+      use conn = openConn ()
+      use cmd =
+        new NpgsqlCommand(
+          "UPDATE pb_agents SET group_id = @gid WHERE id = @id",
+          conn)
+      cmd.Parameters.AddWithValue("gid", (if isNull groupId then "" else groupId)) |> ignore
+      cmd.Parameters.AddWithValue("id",  agentId) |> ignore
+      cmd.ExecuteNonQuery() > 0
 
 // ---------------------------------------------------------------------------
 // Ingest middleware: accept agent bearer credentials

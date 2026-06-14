@@ -6446,14 +6446,23 @@ $("rule-modal").addEventListener("click", (e) => {
 // Service Map tab — SVG with nodes on a circle (Phase 4 #4)
 // =====================================================================
 // ── Phase 13: Agents fleet ──────────────────────────────────────────────────
+let _agentGroups = [];   // [{id, name, overlayToml, version, updatedAt}]
+let _agentList   = [];   // last GET /api/agents response
+
 async function loadAgents() {
   const tbody = $("agents-body");
-  tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">Loading…</td></tr>';
   try {
-    const list = await api("GET", "/api/agents");
-    renderAgents(Array.isArray(list) ? list : []);
+    const [list, groups] = await Promise.all([
+      api("GET", "/api/agents"),
+      api("GET", "/api/agent-groups").catch(() => []),
+    ]);
+    _agentList   = Array.isArray(list)   ? list   : [];
+    _agentGroups = Array.isArray(groups) ? groups : [];
+    renderAgentGroups();
+    renderAgents(_agentList);
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">Failed: ${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Failed: ${e.message}</td></tr>`;
   }
 }
 
@@ -6474,22 +6483,138 @@ function fmtAgo(ms) {
   return Math.floor(s/86400) + "d ago";
 }
 
+function groupById(id) {
+  return _agentGroups.find(g => g.id === (id || "default"));
+}
+
+function configCell(a) {
+  const g = groupById(a.groupId);
+  const want = g ? g.version : null;
+  const have = parseInt(a.configHash || "0", 10);
+  if (!g)                        return '<span class="agent-cfg none" title="agent group missing">unknown</span>';
+  if (!have || isNaN(have))      return `<span class="agent-cfg pending" title="agent has not reported a config version yet">v${want} pending</span>`;
+  if (have === want)             return `<span class="agent-cfg ok" title="agent is in sync">v${want} \u2713</span>`;
+  return `<span class="agent-cfg drift" title="agent is on v${have}; desired v${want}">v${have} \u2192 v${want}</span>`;
+}
+
 function renderAgents(list) {
   const tbody = $("agents-body");
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No agents enrolled yet. Generate an enrollment token and run install.sh on your hosts.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No agents enrolled yet. Generate an enrollment token and run install.sh on your hosts.</td></tr>';
     return;
   }
+  const opts = _agentGroups.map(g =>
+    `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name || g.id)}</option>`
+  ).join("");
   tbody.innerHTML = list.map(a => {
     const st = agentStatus(a.lastSeen);
-    return `<tr>
+    const gid = a.groupId || "default";
+    return `<tr data-aid="${escapeHtml(a.id)}">
       <td><span class="agent-dot ${st}" title="${st}"></span></td>
       <td>${escapeHtml(a.hostname || a.id)}</td>
       <td style="color:var(--muted);font-size:12px;">${escapeHtml(a.version || "—")}</td>
+      <td>${configCell(a)}</td>
+      <td>
+        <select class="agent-group-sel" data-aid="${escapeHtml(a.id)}" style="font-size:12px;">
+          ${opts.replace(`value="${escapeHtml(gid)}"`, `value="${escapeHtml(gid)}" selected`)}
+        </select>
+      </td>
       <td title="${new Date(a.lastSeen).toISOString()}">${fmtAgo(a.lastSeen)}</td>
-      <td style="color:var(--muted);font-size:12px;" title="${new Date(a.enrolledAt).toISOString()}">${fmtAgo(a.enrolledAt)}</td>
     </tr>`;
   }).join("");
+  // Wire group reassignment selects.
+  tbody.querySelectorAll(".agent-group-sel").forEach(sel => {
+    sel.addEventListener("change", async (e) => {
+      const aid = e.target.dataset.aid;
+      const gid = e.target.value;
+      try {
+        await api("POST", `/api/agents/${encodeURIComponent(aid)}/group`, { groupId: gid });
+        loadAgents();
+      } catch (err) {
+        alert("Failed to move agent: " + err.message);
+        loadAgents();
+      }
+    });
+  });
+}
+
+function renderAgentGroups() {
+  const host = $("agent-groups-list");
+  if (!host) return;
+  if (!_agentGroups.length) {
+    host.innerHTML = '<div style="color:var(--muted);font-size:13px;">No groups.</div>';
+    return;
+  }
+  host.innerHTML = _agentGroups.map(g => {
+    const isDefault = g.id === "default";
+    const overlayLen = (g.overlayToml || "").length;
+    const overlayBadge = overlayLen > 0
+      ? `<span class="ag-overlay-badge" title="${overlayLen} bytes">${overlayLen} bytes overlay</span>`
+      : `<span class="ag-overlay-badge none">empty overlay</span>`;
+    return `<div class="ag-group">
+      <div class="ag-group-head">
+        <strong>${escapeHtml(g.name || g.id)}</strong>
+        <span class="ag-group-id">${escapeHtml(g.id)}</span>
+        <span class="ag-group-ver">v${g.version}</span>
+        ${overlayBadge}
+      </div>
+      <div class="ag-group-actions">
+        <button class="ag-edit" data-gid="${escapeHtml(g.id)}">Edit</button>
+        ${isDefault ? "" : `<button class="ag-del" data-gid="${escapeHtml(g.id)}">Delete</button>`}
+      </div>
+    </div>`;
+  }).join("");
+  host.querySelectorAll(".ag-edit").forEach(b =>
+    b.addEventListener("click", () => openAgentGroupModal(b.dataset.gid)));
+  host.querySelectorAll(".ag-del").forEach(b =>
+    b.addEventListener("click", () => deleteAgentGroup(b.dataset.gid)));
+}
+
+function openAgentGroupModal(id) {
+  const isNew = !id;
+  const g = isNew
+    ? { id: "", name: "", overlayToml: "", version: 0 }
+    : (_agentGroups.find(x => x.id === id) || { id, name: "", overlayToml: "", version: 0 });
+  $("ag-modal-title").textContent = isNew ? "New agent group" : `Edit group · ${g.name || g.id}`;
+  $("ag-f-id").value      = g.id;
+  $("ag-f-id").disabled   = !isNew;
+  $("ag-f-name").value    = g.name || "";
+  $("ag-f-overlay").value = g.overlayToml || "";
+  $("ag-modal").classList.add("open");
+  $("ag-modal").dataset.editing = isNew ? "" : g.id;
+}
+
+async function saveAgentGroup() {
+  const editing = $("ag-modal").dataset.editing || "";
+  const id = (editing || $("ag-f-id").value || "").trim();
+  if (!id) { alert("Group id is required."); return; }
+  if (!/^[a-z0-9][a-z0-9_-]{0,62}$/i.test(id)) {
+    alert("Group id must be alphanumeric (with optional - or _).");
+    return;
+  }
+  const body = {
+    id,
+    name:        $("ag-f-name").value.trim() || id,
+    overlayToml: $("ag-f-overlay").value,
+  };
+  try {
+    await api("PUT", `/api/agent-groups/${encodeURIComponent(id)}`, body);
+    $("ag-modal").classList.remove("open");
+    loadAgents();
+  } catch (e) {
+    alert("Save failed: " + e.message);
+  }
+}
+
+async function deleteAgentGroup(id) {
+  if (id === "default") return;
+  if (!confirm(`Delete group "${id}"? Agents assigned to it will fall back to "default".`)) return;
+  try {
+    await api("DELETE", `/api/agent-groups/${encodeURIComponent(id)}`);
+    loadAgents();
+  } catch (e) {
+    alert("Delete failed: " + e.message);
+  }
 }
 
 async function generateEnrollToken() {
@@ -6515,6 +6640,18 @@ $("agents-gen-token-btn").addEventListener("click", generateEnrollToken);
 $("agents-token-modal-close").addEventListener("click", () => $("agents-token-modal").classList.remove("open"));
 $("agents-token-modal").addEventListener("click", (e) => {
   if (e.target === $("agents-token-modal")) $("agents-token-modal").classList.remove("open");
+});
+
+// Agent-group editor wiring (elements declared in index.html).
+const _agNewBtn   = document.getElementById("ag-new-btn");
+if (_agNewBtn) _agNewBtn.addEventListener("click", () => openAgentGroupModal(null));
+const _agSaveBtn  = document.getElementById("ag-save-btn");
+if (_agSaveBtn) _agSaveBtn.addEventListener("click", saveAgentGroup);
+const _agCloseBtn = document.getElementById("ag-modal-close");
+if (_agCloseBtn) _agCloseBtn.addEventListener("click", () => $("ag-modal").classList.remove("open"));
+const _agModalEl  = document.getElementById("ag-modal");
+if (_agModalEl) _agModalEl.addEventListener("click", (e) => {
+  if (e.target === _agModalEl) _agModalEl.classList.remove("open");
 });
 
 // ── End Phase 13 agents ─────────────────────────────────────────────────────
