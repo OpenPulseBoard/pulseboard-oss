@@ -27,6 +27,7 @@
     <Compile Include="Unit/TenancyTests.fs" />
     <Compile Include="Unit/SyntheticsTests.fs" />
     <Compile Include="Unit/AgentGroupsTests.fs" />
+    <Compile Include="Unit/CardinalityKillerTests.fs" />
     <Compile Include="Unit/StatusPagesTests.fs" />
     <Compile Include="Unit/GitSyncTests.fs" />
     <Compile Include="Unit/ExportCodeTests.fs" />

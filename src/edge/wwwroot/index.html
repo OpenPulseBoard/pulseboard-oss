@@ -288,6 +288,59 @@
   </table>
 </div>
 
+<!-- Costs view (Phase 14.3) -->
+<div id="view-costs" class="hidden">
+  <div class="lib-header">
+    <h2>Costs &amp; Cardinality</h2>
+    <p>Top noisy series for this workspace, with one-click drop of the
+       offending label. Drops apply immediately on the edge (the
+       relabelled series stops counting toward your bill within a
+       cycle) and are pushed to every PulseAgent in the
+       <strong>default</strong> group on its next config poll
+       (~60&nbsp;s).</p>
+    <button id="costs-refresh-btn" style="margin-top:8px;">⟳ Refresh</button>
+  </div>
+
+  <div style="padding:0 20px;">
+    <h3 style="font-size:13px;color:var(--muted);font-weight:500;margin:12px 0 6px;">Active drop rules</h3>
+    <div id="costs-drops" class="cost-drops-list"></div>
+  </div>
+
+  <table class="agents-table" id="costs-series-table" style="margin-top:18px;">
+    <thead>
+      <tr>
+        <th>Series</th>
+        <th style="text-align:right;">Samples</th>
+        <th style="text-align:right;">Est&nbsp;$/mo</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="costs-series-body"></tbody>
+  </table>
+</div>
+
+<!-- Drop-label modal -->
+<div class="modal-backdrop" id="costs-drop-modal">
+  <div class="modal" style="max-width:520px;">
+    <header>
+      <h2>Drop label</h2>
+      <button id="costs-drop-modal-close">×</button>
+    </header>
+    <div class="body">
+      <p style="margin:0 0 10px;font-size:13px;color:var(--muted);"
+         id="costs-drop-series-name"></p>
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Label to drop</label>
+      <select id="costs-drop-label" style="width:100%;padding:6px 8px;margin-bottom:12px;"></select>
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Reason (shown in audit + UI)</label>
+      <input id="costs-drop-reason" type="text" placeholder="noisy user_id" style="width:100%;padding:6px 8px;" />
+      <div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;">
+        <button id="costs-drop-cancel">Cancel</button>
+        <button id="costs-drop-confirm" class="primary">Drop label</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Synthetic & uptime checks view -->
 <div id="view-synthetics" class="hidden">
   <div class="lib-header">

@@ -10,6 +10,7 @@
     { id: "tab-library",    href: "/app#/library",    label: "Library",     icon: "\uD83D\uDCDA" },
     { id: "tab-alerts",     href: "/app#/alerts",     label: "Alerts",      icon: "\uD83D\uDD14", badgeId: "alerts-nav-badge" },
     { id: "tab-agents",     href: "/app#/agents",     label: "Agents",      icon: "\uD83E\uDD16" },
+    { id: "tab-costs",      href: "/app#/costs",      label: "Costs",       icon: "\uD83D\uDCB0" },
     { id: "tab-synthetics", href: "/app#/uptime",     label: "Uptime",      icon: "\u23F1\uFE0F" },
     { id: "tab-status",     href: "/app#/status",     label: "Status",      icon: "\uD83D\uDEA6" },
     { id: "tab-live",       href: "/live",            label: "Live",        icon: "\uD83D\uDFE2" },
@@ -32,6 +33,7 @@
       "library":    "tab-library",
       "alerts":     "tab-alerts",
       "agents":     "tab-agents",
+      "costs":      "tab-costs",
       "uptime":     "tab-synthetics",
       "synthetics": "tab-synthetics",
       "status":     "tab-status"

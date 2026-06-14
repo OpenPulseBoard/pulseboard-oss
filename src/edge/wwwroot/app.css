@@ -542,6 +542,18 @@
   .ag-overlay-badge { font-size:11px; color:var(--muted); }
   .ag-overlay-badge.none { font-style:italic; }
   .ag-group-actions button { font-size:11px; padding:2px 8px; }
+  /* ── Costs / cardinality killer (Phase 14.3) ── */
+  .cost-drops-list { display:flex; flex-wrap:wrap; gap:6px; }
+  .cost-drop-pill { display:inline-flex; align-items:center; gap:8px;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:14px;
+    padding:3px 4px 3px 10px; font-size:12px; }
+  .cost-drop-pill code { font-size:12px; color:var(--fg); }
+  .cost-drop-reason { color:var(--muted); max-width:200px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .cost-drop-remove { background:transparent; border:none; color:var(--muted);
+    cursor:pointer; font-size:14px; line-height:1; padding:0 6px; border-radius:50%; }
+  .cost-drop-remove:hover { color:var(--err); background:var(--panel); }
+  .cost-drop-btn { font-size:11px; padding:2px 8px; }
   /* ── Synthetic & uptime checks (Phase 14.8) ── */
   .syn-table th, .syn-table td { vertical-align:middle; }
   .syn-table button { font-size:11px; padding:2px 8px; margin-left:4px; }

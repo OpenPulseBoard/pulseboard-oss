@@ -104,6 +104,7 @@ let private emitQuotaDeny (q : IngestQuotas) (selfM : MetricStore option)
 let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
             (meter : PulseBoard.Billing.IBillingMeter option)
             (costs : PulseBoard.Costs.ICostTracker option)
+            (killer : PulseBoard.CardinalityKiller.ICardinalityKillerStore option)
             (selfMetrics : MetricStore option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
@@ -120,7 +121,14 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
       let samples = ResizeArray<MetricSample>()
       for el in items do
         match tryGetString el "name", tryGetDouble el "value" with
-        | Some name, Some value ->
+        | Some rawName, Some value ->
+          // Phase 14.3 — strip any labels the tenant has marked as
+          // runaway cardinality before we measure or store anything.
+          // Cheap no-op when no kill rules are active for this tenant.
+          let name =
+            match killer, tenantId with
+            | Some k, Some tid -> PulseBoard.CardinalityKiller.stripLabels k tid rawName
+            | _ -> rawName
           let admit =
             match quotas, tenantId with
             | Some q, Some tid ->
@@ -257,8 +265,9 @@ let webPart (storage : IStorageClient) (quotas : IngestQuotas option)
             (secrets : PulseBoard.Secrets.ISecretsStore option)
             (meter   : PulseBoard.Billing.IBillingMeter option)
             (costs   : PulseBoard.Costs.ICostTracker option)
+            (killer  : PulseBoard.CardinalityKiller.ICardinalityKillerStore option)
             (selfMetrics : MetricStore option) : WebPart =
   choose [
-    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter costs selfMetrics
+    POST >=> path "/ingest/metrics" >=> metrics storage quotas meter costs killer selfMetrics
     POST >=> path "/ingest/logs"    >=> logs    storage quotas secrets meter selfMetrics
   ]

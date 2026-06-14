@@ -120,7 +120,7 @@ let start (stores : TestStores) : TestEnv =
     choose [
       GET  >=> path "/api/healthz" >=> OK """{"ok":true}"""
       pathStarts "/ingest" >=>
-        PulseBoard.Ingest.webPart stores.Storage None None None None None
+        PulseBoard.Ingest.webPart stores.Storage None None None None None None
       POST >=> path "/v1/metrics" >=>
         PulseBoard.Otlp.metrics stores.Storage None
       POST >=> path "/loki/api/v1/push" >=>
@@ -162,7 +162,7 @@ let startMultiTenant (stores : TestStores) : TestEnv =
     choose [
       GET  >=> path "/api/healthz" >=> OK """{"ok":true}"""
       pathStarts "/ingest" >=>
-        authIngest (PulseBoard.Ingest.webPart stores.Storage None None None None None)
+        authIngest (PulseBoard.Ingest.webPart stores.Storage None None None None None None)
       POST >=> path "/v1/metrics" >=>
         authIngest (PulseBoard.Otlp.metrics stores.Storage None)
       POST >=> path "/loki/api/v1/push" >=>

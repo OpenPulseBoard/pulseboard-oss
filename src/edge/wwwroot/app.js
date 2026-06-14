@@ -92,6 +92,7 @@ function showView(name) {
   $("view-library").classList.toggle("hidden",    name !== "library");
   $("view-alerts").classList.toggle("hidden",     name !== "alerts");
   $("view-agents").classList.toggle("hidden",     name !== "agents");
+  $("view-costs").classList.toggle("hidden",      name !== "costs");
   $("view-synthetics").classList.toggle("hidden", name !== "synthetics");
   $("view-status").classList.toggle("hidden",     name !== "status");
   $("tab-dashboards").classList.toggle("active", name === "dashboards");
@@ -101,6 +102,7 @@ function showView(name) {
   $("tab-library").classList.toggle("active",    name === "library");
   $("tab-alerts").classList.toggle("active",     name === "alerts");
   $("tab-agents").classList.toggle("active",     name === "agents");
+  $("tab-costs").classList.toggle("active",      name === "costs");
   $("tab-synthetics").classList.toggle("active", name === "synthetics");
   $("tab-status").classList.toggle("active",     name === "status");
   if (name === "traces")  loadTraces();
@@ -108,6 +110,7 @@ function showView(name) {
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
   if (name === "alerts")  showAlertsSub(_alertsSub || "firing");
   if (name === "agents")  loadAgents();
+  if (name === "costs")   loadCosts();
   if (name === "synthetics") loadSynthetics();
   if (name === "status")     loadStatusPages();
 }
@@ -4033,6 +4036,7 @@ function router() {
     showView("alerts");
   }
   else if (h.startsWith("#/agents"))  showView("agents");
+  else if (h.startsWith("#/costs"))   showView("costs");
   else if (h.startsWith("#/uptime"))  showView("synthetics");
   else if (h.startsWith("#/status"))  showView("status");
   else if (h.startsWith("#/map"))     showView("map");
@@ -7197,6 +7201,122 @@ startBadgePoll();
     sel.appendChild(o);
   }
 })();
+
+// ── Phase 14.3: Costs & cardinality killer ──────────────────────────────
+let _costsSeries = [];
+let _costsDrops  = [];
+
+async function loadCosts() {
+  const tbody = $("costs-series-body");
+  tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">Loading…</td></tr>';
+  try {
+    const [series, drops] = await Promise.all([
+      api("GET", "/api/cost/series?top=50"),
+      api("GET", "/api/cost/dropped-labels").catch(() => []),
+    ]);
+    _costsSeries = (series && Array.isArray(series.series)) ? series.series : [];
+    _costsDrops  = Array.isArray(drops) ? drops : [];
+    renderCostsDrops();
+    renderCostsSeries();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">Failed: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function renderCostsDrops() {
+  const host = $("costs-drops");
+  if (!_costsDrops.length) {
+    host.innerHTML = '<div style="color:var(--muted);font-size:13px;">No active drop rules. Use the <em>Drop label</em> button on a row below to suppress a noisy label across this workspace.</div>';
+    return;
+  }
+  host.innerHTML = _costsDrops.map(d => `
+    <span class="cost-drop-pill">
+      <code>${escapeHtml(d.label)}</code>
+      <span class="cost-drop-reason" title="${escapeHtml(d.reason || '')}">${escapeHtml(d.reason || '—')}</span>
+      <button class="cost-drop-remove" data-label="${escapeHtml(d.label)}" title="Remove rule">×</button>
+    </span>
+  `).join("");
+  host.querySelectorAll(".cost-drop-remove").forEach(btn => {
+    btn.addEventListener("click", () => removeCostDrop(btn.getAttribute("data-label")));
+  });
+}
+
+function renderCostsSeries() {
+  const tbody = $("costs-series-body");
+  if (!_costsSeries.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">No samples recorded yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _costsSeries.map(s => {
+    const labels = parseInlineLabels(s.name);
+    const dropBtn = labels.length
+      ? `<button class="cost-drop-btn" data-name="${escapeHtml(s.name)}">Drop label</button>`
+      : '<span style="color:var(--muted);font-size:12px;">no labels</span>';
+    return `
+      <tr>
+        <td><code style="font-size:12px;">${escapeHtml(s.name)}</code></td>
+        <td style="text-align:right;">${fmtNum(s.samples)}</td>
+        <td style="text-align:right;">$${(Number(s.estimatedMonthlyUsd) || 0).toFixed(2)}</td>
+        <td style="text-align:right;">${dropBtn}</td>
+      </tr>`;
+  }).join("");
+  tbody.querySelectorAll(".cost-drop-btn").forEach(btn => {
+    btn.addEventListener("click", () => openDropModal(btn.getAttribute("data-name")));
+  });
+}
+
+function parseInlineLabels(name) {
+  if (!name) return [];
+  const open = name.indexOf("{");
+  const close = name.lastIndexOf("}");
+  if (open < 0 || close <= open) return [];
+  return name.slice(open + 1, close).split(",")
+    .map(p => p.trim())
+    .map(p => { const i = p.indexOf("="); return i > 0 ? p.slice(0, i).trim() : ""; })
+    .filter(Boolean);
+}
+
+function openDropModal(seriesName) {
+  const labels = parseInlineLabels(seriesName);
+  if (!labels.length) return;
+  $("costs-drop-series-name").textContent = seriesName;
+  const sel = $("costs-drop-label");
+  sel.innerHTML = labels.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join("");
+  $("costs-drop-reason").value = "";
+  $("costs-drop-modal").classList.add("open");
+}
+
+async function confirmDropLabel() {
+  const label  = $("costs-drop-label").value;
+  const reason = $("costs-drop-reason").value || "";
+  if (!label) return;
+  try {
+    await api("POST", "/api/cost/dropped-labels", { label, reason });
+    $("costs-drop-modal").classList.remove("open");
+    await loadCosts();
+  } catch (e) {
+    alert("Failed to add drop rule: " + e.message);
+  }
+}
+
+async function removeCostDrop(label) {
+  if (!label) return;
+  if (!confirm("Remove drop rule for label \"" + label + "\"?")) return;
+  try {
+    await api("DELETE", "/api/cost/dropped-labels/" + encodeURIComponent(label));
+    await loadCosts();
+  } catch (e) {
+    alert("Failed to remove drop rule: " + e.message);
+  }
+}
+
+$("costs-refresh-btn").addEventListener("click", loadCosts);
+$("costs-drop-cancel").addEventListener("click", () => $("costs-drop-modal").classList.remove("open"));
+$("costs-drop-modal-close").addEventListener("click", () => $("costs-drop-modal").classList.remove("open"));
+$("costs-drop-confirm").addEventListener("click", confirmDropLabel);
+$("costs-drop-modal").addEventListener("click", (e) => {
+  if (e.target === $("costs-drop-modal")) $("costs-drop-modal").classList.remove("open");
+});
 
 (async () => {
   if (!pbBearer()) { pbRedirectSignin(); return; }

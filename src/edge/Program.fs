@@ -1134,8 +1134,23 @@ let main argv =
   // Phase 8 #1 — per-series cost tracker tapped from /ingest/metrics.
   let costTracker : PulseBoard.Costs.ICostTracker =
     PulseBoard.Costs.InMemoryCostTracker() :> _
+  // Phase 14.3 — cardinality killer (Pg-backed when available so the
+  // drop list survives restarts; in-mem otherwise). Strips killed
+  // labels from inline-label series names in the ingest hot path.
+  let cardinalityKiller : PulseBoard.CardinalityKiller.ICardinalityKillerStore =
+    match pgConn with
+    | Some cs ->
+      try
+        PulseBoard.PgCardinalityKiller.ensureSchema cs
+        printfn "  CardinalityKiller: Postgres (schema ensured)"
+        PulseBoard.PgCardinalityKiller.PgCardinalityKillerStore(cs) :> _
+      with ex ->
+        eprintfn "  [ERROR] failed to initialise Postgres cardinality killer: %s" ex.Message
+        exit 2
+    | None ->
+      PulseBoard.CardinalityKiller.InMemoryCardinalityKillerStore() :> _
   let ingestInner =
-    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker) (Some metricStore)
+    PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker) (Some cardinalityKiller) (Some metricStore)
   let queryInner =
     PulseBoard.Query.webPart  metricStore logStore rollupStore (Some metricStore)
 
@@ -1513,7 +1528,10 @@ let main argv =
 
   let query : WebPart =
     let aiExplainInner = PulseBoard.Admin.aiExplainWebPart aiProvider auditLog
-    let combinedInner = choose [ gitOpsGuardInner; gitOpsStatusInner; exportInner; queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; statusInner; aiExplainInner; queryInner ]
+    let costApiInner =
+      PulseBoard.CostsApi.webPart
+        multiTenant costTracker cardinalityKiller agentGroupStore
+    let combinedInner = choose [ gitOpsGuardInner; gitOpsStatusInner; exportInner; queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; statusInner; aiExplainInner; costApiInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>
         resolveSession (
