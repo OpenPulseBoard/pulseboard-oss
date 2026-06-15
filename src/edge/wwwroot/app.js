@@ -7229,8 +7229,11 @@ startBadgePoll();
 // ── Phase 14.3: Costs & cardinality killer ──────────────────────────────
 let _costsSeries   = [];
 let _costsDrops    = [];
-let _costsForecast = null;
-let _costsForecastTimer = null;
+// `var` (not `let`) — these are touched by start/stopCostsForecastTimer,
+// which showView() calls on every route change including the very first
+// one, before this module-level statement is reached (TDZ).
+var _costsForecast = null;
+var _costsForecastTimer = null;
 
 async function loadCosts() {
   const tbody = $("costs-series-body");
