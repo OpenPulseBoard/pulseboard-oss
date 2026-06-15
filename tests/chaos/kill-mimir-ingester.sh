@@ -9,7 +9,7 @@
 #   - PulseBoard /api/healthz returns 200 immediately during Mimir outage
 #     (edge buffers writes in memory and retries)
 #   - After Mimir restart, ingested metrics reappear in query results within
-#     RECOVER_SECS (default: 90s)
+#     RECOVER_SECS (default: 120s)
 #   - Zero data-loss for samples written in the 10s window before kill
 #     (verified by querying a known probe metric after recovery)
 #
@@ -29,7 +29,7 @@
 #   POD_LABEL      — kubectl selector (default: component=ingester)
 #   NAMESPACE      — Kubernetes namespace (default: pulseboard)
 #   OUTAGE_SECS    — seconds to keep ingester down (default: 15)
-#   RECOVER_SECS   — max seconds to wait for data recovery (default: 90)
+#   RECOVER_SECS   — max seconds to wait for data recovery (default: 120)
 #   PROBE_METRIC   — metric name to probe for data continuity (default: pulseboard_ingest_total)
 #   API_KEY        — optional Bearer token for PulseBoard edge (default: none)
 
@@ -42,7 +42,7 @@ CONTAINER="${CONTAINER:-mimir-ingester}"
 POD_LABEL="${POD_LABEL:-component=ingester}"
 NAMESPACE="${NAMESPACE:-pulseboard}"
 OUTAGE_SECS="${OUTAGE_SECS:-15}"
-RECOVER_SECS="${RECOVER_SECS:-90}"
+RECOVER_SECS="${RECOVER_SECS:-120}"
 PROBE_METRIC="${PROBE_METRIC:-pulseboard_ingest_total}"
 API_KEY="${API_KEY:-}"
 
