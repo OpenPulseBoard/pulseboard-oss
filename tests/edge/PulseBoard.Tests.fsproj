@@ -49,6 +49,7 @@
     <Compile Include="Integration/AuthIsolationTests.fs" />
     <Compile Include="Integration/ProtocolIngestTests.fs" />
     <Compile Include="Integration/RoutingFlapTests.fs" />
+    <Compile Include="Integration/RoutingLateSilenceTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

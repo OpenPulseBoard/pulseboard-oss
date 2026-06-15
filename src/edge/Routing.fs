@@ -828,13 +828,47 @@ type Pipeline(configStore : IConfigStore,
                     kvT.Key gkey recvId
                     (recvById |> Map.toSeq |> Seq.map fst |> String.concat ", "))
           | Some recv ->
-            let alerts =
+            // Re-check gating on every flush. OnAlert only fires on
+            // Pending→Firing transitions, so a silence/mute/inhibition
+            // created AFTER the alert was routed would otherwise be
+            // ignored and the group would keep re-sending every
+            // groupIntervalMs until the alert resolved.
+            let routeMuted =
+              isMuted
+                (DateTimeOffset.FromUnixTimeMilliseconds now)
+                cfg.muteTimes cfg.route.muteTimeIds
+            if routeMuted then
+              selfMetrics.Record(
+                "pulse_alerts_muted_total", { ts = now; value = 1.0 })
+            else
+            let rawAlerts =
               state.fingerprints
               |> Seq.choose (fun fp ->
                 match bucket.TryGetValue fp with
                 | true, a -> Some a | _ -> None)
               |> Seq.toArray
-            if alerts.Length = 0 then () else
+            let alerts =
+              rawAlerts
+              |> Array.filter (fun a ->
+                let silenced =
+                  cfg.silences
+                  |> Array.exists (fun s -> silenceActive now s a.labels)
+                if silenced then
+                  selfMetrics.Record(
+                    "pulse_alerts_silenced_total",
+                    { ts = now; value = 1.0 })
+                  false
+                elif inhibited tid cfg a then
+                  selfMetrics.Record(
+                    "pulse_alerts_inhibited_total",
+                    { ts = now; value = 1.0 })
+                  false
+                else true)
+            if alerts.Length = 0 then
+              if rawAlerts.Length > 0 then
+                nlog (sprintf "flushDue tenant=%s group=%s -> SUPPRESSED (all %d alert(s) silenced/inhibited; group cadence preserved)"
+                        kvT.Key gkey rawAlerts.Length)
+            else
             // Acked? Suppress further sends (escalation halts; routine
             // group flush would also be noisy).
             let acked =
