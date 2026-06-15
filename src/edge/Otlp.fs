@@ -28,9 +28,9 @@ open PulseBoard.Ingest
 //   * Traces:  spans are counted only; storage waits for the Tempo
 //              backend in Phase 3.
 //
-// Content-Type: only application/x-protobuf is accepted in v1. The
-// application/json OTLP encoding (Proto3 JSON) can land later behind the
-// same handlers via a content-type fork.
+// Content-Type: both application/x-protobuf and application/json
+// (OTLP/HTTP Proto3 JSON) are accepted on /v1/metrics and /v1/traces.
+// /v1/logs is still protobuf-only — Phase 16 tracers don't ship logs.
 
 [<Struct>]
 type private AnyVal =
@@ -346,16 +346,14 @@ let private decodeExportTraceRequest (input : CodedInputStream) : ResourceSpansR
     | _ -> input.SkipLastField()
   arr.ToArray()
 
-/// Decode an OTLP `ExportTraceServiceRequest` into the public Span
+/// Lift the intermediate `ResourceSpansRec[]` (produced either by the
+/// protobuf decoder or by `decodeExportTraceJson`) into the public Span
 /// model used by `PulseBoard.Spans`. Resource-level attrs are merged
 /// into each span's attribute map; `service.name` is promoted to the
 /// span's first-class `service` field (default "unknown" when absent).
-/// Returns both the structured spans and the raw span count (so the
-/// existing billing path stays a single decode pass).
-let decodeSpans (raw : byte[]) : PulseBoard.Spans.Span[] * int =
-  use ms = new MemoryStream(raw)
-  let input = new CodedInputStream(ms)
-  let resources = decodeExportTraceRequest input
+/// Returns both the structured spans and the raw span count so the
+/// existing billing path stays a single pass.
+let private liftSpans (resources : ResourceSpansRec[]) : PulseBoard.Spans.Span[] * int =
   let out = ResizeArray<PulseBoard.Spans.Span>()
   let mutable count = 0
   for rs in resources do
@@ -387,6 +385,14 @@ let decodeSpans (raw : byte[]) : PulseBoard.Spans.Span[] * int =
             statusCode   = s.status
             attributes   = attrs })
   out.ToArray(), count
+
+/// Decode an OTLP/protobuf `ExportTraceServiceRequest` into the public
+/// Span model. See `liftSpans` for the resource → span attribute merge
+/// semantics.
+let decodeSpans (raw : byte[]) : PulseBoard.Spans.Span[] * int =
+  use ms = new MemoryStream(raw)
+  let input = new CodedInputStream(ms)
+  liftSpans (decodeExportTraceRequest input)
 
 // Backwards-compatible counter used by the original `traces` handler.
 let private countSpansScope (bytes : ByteString) : int =
@@ -639,6 +645,112 @@ let private decodeExportMetricsJson (raw : byte[]) : ResourceMetricsRec[] =
     rm.EnumerateArray() |> Seq.map jsonResourceMetrics |> Seq.toArray
   | _ -> [||]
 
+// ---------- OTLP/JSON trace decoder ----------
+// Mirrors `decodeExportMetricsJson` for `ExportTraceServiceRequest`.
+// Phase 16 tracers (Node `@pulseboard/tracer`, Python
+// `pulseboard-tracer`) and the Phase 15 Slice 4 Step Functions
+// `OtlpHttpSpanSink` both ship Proto3 JSON because the upstream OTLP
+// HTTP exporter doesn't speak JSON for traces but the F# Firehose
+// translator only emits JSON and the OSS edge is the only consumer.
+
+let private jsonHex (el : JsonElement) : string =
+  // OTLP/JSON encodes trace_id and span_id as lower-hex strings
+  // (16 / 8 bytes → 32 / 16 chars). Some encoders also accept
+  // base64; we don't, because the spec is hex-only.
+  match el.ValueKind with
+  | JsonValueKind.String -> el.GetString().ToLowerInvariant()
+  | _ -> ""
+
+let private jsonUint64Field (el : JsonElement) (name : string) : uint64 =
+  match el.TryGetProperty name with
+  | true, v ->
+    match v.ValueKind with
+    | JsonValueKind.String ->
+      match UInt64.TryParse(v.GetString()) with
+      | true, n -> n
+      | _ -> 0UL
+    | JsonValueKind.Number -> v.GetUInt64()
+    | _ -> 0UL
+  | _ -> 0UL
+
+let private jsonIntField (el : JsonElement) (name : string) : int =
+  match el.TryGetProperty name with
+  | true, v ->
+    match v.ValueKind with
+    | JsonValueKind.Number -> v.GetInt32()
+    | JsonValueKind.String ->
+      match Int32.TryParse(v.GetString()) with
+      | true, n -> n
+      | _ -> 0
+    | _ -> 0
+  | _ -> 0
+
+let private jsonStatusCode (el : JsonElement) : int =
+  match el.TryGetProperty "status" with
+  | true, s when s.ValueKind = JsonValueKind.Object -> jsonIntField s "code"
+  | _ -> 0
+
+let private jsonSpan (el : JsonElement) : SpanRec =
+  let traceId =
+    match el.TryGetProperty "traceId" with
+    | true, v -> jsonHex v
+    | _ -> ""
+  let spanId =
+    match el.TryGetProperty "spanId" with
+    | true, v -> jsonHex v
+    | _ -> ""
+  let parentId =
+    match el.TryGetProperty "parentSpanId" with
+    | true, v -> jsonHex v
+    | _ -> ""
+  let name =
+    match el.TryGetProperty "name" with
+    | true, n when n.ValueKind = JsonValueKind.String -> n.GetString()
+    | _ -> ""
+  { traceId = traceId
+    spanId  = spanId
+    parentId = parentId
+    name    = name
+    kind    = jsonIntField el "kind"
+    startNs = jsonUint64Field el "startTimeUnixNano"
+    endNs   = jsonUint64Field el "endTimeUnixNano"
+    status  = jsonStatusCode el
+    attrs   = jsonAttrs el }
+
+let private jsonScopeSpans (el : JsonElement) : ScopeSpansRec =
+  let spans =
+    match el.TryGetProperty "spans" with
+    | true, s when s.ValueKind = JsonValueKind.Array ->
+      s.EnumerateArray() |> Seq.map jsonSpan |> Seq.toArray
+    | _ -> [||]
+  { spans = spans }
+
+let private jsonResourceSpans (el : JsonElement) : ResourceSpansRec =
+  let resAttrs =
+    match el.TryGetProperty "resource" with
+    | true, r -> jsonAttrs r
+    | _ -> [||]
+  let scopes =
+    match el.TryGetProperty "scopeSpans" with
+    | true, ss when ss.ValueKind = JsonValueKind.Array ->
+      ss.EnumerateArray() |> Seq.map jsonScopeSpans |> Seq.toArray
+    | _ -> [||]
+  { resource = resAttrs; scopes = scopes }
+
+let private decodeExportTraceJson (raw : byte[]) : ResourceSpansRec[] =
+  use doc = JsonDocument.Parse(ReadOnlyMemory<byte>(raw))
+  let root = doc.RootElement
+  match root.TryGetProperty "resourceSpans" with
+  | true, rs when rs.ValueKind = JsonValueKind.Array ->
+    rs.EnumerateArray() |> Seq.map jsonResourceSpans |> Seq.toArray
+  | _ -> [||]
+
+/// JSON twin of `decodeSpans`. Phase 16 tracers + Step Functions
+/// `OtlpHttpSpanSink` POST OTLP/JSON to `/v1/traces`; this is the
+/// entry point that turns those payloads into the public Span model.
+let decodeSpansJson (raw : byte[]) : PulseBoard.Spans.Span[] * int =
+  liftSpans (decodeExportTraceJson raw)
+
 let private isJsonContent (ctx : HttpContext) =
   ctx.request.headers
   |> Seq.exists (fun (k, v) ->
@@ -768,7 +880,10 @@ let logs (storage : IStorageClient)
 /// POST /v1/traces — accepted, counted, persisted into the in-memory
 /// span store (for /api/traces + /api/servicemap), and optionally
 /// forwarded to Tempo via `rawTrace`. The count always flows through
-/// `IStorageClient.IncTraceCount` for billing.
+/// `IStorageClient.IncTraceCount` for billing. Accepts both
+/// application/x-protobuf (Phase 16 tracers) and application/json
+/// (Step Functions Firehose translator). Tempo raw-forward only fires
+/// for protobuf because `IRawTraceBackend` is protobuf-only.
 let traces (storage : IStorageClient)
            (rawTrace : PulseBoard.CloudBackends.IRawTraceBackend option)
            (spanStore : PulseBoard.Spans.ISpanStore option) : WebPart =
@@ -783,25 +898,34 @@ let traces (storage : IStorageClient)
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
+      let json = isJsonContent ctx
       // Single decode pass that produces both structured spans and a
       // raw count. If decode fails we still want to record the count
-      // (best-effort), so fall back to the legacy counter.
+      // (best-effort), so fall back to the legacy protobuf counter.
       let spans, n =
-        try decodeSpans raw
+        try
+          if json then decodeSpansJson raw
+          else decodeSpans raw
         with _ ->
-          use ms = new MemoryStream(raw)
-          let input = new CodedInputStream(ms)
-          [||], countSpans input
+          if json then [||], 0
+          else
+            use ms = new MemoryStream(raw)
+            let input = new CodedInputStream(ms)
+            [||], countSpans input
       do! storage.IncTraceCount(tid, n)
       match spanStore with
       | Some store when spans.Length > 0 ->
         let tidVal = match tenantId with Some t -> t | None -> TenantId "__local__"
         store.Ingest(tidVal, spans)
       | _ -> ()
+      // Tempo raw-forward is protobuf-only — `IRawTraceBackend` does
+      // not accept JSON payloads. JSON spans land in the in-memory
+      // span store above; long-term storage waits for the JSON path
+      // on the raw-trace backend.
       match rawTrace with
-      | Some rt ->
+      | Some rt when not json ->
         try rt.IngestOtlpProtobuf(tid, raw) with _ -> ()
-      | None -> ()
+      | _ -> ()
       return! (OK partialSuccessBody >=> okHeaders n) ctx
     with ex ->
       return!

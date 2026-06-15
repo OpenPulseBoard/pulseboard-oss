@@ -24,6 +24,7 @@
     <Compile Include="Unit/RetentionTests.fs" />
     <Compile Include="Unit/PlansTests.fs" />
     <Compile Include="Unit/SpansTests.fs" />
+    <Compile Include="Unit/OtlpJsonSpansTests.fs" />
     <Compile Include="Unit/TenancyTests.fs" />
     <Compile Include="Unit/SyntheticsTests.fs" />
     <Compile Include="Unit/AgentGroupsTests.fs" />
