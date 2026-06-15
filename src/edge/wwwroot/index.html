@@ -302,6 +302,11 @@
   </div>
 
   <div style="padding:0 20px;">
+    <h3 style="font-size:13px;color:var(--muted);font-weight:500;margin:12px 0 6px;">Predicted monthly bill</h3>
+    <div id="costs-forecast" class="cost-forecast"></div>
+  </div>
+
+  <div style="padding:0 20px;">
     <h3 style="font-size:13px;color:var(--muted);font-weight:500;margin:12px 0 6px;">Active drop rules</h3>
     <div id="costs-drops" class="cost-drops-list"></div>
   </div>
@@ -584,6 +589,7 @@
           <select id="rule-f-lang" style="width:100%;">
             <option value="promql">PromQL</option>
             <option value="logql">LogQL</option>
+            <option value="budget">Budget (projected $)</option>
           </select>
         </div>
         <div class="rule-field">
@@ -597,7 +603,7 @@
         </div>
       </div>
       <div class="rule-field">
-        <label>Expression <span class="hint">— selector only (e.g. <code>cpu</code> or <code>{service="api"} |= "error"</code>)</span></label>
+        <label>Expression <span class="hint" id="rule-f-expr-hint">— selector only (e.g. <code>cpu</code> or <code>{service="api"} |= "error"</code>)</span></label>
         <textarea id="rule-f-expr" style="width:100%;min-height:46px;" placeholder="cpu"></textarea>
       </div>
       <div class="rule-field-row">

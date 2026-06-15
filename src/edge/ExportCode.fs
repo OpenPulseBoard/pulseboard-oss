@@ -135,6 +135,7 @@ let private langStr =
   function
   | PulseBoard.Rules.PromQL -> "promql"
   | PulseBoard.Rules.LogQL -> "logql"
+  | PulseBoard.Rules.Budget -> "budget"
 
 let ruleGroupToYaml (g : PulseBoard.Rules.RuleGroup) : string =
   let sb = StringBuilder()

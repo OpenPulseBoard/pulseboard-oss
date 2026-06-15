@@ -110,7 +110,7 @@ function showView(name) {
   if (name === "library") renderLibrary(_libCatFilter, $("lib-search").value);
   if (name === "alerts")  showAlertsSub(_alertsSub || "firing");
   if (name === "agents")  loadAgents();
-  if (name === "costs")   loadCosts();
+  if (name === "costs")   { loadCosts(); startCostsForecastTimer(); } else { stopCostsForecastTimer(); }
   if (name === "synthetics") loadSynthetics();
   if (name === "status")     loadStatusPages();
 }
@@ -6387,6 +6387,29 @@ function openRuleEditor(groupId, ruleIndex) {
   $("rule-f-err").textContent   = "";
   $("rule-modal").classList.add("open");
   $("rule-f-name").focus();
+  syncRuleLangHint();
+}
+
+// Reflect the chosen RuleLang in the expression hint / placeholder
+// (PromQL/LogQL selector vs. Budget pillar key). Keeps the generic
+// rule editor usable for Phase 14.3 budget alerts without growing a
+// separate form.
+function syncRuleLangHint() {
+  const lang = $("rule-f-lang").value;
+  const hint = $("rule-f-expr-hint");
+  const expr = $("rule-f-expr");
+  const thr  = $("rule-f-threshold");
+  if (lang === "budget") {
+    if (hint) hint.innerHTML = "— pillar key: <code>total</code>, <code>ingest</code>, <code>logs</code>, <code>series</code>, <code>spans</code>, <code>evals</code>, or <code>seats</code>. Threshold is the projected monthly USD.";
+    if (expr) expr.placeholder = "total";
+    if (thr && thr.placeholder !== undefined) thr.placeholder = "100";
+  } else if (lang === "logql") {
+    if (hint) hint.innerHTML = "— selector + optional filter (e.g. <code>{service=&quot;api&quot;} |= &quot;error&quot;</code>)";
+    if (expr) expr.placeholder = "{service=\"api\"} |= \"error\"";
+  } else {
+    if (hint) hint.innerHTML = "— PromQL expression (e.g. <code>rate(http_requests_total[5m])</code>)";
+    if (expr) expr.placeholder = "cpu";
+  }
 }
 
 async function saveRuleFromEditor() {
@@ -6440,6 +6463,7 @@ async function newRuleGroup() {
 
 $("rules-new-group-btn").addEventListener("click", newRuleGroup);
 $("rule-f-save").addEventListener("click", saveRuleFromEditor);
+$("rule-f-lang").addEventListener("change", syncRuleLangHint);
 $("rule-modal-close").addEventListener("click", () => $("rule-modal").classList.remove("open"));
 $("rule-modal").addEventListener("click", (e) => {
   if (e.target === $("rule-modal")) $("rule-modal").classList.remove("open");
@@ -7203,24 +7227,111 @@ startBadgePoll();
 })();
 
 // ── Phase 14.3: Costs & cardinality killer ──────────────────────────────
-let _costsSeries = [];
-let _costsDrops  = [];
+let _costsSeries   = [];
+let _costsDrops    = [];
+let _costsForecast = null;
+let _costsForecastTimer = null;
 
 async function loadCosts() {
   const tbody = $("costs-series-body");
   tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">Loading…</td></tr>';
   try {
-    const [series, drops] = await Promise.all([
+    const [series, drops, forecast] = await Promise.all([
       api("GET", "/api/cost/series?top=50"),
       api("GET", "/api/cost/dropped-labels").catch(() => []),
+      api("GET", "/api/cost/forecast").catch(() => null),
     ]);
-    _costsSeries = (series && Array.isArray(series.series)) ? series.series : [];
-    _costsDrops  = Array.isArray(drops) ? drops : [];
+    _costsSeries   = (series && Array.isArray(series.series)) ? series.series : [];
+    _costsDrops    = Array.isArray(drops) ? drops : [];
+    _costsForecast = forecast;
+    renderCostsForecast();
     renderCostsDrops();
     renderCostsSeries();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">Failed: ${escapeHtml(e.message)}</td></tr>`;
   }
+}
+
+// Refresh just the forecast card without rebuilding the table. Used by
+// the hourly auto-refresh so the projection stays current while the
+// view is open without thrashing the noisy-series query.
+async function refreshCostsForecast() {
+  try {
+    _costsForecast = await api("GET", "/api/cost/forecast");
+    renderCostsForecast();
+  } catch { /* leave the previous card in place */ }
+}
+
+const PILLAR_LABELS = {
+  ingest: "Metrics ingest",
+  logs:   "Logs ingest",
+  series: "Active series",
+  spans:  "Trace spans",
+  evals:  "Alert evals",
+  seats:  "Seats",
+};
+
+function fmtUsd(n) {
+  const v = Number(n) || 0;
+  return "$" + v.toFixed(2);
+}
+
+function fmtRaw(pillar, n) {
+  const v = Number(n) || 0;
+  if (pillar === "ingest" || pillar === "logs") {
+    // Bytes → human-readable.
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let i = 0; let x = v;
+    while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+    return x.toFixed(x >= 100 ? 0 : x >= 10 ? 1 : 2) + " " + units[i];
+  }
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(2) + "k";
+  return v.toLocaleString();
+}
+
+function renderCostsForecast() {
+  const host = $("costs-forecast");
+  if (!host) return;
+  const f = _costsForecast;
+  if (!f) {
+    host.innerHTML = '<div style="color:var(--muted);font-size:13px;">Forecast unavailable.</div>';
+    return;
+  }
+  const elapsedPct = Math.max(0, Math.min(100, (f.elapsedFrac || 0) * 100));
+  const periodEnd = new Date(f.periodEnd).toLocaleDateString();
+  const baseUsd   = Number(f.baseUsd) || 0;
+  const totalUsd  = Number(f.totalUsd) || 0;
+  const overUsd   = Math.max(0, totalUsd - baseUsd);
+  const pillarsHtml = (f.pillars || []).map(p => {
+    const label = PILLAR_LABELS[p.pillar] || p.pillar;
+    const cur   = fmtRaw(p.pillar, p.currentRaw);
+    const proj  = fmtRaw(p.pillar, p.projectedRaw);
+    const usd   = fmtUsd(p.usd);
+    const usdClass = (Number(p.usd) > 0) ? "cf-pillar-over" : "cf-pillar-zero";
+    return `
+      <div class="cf-pillar">
+        <div class="cf-pillar-name">${escapeHtml(label)}</div>
+        <div class="cf-pillar-raw">${escapeHtml(cur)} <span class="cf-arrow">→</span> ${escapeHtml(proj)}</div>
+        <div class="cf-pillar-usd ${usdClass}">${escapeHtml(usd)}</div>
+      </div>`;
+  }).join("");
+  host.innerHTML = `
+    <div class="cf-card">
+      <div class="cf-head">
+        <div>
+          <div class="cf-total">${escapeHtml(fmtUsd(totalUsd))}<span class="cf-total-sfx"> / mo projected</span></div>
+          <div class="cf-sub">Plan: <code>${escapeHtml(f.plan || "free")}</code> · base ${escapeHtml(fmtUsd(baseUsd))} + usage ${escapeHtml(fmtUsd(overUsd))}</div>
+        </div>
+        <div class="cf-period">
+          <div class="cf-period-bar"><span style="width:${elapsedPct.toFixed(1)}%"></span></div>
+          <div class="cf-period-text">${elapsedPct.toFixed(1)}% of period elapsed · ends ${escapeHtml(periodEnd)}</div>
+        </div>
+      </div>
+      <div class="cf-pillars">${pillarsHtml}</div>
+      <div class="cf-hint">Linear projection from current month-to-date usage. Top contributors appear in the series table below.</div>
+    </div>`;
 }
 
 function renderCostsDrops() {
@@ -7317,6 +7428,19 @@ $("costs-drop-confirm").addEventListener("click", confirmDropLabel);
 $("costs-drop-modal").addEventListener("click", (e) => {
   if (e.target === $("costs-drop-modal")) $("costs-drop-modal").classList.remove("open");
 });
+
+function startCostsForecastTimer() {
+  stopCostsForecastTimer();
+  // Hourly auto-refresh per Phase 14.3 spec. Cheap server-side (one
+  // map lookup + Pricing.estimate) so the timer is fine while open.
+  _costsForecastTimer = setInterval(refreshCostsForecast, 3600 * 1000);
+}
+function stopCostsForecastTimer() {
+  if (_costsForecastTimer) {
+    clearInterval(_costsForecastTimer);
+    _costsForecastTimer = null;
+  }
+}
 
 (async () => {
   if (!pbBearer()) { pbRedirectSignin(); return; }

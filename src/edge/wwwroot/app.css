@@ -554,6 +554,32 @@
     cursor:pointer; font-size:14px; line-height:1; padding:0 6px; border-radius:50%; }
   .cost-drop-remove:hover { color:var(--err); background:var(--panel); }
   .cost-drop-btn { font-size:11px; padding:2px 8px; }
+  .cost-forecast { margin-top:6px; }
+  .cf-card { background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    padding:14px 16px; }
+  .cf-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px;
+    flex-wrap:wrap; }
+  .cf-total { font-size:24px; font-weight:600; color:var(--fg); }
+  .cf-total-sfx { font-size:12px; color:var(--muted); font-weight:400; margin-left:6px; }
+  .cf-sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .cf-sub code { background:var(--panel); padding:1px 5px; border-radius:3px; }
+  .cf-period { min-width:220px; max-width:280px; }
+  .cf-period-bar { background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    height:8px; overflow:hidden; }
+  .cf-period-bar span { display:block; height:100%; background:var(--accent); }
+  .cf-period-text { font-size:11px; color:var(--muted); margin-top:4px; text-align:right; }
+  .cf-pillars { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+    gap:8px; margin-top:14px; }
+  .cf-pillar { background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    padding:8px 10px; }
+  .cf-pillar-name { font-size:11px; color:var(--muted); text-transform:uppercase;
+    letter-spacing:.04em; }
+  .cf-pillar-raw { font-size:12px; color:var(--fg); margin:2px 0; font-variant-numeric:tabular-nums; }
+  .cf-pillar-raw .cf-arrow { color:var(--muted); margin:0 3px; }
+  .cf-pillar-usd { font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cf-pillar-usd.cf-pillar-over { color:var(--accent); }
+  .cf-pillar-usd.cf-pillar-zero { color:var(--muted); font-weight:500; }
+  .cf-hint { margin-top:10px; font-size:11px; color:var(--muted); }
   /* ── Synthetic & uptime checks (Phase 14.8) ── */
   .syn-table th, .syn-table td { vertical-align:middle; }
   .syn-table button { font-size:11px; padding:2px 8px; margin-left:4px; }

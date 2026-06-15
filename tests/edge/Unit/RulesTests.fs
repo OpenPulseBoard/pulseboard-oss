@@ -164,6 +164,29 @@ let ``serialiseGroups produces a JSON array with one element per group`` () =
     json.Contains("g1") |> should be True
     json.Contains("g2") |> should be True
 
+// -- Budget rule lang (Phase 14.3) ------------------------------------------
+
+[<Fact>]
+let ``parseGroup accepts a rule with lang=budget`` () =
+    let json = """{"name":"g","rules":[{"name":"over $100","lang":"budget","expr":"total","cmp":">","threshold":100}]}"""
+    match parseGroup json with
+    | Result.Ok g ->
+        g.rules.Length     |> should equal 1
+        g.rules.[0].lang   |> should equal Budget
+        g.rules.[0].expr   |> should equal "total"
+    | Result.Error e -> failwith e
+
+[<Fact>]
+let ``serialiseGroup round-trips a Budget rule`` () =
+    let r = makeRule "over-quota" Budget "ingest" Gt 250.0
+    match parseGroup (serialiseGroup (makeGroup "budget-grp" [| r |])) with
+    | Result.Ok g2 ->
+        g2.rules.[0].lang      |> should equal Budget
+        g2.rules.[0].expr      |> should equal "ingest"
+        g2.rules.[0].cmp       |> should equal Gt
+        g2.rules.[0].threshold |> should equal 250.0
+    | Result.Error e -> failwith e
+
 // -- FileRuleStore ----------------------------------------------------------
 
 let private withTempStore (f : IRuleStore * TenantId -> unit) =

@@ -23,6 +23,7 @@
     <Compile Include="Pricing.fs" />
     <Compile Include="Costs.fs" />
     <Compile Include="CardinalityKiller.fs" />
+    <Compile Include="BillPredictor.fs" />
     <Compile Include="AiAssist.fs" />
     <Compile Include="PgTenantStore.fs" />
     <Compile Include="PgQuotaOverrides.fs" />

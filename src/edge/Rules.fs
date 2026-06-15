@@ -78,12 +78,16 @@ let strToSeverity = function
   | "page"     -> Severity.Page
   | _          -> Severity.Warning
 
-type RuleLang = PromQL | LogQL
+type RuleLang = PromQL | LogQL | Budget
 
-let private langToStr = function PromQL -> "promql" | LogQL -> "logql"
+let private langToStr = function
+  | PromQL -> "promql"
+  | LogQL  -> "logql"
+  | Budget -> "budget"
 let private strToLang = function
   | "promql" -> Some PromQL
   | "logql"  -> Some LogQL
+  | "budget" -> Some Budget
   | _        -> None
 
 [<NoComparison>]
@@ -437,6 +441,13 @@ type Evaluator(metricStore : MetricStore,
   let mutable remoteQuery
     : (TenantId -> string -> int64 -> Result<(Map<string,string> * float)[], string>) option = None
 
+  // Phase 14.3 — Budget alerts. Returns the current ProjectedBill for a
+  // tenant so `Budget`-lang rules can compare projected USD against a
+  // threshold. None disables Budget rule evaluation entirely (they
+  // simply produce zero hits).
+  let mutable budgetSource
+    : (TenantId -> PulseBoard.BillPredictor.ProjectedBill option) option = None
+
   let workerCount = max 2 (Environment.ProcessorCount / 2)
 
   /// Shard a group across workers by stable hash of groupId.
@@ -491,6 +502,28 @@ type Evaluator(metricStore : MetricStore,
         [| (Map.empty, count) |]
       else [||]
 
+  // Phase 14.3 — Budget rules. `rule.expr` is the pillar key (one of
+  // "total", "ingest", "logs", "series", "spans", "evals", "seats").
+  // Compares the projected monthly USD for that pillar against the
+  // rule's threshold. Emits at most one alert per rule; labels include
+  // `pillar` so notifications/silences can target a specific pillar.
+  let evalBudgetRule (tid : TenantId) (rule : Rule) : (Map<string,string> * float)[] =
+    match budgetSource with
+    | None -> [||]
+    | Some src ->
+      match src tid with
+      | None -> [||]
+      | Some bill ->
+        let pillar =
+          if String.IsNullOrWhiteSpace rule.expr then "total"
+          else rule.expr.Trim().ToLowerInvariant()
+        match PulseBoard.BillPredictor.pillarUsd bill pillar with
+        | None     -> [||]
+        | Some usd ->
+          if evalCmp rule.cmp usd rule.threshold then
+            [| (Map.ofList [ "pillar", pillar ], usd) |]
+          else [||]
+
   let evalOne (tid : TenantId) (group : RuleGroup) (rule : Rule) (now : int64) =
     let swStart = System.Diagnostics.Stopwatch.StartNew()
     let hits =
@@ -498,6 +531,7 @@ type Evaluator(metricStore : MetricStore,
         match rule.lang with
         | PromQL -> evalPromRule tid rule now
         | LogQL  -> evalLogRule  rule now group.intervalMs
+        | Budget -> evalBudgetRule tid rule
       with _ -> [||]
     swStart.Stop()
     let elapsed = float swStart.ElapsedMilliseconds / 1000.0
@@ -600,6 +634,13 @@ type Evaluator(metricStore : MetricStore,
   /// out to an upstream store and the in-process MetricStore is empty.
   member _.SetPromQuery(f : TenantId -> string -> int64 -> Result<(Map<string,string> * float)[], string>) =
     remoteQuery <- Some f
+
+  /// Provide a projected-bill source for `Budget`-lang rules. `f tid`
+  /// returns the tenant's current `ProjectedBill` (or `None` when the
+  /// billing meter isn't wired). When unset, Budget rules silently
+  /// produce zero hits — same shape as a parser failure on PromQL.
+  member _.SetBudgetSource(f : TenantId -> PulseBoard.BillPredictor.ProjectedBill option) =
+    budgetSource <- Some f
 
   member _.Start() =
     for w in 0 .. workerCount - 1 do

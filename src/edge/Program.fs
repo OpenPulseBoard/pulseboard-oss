@@ -1149,6 +1149,18 @@ let main argv =
         exit 2
     | None ->
       PulseBoard.CardinalityKiller.InMemoryCardinalityKillerStore() :> _
+  // Phase 14.3 — Budget alerts: let the rule evaluator project the
+  // current tenant's monthly bill on every tick so `Budget`-lang rules
+  // can compare a pillar's projected USD against a threshold.
+  let billingPlanLookup (tid : PulseBoard.Tenancy.TenantId) =
+    match tenantStore.TryGetTenant tid with
+    | Some t -> t.plan
+    | None   -> PulseBoard.Tenancy.Plan.Free
+  ruleEvaluator.SetBudgetSource(fun tid ->
+    let plan = billingPlanLookup tid
+    let snap = billingMeter.Snapshot tid
+    let now  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+    Some (PulseBoard.BillPredictor.project tid plan snap now))
   let ingestInner =
     PulseBoard.Ingest.webPart storage ingestQuotas (Some secretsStore) (Some billingMeter) (Some costTracker) (Some cardinalityKiller) (Some metricStore)
   let queryInner =
@@ -1531,6 +1543,7 @@ let main argv =
     let costApiInner =
       PulseBoard.CostsApi.webPart
         multiTenant costTracker cardinalityKiller agentGroupStore
+        (Some billingMeter) billingPlanFor
     let combinedInner = choose [ gitOpsGuardInner; gitOpsStatusInner; exportInner; queryApiInner; dashboardsInner; traceApiInner; rulesInner; routingInner; notifyQueueInner; onCallInner; runbookInner; correlationInner; syntheticInner; statusInner; aiExplainInner; costApiInner; queryInner ]
     if multiTenant then
       pathStarts "/api/" >=>

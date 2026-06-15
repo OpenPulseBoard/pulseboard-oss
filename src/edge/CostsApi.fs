@@ -26,6 +26,8 @@ open Suave.Filters
 open Suave.Successful
 open Suave.RequestErrors
 open PulseBoard.Tenancy
+open PulseBoard.Billing
+open PulseBoard.BillPredictor
 open PulseBoard.CardinalityKiller
 open PulseBoard.AgentGroups
 open PulseBoard.Costs
@@ -76,7 +78,10 @@ let syncOverlay (groupStore : IAgentGroupStore)
 let webPart (multiTenant : bool)
             (costs       : ICostTracker)
             (killer      : ICardinalityKillerStore)
-            (groupStore  : IAgentGroupStore) : WebPart =
+            (groupStore  : IAgentGroupStore)
+            (meter       : IBillingMeter option)
+            (planFor     : TenantId -> Plan) : WebPart =
+  let nowMs () = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
   let withTenant (handler : TenantId -> WebPart) : WebPart =
     fun ctx -> async {
       match resolveTenant multiTenant ctx with
@@ -127,6 +132,18 @@ let webPart (multiTenant : bool)
           let rows = costs.TeamBreakdown(tid, defaultTeamFor)
           let (TenantId t) = tid
           return! jsonResp 200 (teamBreakdownJson t rows) ctx
+        })
+
+    GET >=> path "/api/cost/forecast" >=>
+      withTenant (fun tid ->
+        fun ctx -> async {
+          match meter with
+          | None -> return! errJson 503 "billing meter unavailable" ctx
+          | Some m ->
+            let plan = planFor tid
+            let snap = m.Snapshot tid
+            let bill = project tid plan snap (nowMs ())
+            return! jsonResp 200 (serialiseBill bill) ctx
         })
 
     GET    >=> path   "/api/cost/dropped-labels" >=> withTenant listDrops
