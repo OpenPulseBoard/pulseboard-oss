@@ -647,7 +647,7 @@ let private decodeExportMetricsJson (raw : byte[]) : ResourceMetricsRec[] =
 
 // ---------- OTLP/JSON trace decoder ----------
 // Mirrors `decodeExportMetricsJson` for `ExportTraceServiceRequest`.
-// Phase 16 tracers (Node `@pulseboard/tracer`, Python
+// Phase 16 tracers (Node `@open-pulseboard/tracer`, Python
 // `pulseboard-tracer`) and the Phase 15 Slice 4 Step Functions
 // `OtlpHttpSpanSink` both ship Proto3 JSON because the upstream OTLP
 // HTTP exporter doesn't speak JSON for traces but the F# Firehose
