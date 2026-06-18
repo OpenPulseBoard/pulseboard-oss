@@ -592,6 +592,20 @@
   .syn-pill.syn-none { background:var(--panel-2); color:var(--muted); font-weight:500; }
   .lib-header h2 { margin:0 0 4px; font-size:18px; }
   .lib-header > p { margin:0 0 10px; color:var(--muted); font-size:13px; }
+  .lib-agent-help {
+    margin:0 0 12px;
+    padding:10px 12px;
+    border:1px solid var(--border);
+    border-left:3px solid var(--accent);
+    border-radius:6px;
+    background:var(--panel-2);
+    font-size:12px;
+    line-height:1.5;
+  }
+  .lib-agent-help strong { display:block; margin-bottom:2px; color:var(--fg); }
+  .lib-agent-help p { margin:0; color:var(--muted); }
+  .lib-agent-help a { color:var(--accent); }
+  .lib-agent-help a:hover { text-decoration:underline; }
   #lib-search { width:280px; background:var(--panel-2); border:1px solid var(--border);
     color:var(--fg); border-radius:4px; padding:5px 10px; font-size:13px; }
   .lib-filters { display:flex; gap:6px; margin:8px 0 14px; flex-wrap:wrap; }
