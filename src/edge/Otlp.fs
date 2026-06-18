@@ -2,6 +2,7 @@ module PulseBoard.Otlp
 
 open System
 open System.IO
+open System.IO.Compression
 open System.Text
 open System.Text.Json
 open Suave
@@ -757,6 +758,26 @@ let private isJsonContent (ctx : HttpContext) =
        String.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase)
        && v.IndexOf("application/json", StringComparison.OrdinalIgnoreCase) >= 0)
 
+let private headerValue (name : string) (ctx : HttpContext) : string option =
+  ctx.request.headers
+  |> Seq.tryPick (fun (k, v) ->
+       if String.Equals(k, name, StringComparison.OrdinalIgnoreCase)
+       then Some v else None)
+
+let private decodeRequestBody (ctx : HttpContext) (raw : byte[]) : byte[] =
+  let enc =
+    headerValue "content-encoding" ctx
+    |> Option.defaultValue ""
+    |> fun v -> v.Trim().ToLowerInvariant()
+  if enc.Contains("gzip") then
+    use input = new MemoryStream(raw)
+    use gz = new GZipStream(input, CompressionMode.Decompress)
+    use output = new MemoryStream()
+    gz.CopyTo(output)
+    output.ToArray()
+  else
+    raw
+
 // ---------- Handlers ----------
 
 /// POST /v1/metrics — OTLP/HTTP metrics. Body is a protobuf
@@ -770,7 +791,7 @@ let metrics (storage : IStorageClient)
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
     try
-      let raw = ctx.request.rawForm
+      let raw = decodeRequestBody ctx ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
@@ -823,7 +844,7 @@ let logs (storage : IStorageClient)
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
     try
-      let raw = ctx.request.rawForm
+      let raw = decodeRequestBody ctx ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
@@ -890,7 +911,7 @@ let traces (storage : IStorageClient)
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
     try
-      let raw = ctx.request.rawForm
+      let raw = decodeRequestBody ctx ctx.request.rawForm
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
