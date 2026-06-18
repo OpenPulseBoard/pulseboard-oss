@@ -148,6 +148,11 @@ let metrics (storage : IStorageClient) (quotas : IngestQuotas option)
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.WriteMetricSamples(tid, samples)
       let accepted = samples.Count
+      printfn
+        "[ingest] signal=metrics accepted=%d rejectedCardinality=%d parsedItems=%d tenant=%s bodyBytes=%d"
+        accepted rejected items.Length
+        (if tid = "" then "<none>" else tid)
+        (Encoding.UTF8.GetByteCount body)
       // Self-observability counters — read by the `__meta__` tenant's
       // dashboard. `pulse_ingest_total` counts admitted samples (one
       // record per sample makes the counter sum match the dashboard's

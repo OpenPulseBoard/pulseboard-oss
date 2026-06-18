@@ -838,6 +838,13 @@ let metrics (storage : IStorageClient)
       let tenantId =
         PulseBoard.Rbac.tryGetTenant ctx
         |> Option.map (fun t -> t.tenant.id)
+      let metricCount =
+        resourceMetrics
+        |> Array.sumBy (fun rm -> rm.scopes |> Array.sumBy (fun sm -> sm.metrics.Length))
+      let pointCount =
+        resourceMetrics
+        |> Array.sumBy (fun rm ->
+             rm.scopes |> Array.sumBy (fun sm -> sm.metrics |> Array.sumBy (fun m -> m.points.Length)))
       let samples = ResizeArray<MetricSample>()
       for rm in resourceMetrics do
         for sm in rm.scopes do
@@ -862,6 +869,13 @@ let metrics (storage : IStorageClient)
                   samples.Add { seriesName = name; tsMs = tsMs; value = p.value }
       let tid = match tenantId with Some (TenantId s) -> s | None -> ""
       do! storage.WriteMetricSamples(tid, samples)
+      printfn
+        "[otlp] signal=metrics accepted=%d decodedMetrics=%d decodedPoints=%d tenant=%s ct=%s ce=%s wireBytes=%d rawBytes=%d"
+        samples.Count metricCount pointCount
+        (if tid = "" then "<none>" else tid)
+        (headerValue "content-type" ctx |> Option.defaultValue "<missing>")
+        (headerValue "content-encoding" ctx |> Option.defaultValue "<none>")
+        wireLen rawLen
       return! (OK partialSuccessBody >=> okHeaders samples.Count) ctx
     with ex ->
       logOtlpFailure "metrics" ctx wireLen rawLen ex
