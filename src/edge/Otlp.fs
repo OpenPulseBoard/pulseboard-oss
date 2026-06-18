@@ -778,7 +778,7 @@ let private decodeRequestBody (ctx : HttpContext) (raw : byte[]) : byte[] =
   else
     raw
 
-let private logOtlpFailure (signal : string) (ctx : HttpContext) (rawLen : int) (ex : exn) : unit =
+let private logOtlpFailure (signal : string) (ctx : HttpContext) (wireLen : int) (rawLen : int) (ex : exn) : unit =
   let methodStr =
     try ctx.request.``method``.ToString() with _ -> "?"
   let pathStr =
@@ -788,9 +788,22 @@ let private logOtlpFailure (signal : string) (ctx : HttpContext) (rawLen : int) 
   let contentEncoding =
     headerValue "content-encoding" ctx |> Option.defaultValue "<none>"
   printfn
-    "[otlp] signal=%s %s %s failed: %s (%s) ct=%s ce=%s rawBytes=%d"
+    "[otlp] signal=%s %s %s failed: %s (%s) ct=%s ce=%s wireBytes=%d rawBytes=%d"
     signal methodStr pathStr ex.Message (ex.GetType().FullName)
-    contentType contentEncoding rawLen
+    contentType contentEncoding wireLen rawLen
+
+let private logOtlpReject (signal : string) (ctx : HttpContext) (wireLen : int) (rawLen : int) (reason : string) : unit =
+  let methodStr =
+    try ctx.request.``method``.ToString() with _ -> "?"
+  let pathStr =
+    try ctx.request.url.AbsolutePath with _ -> "?"
+  let contentType =
+    headerValue "content-type" ctx |> Option.defaultValue "<missing>"
+  let contentEncoding =
+    headerValue "content-encoding" ctx |> Option.defaultValue "<none>"
+  printfn
+    "[otlp] signal=%s %s %s rejected: %s ct=%s ce=%s wireBytes=%d rawBytes=%d"
+    signal methodStr pathStr reason contentType contentEncoding wireLen rawLen
 
 // ---------- Handlers ----------
 
