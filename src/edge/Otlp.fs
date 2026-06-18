@@ -778,6 +778,20 @@ let private decodeRequestBody (ctx : HttpContext) (raw : byte[]) : byte[] =
   else
     raw
 
+let private logOtlpFailure (signal : string) (ctx : HttpContext) (rawLen : int) (ex : exn) : unit =
+  let methodStr =
+    try ctx.request.``method``.ToString() with _ -> "?"
+  let pathStr =
+    try ctx.request.url.AbsolutePath with _ -> "?"
+  let contentType =
+    headerValue "content-type" ctx |> Option.defaultValue "<missing>"
+  let contentEncoding =
+    headerValue "content-encoding" ctx |> Option.defaultValue "<none>"
+  printfn
+    "[otlp] signal=%s %s %s failed: %s (%s) ct=%s ce=%s rawBytes=%d"
+    signal methodStr pathStr ex.Message (ex.GetType().FullName)
+    contentType contentEncoding rawLen
+
 // ---------- Handlers ----------
 
 /// POST /v1/metrics — OTLP/HTTP metrics. Body is a protobuf
@@ -790,8 +804,10 @@ let metrics (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable rawLen = 0
     try
       let raw = decodeRequestBody ctx ctx.request.rawForm
+      rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
@@ -831,6 +847,7 @@ let metrics (storage : IStorageClient)
       do! storage.WriteMetricSamples(tid, samples)
       return! (OK partialSuccessBody >=> okHeaders samples.Count) ctx
     with ex ->
+      logOtlpFailure "metrics" ctx rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
@@ -843,8 +860,10 @@ let logs (storage : IStorageClient)
          (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable rawLen = 0
     try
       let raw = decodeRequestBody ctx ctx.request.rawForm
+      rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
@@ -892,6 +911,7 @@ let logs (storage : IStorageClient)
         do! storage.WriteLogs(tid, entries)
         return! (OK partialSuccessBody >=> okHeaders entries.Count) ctx
     with ex ->
+      logOtlpFailure "logs" ctx rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
@@ -910,8 +930,10 @@ let traces (storage : IStorageClient)
            (spanStore : PulseBoard.Spans.ISpanStore option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable rawLen = 0
     try
       let raw = decodeRequestBody ctx ctx.request.rawForm
+      rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
@@ -949,6 +971,7 @@ let traces (storage : IStorageClient)
       | _ -> ()
       return! (OK partialSuccessBody >=> okHeaders n) ctx
     with ex ->
+      logOtlpFailure "traces" ctx rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
