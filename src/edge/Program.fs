@@ -1464,11 +1464,33 @@ let main argv =
   let otlpMetricsInner = PulseBoard.Otlp.metrics storage ingestQuotas
   let otlpLogsInner    = PulseBoard.Otlp.logs    storage ingestQuotas
   let otlpTracesInner  = PulseBoard.Otlp.traces  storage rawTraceBackend (Some spanStore)
+  let withOtlpRouteLog (signal : string) (inner : WebPart) : WebPart =
+    fun ctx -> async {
+      let! result = inner ctx
+      match result with
+      | Some c when c.response.status.code >= 400 ->
+        let header (name : string) =
+          ctx.request.headers
+          |> Seq.tryFind (fun (k, _) ->
+               String.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+          |> Option.map snd
+          |> Option.defaultValue "<missing>"
+        printfn
+          "[otlp-route] signal=%s %s %s -> %d ct=%s ce=%s"
+          signal
+          (ctx.request.``method``.ToString())
+          (ctx.request.url.AbsolutePath)
+          c.response.status.code
+          (header "content-type")
+          (header "content-encoding")
+      | _ -> ()
+      return result
+    }
   let otlp : WebPart =
     POST >=> choose [
-      path "/v1/metrics" >=> protectIngest otlpMetricsInner
-      path "/v1/logs"    >=> protectIngest otlpLogsInner
-      path "/v1/traces"  >=> protectIngest otlpTracesInner
+      path "/v1/metrics" >=> withOtlpRouteLog "metrics" (protectIngest otlpMetricsInner)
+      path "/v1/logs"    >=> withOtlpRouteLog "logs"    (protectIngest otlpLogsInner)
+      path "/v1/traces"  >=> withOtlpRouteLog "traces"  (protectIngest otlpTracesInner)
     ]
 
   // Grafana Loki push (Promtail / Alloy / Vector / fluent-bit).
