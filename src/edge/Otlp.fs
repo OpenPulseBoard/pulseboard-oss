@@ -817,11 +817,15 @@ let metrics (storage : IStorageClient)
             (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable wireLen = 0
     let mutable rawLen = 0
     try
-      let raw = decodeRequestBody ctx ctx.request.rawForm
+      let wire = ctx.request.rawForm
+      wireLen <- if isNull wire then 0 else wire.Length
+      let raw = decodeRequestBody ctx wire
       rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
+        logOtlpReject "metrics" ctx wireLen rawLen "empty body"
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
       let resourceMetrics =
@@ -860,7 +864,7 @@ let metrics (storage : IStorageClient)
       do! storage.WriteMetricSamples(tid, samples)
       return! (OK partialSuccessBody >=> okHeaders samples.Count) ctx
     with ex ->
-      logOtlpFailure "metrics" ctx rawLen ex
+      logOtlpFailure "metrics" ctx wireLen rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
@@ -873,11 +877,15 @@ let logs (storage : IStorageClient)
          (quotas : IngestQuotas option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable wireLen = 0
     let mutable rawLen = 0
     try
-      let raw = decodeRequestBody ctx ctx.request.rawForm
+      let wire = ctx.request.rawForm
+      wireLen <- if isNull wire then 0 else wire.Length
+      let raw = decodeRequestBody ctx wire
       rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
+        logOtlpReject "logs" ctx wireLen rawLen "empty body"
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
       let tenantId =
@@ -924,7 +932,7 @@ let logs (storage : IStorageClient)
         do! storage.WriteLogs(tid, entries)
         return! (OK partialSuccessBody >=> okHeaders entries.Count) ctx
     with ex ->
-      logOtlpFailure "logs" ctx rawLen ex
+      logOtlpFailure "logs" ctx wireLen rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
@@ -943,11 +951,15 @@ let traces (storage : IStorageClient)
            (spanStore : PulseBoard.Spans.ISpanStore option) : WebPart =
   fun ctx -> async {
     PulseBoard.HeartbeatClient.bump ()
+    let mutable wireLen = 0
     let mutable rawLen = 0
     try
-      let raw = decodeRequestBody ctx ctx.request.rawForm
+      let wire = ctx.request.rawForm
+      wireLen <- if isNull wire then 0 else wire.Length
+      let raw = decodeRequestBody ctx wire
       rawLen <- if isNull raw then 0 else raw.Length
       if isNull raw || raw.Length = 0 then
+        logOtlpReject "traces" ctx wireLen rawLen "empty body"
         return! BAD_REQUEST """{"error":"empty body"}""" ctx
       else
       let tenantId =
@@ -984,7 +996,7 @@ let traces (storage : IStorageClient)
       | _ -> ()
       return! (OK partialSuccessBody >=> okHeaders n) ctx
     with ex ->
-      logOtlpFailure "traces" ctx rawLen ex
+      logOtlpFailure "traces" ctx wireLen rawLen ex
       return!
         BAD_REQUEST
           (sprintf """{"error":%s}"""
