@@ -48,6 +48,30 @@ let private forbidden (msg : string) : WebPart =
   Suave.RequestErrors.FORBIDDEN (sprintf """{"error":%s}""" (System.Text.Json.JsonSerializer.Serialize msg))
   >=> Writers.setMimeType "application/json"
 
+/// Best-effort sketch of the presented bearer/api-key header, for
+/// diagnostic log lines on 403s. Returns just enough context (header
+/// kind + token prefix) to tell apart "wrong format", "wrong key",
+/// "no header at all" without leaking the secret half.
+let private describeAuth (ctx : HttpContext) : string =
+  let header (name : string) =
+    ctx.request.headers
+    |> Seq.tryFind (fun (k, _) -> String.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+    |> Option.map (snd >> fun v -> v.Trim())
+  let sample (v : string) =
+    if isNull v || v.Length = 0 then "<empty>"
+    else
+      let dot = v.IndexOf '.'
+      let cut = if dot > 0 then dot else min 12 v.Length
+      v.Substring(0, cut) + (if v.Length > cut then "…" else "")
+  match header "authorization" with
+  | Some v when v.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ->
+    sprintf "auth=bearer token=%s" (sample (v.Substring(7).Trim()))
+  | Some v -> sprintf "auth=other scheme=%s" (sample v)
+  | None ->
+    match header "x-api-key" with
+    | Some v -> sprintf "auth=x-api-key token=%s" (sample v)
+    | None   -> "auth=<none>"
+
 /// WebPart guard: require an authenticated `TenantCtx` whose `scopes`
 /// cover `need`. Records exactly one audit event per request (allow or
 /// deny); on deny the inner part is not invoked and a 403 is returned.
@@ -57,12 +81,18 @@ let requireScope (log : IAuditLog) (action : string) (need : Scope)
     match tryGetTenant ctx with
     | None ->
       emit log action Deny ctx (Some "no tenant context")
+      eprintfn "[auth] deny action=%s reason=no-tenant path=%s %s"
+        action ctx.request.path (describeAuth ctx)
       return! forbidden "forbidden" ctx
     | Some t when hasScope t.scopes need ->
       emit log action Allow ctx None
       return! inner ctx
-    | Some _ ->
+    | Some t ->
       emit log action Deny ctx (Some "missing scope")
+      eprintfn "[auth] deny action=%s reason=missing-scope path=%s tenant=%s have=%d need=%d"
+        action ctx.request.path
+        (let (PulseBoard.Tenancy.TenantId id) = t.tenant.id in id)
+        (int t.scopes) (int need)
       return! forbidden "insufficient scope" ctx
   }
 
