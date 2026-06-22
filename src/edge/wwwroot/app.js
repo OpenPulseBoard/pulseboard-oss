@@ -3910,7 +3910,7 @@ const LIBRARY_CATALOG = [
   },
   {
     id: "aws-overview", icon: "☁️", title: "AWS Overview", category: "Cloud",
-    description: "Account-wide rollups for EC2, Lambda, RDS, ALB, API Gateway, SQS, DynamoDB, and Step Functions — sourced from CloudWatch via the pulseboard-cloud poller (60s GetMetricData). Filter the whole dashboard by $region and $account. Requires: a connected AWS account in Portal → Cloud with the `aws/cloudwatch` integration enabled. Series have labels Namespace/Stat/AccountId/Region/Workspace (no per-resource dimensions in the starter poller pack, so all rollups are account+region-wide).",
+    description: "Account-wide rollups for EC2, Lambda, RDS, ALB, API Gateway, SQS, DynamoDB, and Step Functions — sourced from CloudWatch via the pulseboard-cloud poller (60s GetMetricData). Filter the whole dashboard by $region and $account. Requires: a connected AWS account in Portal → Cloud with the `aws/cloudwatch` integration enabled. Series have labels Namespace/Stat/AccountId/Region/Workspace (no per-resource dimensions in the starter poller pack, so all rollups are account+region-wide). The `aws_cloudwatch_*` names are PulseBoard's internal Prom-style series names; AWS metric names are preserved in labels like Namespace and Stat.",
     metrics: [
       "aws_cloudwatch_cpu_utilization",
       "aws_cloudwatch_invocations",
