@@ -98,7 +98,7 @@ let private apiKeySummaryJson (r : ApiKeyRecord) =
   let (ApiKeyId id)     = r.id
   let (TenantId tid)    = r.tenantId
   let lastUsed =
-    match !r.lastUsedAt with
+    match r.lastUsedAt.Value with
     | Some ts -> sprintf "\"%s\"" (ts.ToString("o"))
     | None    -> "null"
   sprintf
@@ -129,7 +129,7 @@ let private userJson (u : UserRecord) =
   let (UserId uid)   = u.id
   let (TenantId tid) = u.tenantId
   let lastLogin =
-    match !u.lastLoginAt with
+    match u.lastLoginAt.Value with
     | Some ts -> sprintf "\"%s\"" (ts.ToString("o"))
     | None    -> "null"
   sprintf

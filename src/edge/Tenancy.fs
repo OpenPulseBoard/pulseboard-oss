@@ -181,9 +181,9 @@ let private parseArgon2Params (tag : string) : (int * int * int) option =
         let v = ref 0
         if System.Int32.TryParse(kv.[1], v) then
           match kv.[0].Trim().ToLowerInvariant() with
-          | "t" -> t <- !v
-          | "m" -> m <- !v
-          | "p" -> p <- !v
+          | "t" -> t <- v.Value
+          | "m" -> m <- v.Value
+          | "p" -> p <- v.Value
           | _   -> ()
     Some (t, m, p)
 
@@ -320,7 +320,7 @@ type InMemoryTenantStore () =
 
     member _.MarkUsed id =
       match keys.TryGetValue id with
-      | true, r -> r.lastUsedAt := Some DateTimeOffset.UtcNow
+      | true, r -> r.lastUsedAt.Value <- Some DateTimeOffset.UtcNow
       | _ -> ()
 
     member _.TryGetUser (issuer, subject) =
@@ -344,7 +344,7 @@ type InMemoryTenantStore () =
       | Some existing ->
         // Refresh email opportunistically; role is sticky.
         let updated = { existing with email = email; tenantId = tenantId }
-        updated.lastLoginAt := Some now
+        updated.lastLoginAt.Value <- Some now
         users.[existing.id] <- updated
         updated
       | None ->
