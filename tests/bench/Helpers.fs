@@ -29,7 +29,7 @@ let makeLogStore    () = LogStore(capacity = 4096)
 let makeStorageClient () =
     let ms  = makeMetricStore ()
     let ls  = makeLogStore ()
-    let hub = Broadcaster()
+    let hub = new Broadcaster()
     let mb  = EmbeddedMetricBackend(ms, None) :> IMetricBackend
     let lb  = EmbeddedLogBackend(ls)          :> ILogBackend
     let tb  = EmbeddedTraceBackend()          :> ITraceBackend

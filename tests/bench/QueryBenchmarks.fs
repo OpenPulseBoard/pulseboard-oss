@@ -42,7 +42,7 @@ type QueryBenchmarks () =
         logStore     <- makeLogStore ()
         seedLogs logStore 2000
         rollupStore  <- RollupStore(maxBucketsPerSeries = 1440)
-        rollupWorker <- RollupWorker(metricStore, rollupStore, resolutions, intervalMs = 60_000)
+        rollupWorker <- new RollupWorker(metricStore, rollupStore, resolutions, intervalMs = 60_000)
         // Pre-compute rollups so GetSinceAgg benchmarks measure query, not setup.
         rollupWorker.RunOnce() |> ignore
 

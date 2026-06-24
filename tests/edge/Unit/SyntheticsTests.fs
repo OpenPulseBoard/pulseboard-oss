@@ -140,7 +140,7 @@ let ``series encodes labels inline as a prom series string`` () =
 
 [<Fact>]
 let ``runTcp connects to a listening socket and reports up`` () =
-    let listener = TcpListener(IPAddress.Loopback, 0)
+    let listener = new TcpListener(IPAddress.Loopback, 0)
     listener.Start()
     let port = (listener.LocalEndpoint :?> IPEndPoint).Port
     try
@@ -151,7 +151,7 @@ let ``runTcp connects to a listening socket and reports up`` () =
 [<Fact>]
 let ``runTcp reports down for a closed port`` () =
     // Bind then immediately release to obtain a port nobody is listening on.
-    let l = TcpListener(IPAddress.Loopback, 0)
+    let l = new TcpListener(IPAddress.Loopback, 0)
     l.Start()
     let port = (l.LocalEndpoint :?> IPEndPoint).Port
     l.Stop()
@@ -169,7 +169,7 @@ let ``runDns resolves localhost`` () =
 let ``Runner Probe records up metric and a log line`` () =
     let metrics = MetricStore(capacityPerMetric = 64)
     let logs    = LogStore(capacity = 64)
-    let listener = TcpListener(IPAddress.Loopback, 0)
+    let listener = new TcpListener(IPAddress.Loopback, 0)
     listener.Start()
     let port = (listener.LocalEndpoint :?> IPEndPoint).Port
     try

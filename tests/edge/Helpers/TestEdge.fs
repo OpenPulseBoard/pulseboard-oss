@@ -144,7 +144,7 @@ let start (stores : TestStores) : TestEnv =
   // Give Suave a moment to bind.
   System.Threading.Thread.Sleep 150
 
-  TestEnv(stores, baseUrl, cts)
+  new TestEnv(stores, baseUrl, cts)
 
 /// Start an in-process Suave host with auth middleware enabled.
 /// Ingest routes require a valid X-API-Key header with Ingest scope.
@@ -185,7 +185,7 @@ let startMultiTenant (stores : TestStores) : TestEnv =
 
   System.Threading.Thread.Sleep 150
 
-  TestEnv(stores, baseUrl, cts)
+  new TestEnv(stores, baseUrl, cts)
 
 /// Convenience: create stores + start server in one call (unauthenticated).
 let create () =
