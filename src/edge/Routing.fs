@@ -943,7 +943,7 @@ type Pipeline(configStore : IConfigStore,
               null, TimeSpan.FromSeconds 1., TimeSpan.FromSeconds 1.)
 
   interface IAlertSink with
-    member s.OnAlert a = (s :> Pipeline).OnAlert a
+    member s.OnAlert a = s.OnAlert a
 
   member _.OnAlert(a : AlertInstance) =
     let tid = a.tenantId
